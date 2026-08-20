@@ -122,6 +122,8 @@ def _load_and_parse_all(config: Config, clean: bool = False):
         for link in doc.all_links:
             db.insert_link(link.source_file, link.source_line, link.target_path, link.target_anchor, 1)
 
+    db.commit()
+
     print("Building DocGraph topology...", flush=True)
     graph_builder = DocGraphBuilder(config)
     graph = graph_builder.build(documents, docs_root)

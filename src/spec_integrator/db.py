@@ -14,6 +14,9 @@ class DocAuditDB:
             Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
+        # Performance tuning for network/local filesystems
+        self.conn.execute("PRAGMA synchronous = OFF")
+        self.conn.execute("PRAGMA journal_mode = MEMORY")
         self.create_tables()
 
     def create_tables(self):
@@ -114,50 +117,47 @@ class DocAuditDB:
 
     def insert_document(self, file_path: str, tier: str, component: str, content_hash: str):
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        with self.conn:
-            self.conn.execute("""
-                INSERT OR REPLACE INTO documents (file_path, tier, component, content_hash, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-            """, (file_path, str(tier) if tier is not None else None, component, content_hash, now))
+        self.conn.execute("""
+            INSERT OR REPLACE INTO documents (file_path, tier, component, content_hash, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (file_path, str(tier) if tier is not None else None, component, content_hash, now))
 
     def insert_section(self, section_id: str, file_path: str, heading: str, level: int,
                        line_start: int, line_end: int, body_text: str, content_hash: str):
-        with self.conn:
-            self.conn.execute("""
-                INSERT OR REPLACE INTO sections 
-                (section_id, file_path, heading, level, line_start, line_end, body_text, content_hash)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (section_id, file_path, heading, level, line_start, line_end, body_text, content_hash))
+        self.conn.execute("""
+            INSERT OR REPLACE INTO sections 
+            (section_id, file_path, heading, level, line_start, line_end, body_text, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (section_id, file_path, heading, level, line_start, line_end, body_text, content_hash))
 
     def insert_keyword(self, keyword: str, category: str, defined_in_file: str, defined_in_section: str, description: str = ""):
-        with self.conn:
-            self.conn.execute("""
-                INSERT OR REPLACE INTO keywords (keyword, category, defined_in_file, defined_in_section, description)
-                VALUES (?, ?, ?, ?, ?)
-            """, (keyword, category, defined_in_file, defined_in_section, description))
+        self.conn.execute("""
+            INSERT OR REPLACE INTO keywords (keyword, category, defined_in_file, defined_in_section, description)
+            VALUES (?, ?, ?, ?, ?)
+        """, (keyword, category, defined_in_file, defined_in_section, description))
 
     def insert_keyword_reference(self, keyword: str, file_path: str, section_id: str,
                                  relation_type: str, line_number: int):
-        with self.conn:
-            self.conn.execute("""
-                INSERT INTO keyword_references (keyword, file_path, section_id, relation_type, line_number)
-                VALUES (?, ?, ?, ?, ?)
-            """, (keyword, file_path, section_id, relation_type, line_number))
+        self.conn.execute("""
+            INSERT INTO keyword_references (keyword, file_path, section_id, relation_type, line_number)
+            VALUES (?, ?, ?, ?, ?)
+        """, (keyword, file_path, section_id, relation_type, line_number))
 
     def insert_link(self, source_file: str, source_line: int, target_path: str, target_anchor: str, is_valid: int):
-        with self.conn:
-            self.conn.execute("""
-                INSERT INTO document_links (source_file, source_line, target_path, target_anchor, is_valid)
-                VALUES (?, ?, ?, ?, ?)
-            """, (source_file, source_line, target_path, target_anchor, is_valid))
+        self.conn.execute("""
+            INSERT INTO document_links (source_file, source_line, target_path, target_anchor, is_valid)
+            VALUES (?, ?, ?, ?, ?)
+        """, (source_file, source_line, target_path, target_anchor, is_valid))
 
     def insert_formal_model(self, component: str, model_path: str, framework: str, status: str, details: str = ""):
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        with self.conn:
-            self.conn.execute("""
-                INSERT OR REPLACE INTO formal_models (component, model_path, framework, status, details, checked_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (component, model_path, framework, status, details, now))
+        self.conn.execute("""
+            INSERT OR REPLACE INTO formal_models (component, model_path, framework, status, details, checked_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (component, model_path, framework, status, details, now))
+
+    def commit(self):
+        self.conn.commit()
 
     def get_all_documents(self) -> list[sqlite3.Row]:
         cursor = self.conn.cursor()
