@@ -87,7 +87,7 @@ llm_judge:
 def _load_and_parse_all(config: Config, clean: bool = False):
     docs_root = config.get_docs_dir()
     if not docs_root.exists():
-        print(f"[Error] Docs directory not found: {docs_root}")
+        print(f"[Error] Docs directory not found: {docs_root}", flush=True)
         sys.exit(1)
 
     db_path = config.get_db_path()
@@ -101,8 +101,9 @@ def _load_and_parse_all(config: Config, clean: bool = False):
     parser = MarkdownParser(config)
     md_files = sorted(list(docs_root.rglob("*.md")))
 
+    print(f"Scanning {len(md_files)} markdown files in {docs_root}...", flush=True)
     documents = []
-    for md_file in md_files:
+    for idx, md_file in enumerate(md_files, 1):
         doc = parser.parse_file(md_file, docs_root)
         documents.append(doc)
 
@@ -121,8 +122,10 @@ def _load_and_parse_all(config: Config, clean: bool = False):
         for link in doc.all_links:
             db.insert_link(link.source_file, link.source_line, link.target_path, link.target_anchor, 1)
 
+    print("Building DocGraph topology...", flush=True)
     graph_builder = DocGraphBuilder(config)
     graph = graph_builder.build(documents, docs_root)
+    print(f"DocGraph built: {len(graph.nodes)} nodes, {len(graph.edges)} edges.", flush=True)
 
     return documents, graph, db, docs_root
 
@@ -131,36 +134,41 @@ def cmd_check(args):
     config_path = args.config
     config = Config.load(config_path)
 
-    print("================================================================================")
-    print(f" Spec-Integrator: Document Verification Pipeline [{config.project.name}]")
-    print("================================================================================")
+    print("================================================================================", flush=True)
+    print(f" Spec-Integrator: Document Verification Pipeline [{config.project.name}]", flush=True)
+    print("================================================================================", flush=True)
 
     documents, graph, db, docs_root = _load_and_parse_all(config, clean=args.clean)
-    print(f"✔ Parsed {len(documents)} document(s), {len(graph.nodes)} graph node(s).")
+    print(f"✔ Parsed {len(documents)} document(s), {len(graph.nodes)} graph node(s).", flush=True)
 
     # 1. Static Verifications (Format, Traceability, Hierarchy)
+    print("Running Static Verifiers (Format, Traceability, Hierarchy)...", flush=True)
     static_verifier = StaticVerifier(config)
     issues = static_verifier.verify(documents, graph, docs_root)
+    print(f"Static verification finished. Found {len(issues)} issue(s).", flush=True)
 
     # 2. Formal Verification (pyModelChecking Runner)
+    print("Running Formal Model Verifier...", flush=True)
     formal_verifier = FormalVerifier(config)
     formal_issues, formal_results = formal_verifier.verify_documents(documents, docs_root)
     issues.extend(formal_issues)
+    print(f"Formal verification finished: {len(formal_results)} model(s) evaluated.", flush=True)
 
     # Save formal model results to DB
     for r in formal_results:
         db.insert_formal_model(r.component, r.model_file, "pymodelchecking", r.status, r.details)
 
     # 3. Generate Report
+    print("Generating Markdown Report & Graph JSON...", flush=True)
     report_path = Path(args.report).resolve()
     reporter = Reporter(config)
     reporter.generate_markdown_report(documents, graph, issues, formal_results, report_path)
-    print(f"✔ Markdown Report generated: {report_path}")
+    print(f"✔ Markdown Report generated: {report_path}", flush=True)
 
     if args.graph_json:
         graph_json_path = Path(args.graph_json).resolve()
         reporter.export_graph_json(graph, graph_json_path)
-        print(f"✔ Graph JSON exported: {graph_json_path}")
+        print(f"✔ Graph JSON exported: {graph_json_path}", flush=True)
 
     db.close()
 
