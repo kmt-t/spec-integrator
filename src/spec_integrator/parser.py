@@ -46,6 +46,7 @@ class ParsedDocument:
 class MarkdownParser:
     KEYWORD_REGEX = re.compile(r"\{([A-Za-z0-9_\-]+)\}")
     LINK_REGEX = re.compile(r"\[([^\]]+)\]\(([^)#]+\.md)?(#[^)]+)?\)")
+    TEMPLATE_PREFIXES = ("Decision_", "Strategy_", "Requirement_", "req_", "concept", "Constraint_")
 
     def __init__(self, config: Config):
         self.config = config
@@ -124,6 +125,8 @@ class MarkdownParser:
                 full_kw = f"{{{kw_val}}}"
                 if full_kw.startswith("{VERIFY_"):
                     tags.append(full_kw)
+                elif any(kw_val.startswith(p) for p in self.TEMPLATE_PREFIXES) or kw_val == "concept":
+                    continue
                 else:
                     keywords.append(kw_val)
 
