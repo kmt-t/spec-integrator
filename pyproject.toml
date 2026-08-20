@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "spec-integrator"
+version = "0.1.0"
+description = "Universal Document Quality, Traceability, Formal Verification & LLM Judge Tool"
+readme = "README.md"
+license = "BSD-2-Clause"
+requires-python = ">=3.10"
+authors = [
+    { name = "Fireball Project", email = "dev@remoteplace.net" }
+]
+dependencies = [
+    "pyyaml>=6.0",
+    "mistune>=3.0.0",
+    "pymodelchecking>=1.3.4",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+]
+
+[project.scripts]
+spec-integrator = "spec_integrator.cli:main"
+specint = "spec_integrator.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
