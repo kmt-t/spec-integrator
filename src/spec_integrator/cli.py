@@ -1,8 +1,14 @@
-from __future__ import annotations
-
 import sys
 import argparse
 from pathlib import Path
+
+# Ensure UTF-8 output on Windows consoles
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 from spec_integrator.config import Config
 from spec_integrator.db import DocAuditDB
 from spec_integrator.parser import MarkdownParser
