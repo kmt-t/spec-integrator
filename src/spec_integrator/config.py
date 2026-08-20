@@ -115,6 +115,12 @@ class FormalVerificationConfig:
 
 
 @dataclass
+class WITVerificationConfig:
+    wit_dir_name: str = "wit"
+    tag: str = "{VERIFY_WIT}"
+
+
+@dataclass
 class LLMBackendConfig:
     api_key_env: str = "SAKURA_API_KEY"
     endpoint: str = "http://localhost:11434"
@@ -142,6 +148,7 @@ class Config:
     tiers: list[TierConfig] = field(default_factory=list)
     keywords: dict[str, KeywordRule] = field(default_factory=dict)
     formal_verification: FormalVerificationConfig = field(default_factory=FormalVerificationConfig)
+    wit_verification: WITVerificationConfig = field(default_factory=WITVerificationConfig)
     llm_judge: LLMJudgeConfig = field(default_factory=LLMJudgeConfig)
     config_dir: Path = field(default_factory=Path.cwd)
 
@@ -194,6 +201,13 @@ class Config:
             timeout_seconds=fv_data.get("timeout_seconds", 30)
         )
 
+        # WIT
+        wit_data = data.get("wit_verification", {})
+        wit_verification = WITVerificationConfig(
+            wit_dir_name=wit_data.get("wit_dir_name", "wit"),
+            tag=wit_data.get("tag", "{VERIFY_WIT}")
+        )
+
         # LLM
         llm_data = data.get("llm_judge", {})
         backends = {}
@@ -216,6 +230,7 @@ class Config:
             tiers=tiers,
             keywords=keywords,
             formal_verification=formal_verification,
+            wit_verification=wit_verification,
             llm_judge=llm_judge,
             config_dir=config_dir
         )

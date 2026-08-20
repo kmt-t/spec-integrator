@@ -7,6 +7,7 @@ from spec_integrator.parser import ParsedDocument
 from spec_integrator.graph import Graph
 from spec_integrator.verifier.static import VerificationIssue
 from spec_integrator.verifier.formal import FormalModelResult
+from spec_integrator.verifier.wit import WITFileResult
 
 
 class Reporter:
@@ -16,6 +17,7 @@ class Reporter:
     def generate_markdown_report(self, documents: list[ParsedDocument], graph: Graph,
                                  issues: list[VerificationIssue],
                                  formal_results: list[FormalModelResult],
+                                 wit_results: list[WITFileResult],
                                  out_path: Path) -> str:
         lines = []
 
@@ -23,6 +25,7 @@ class Reporter:
         total_sections = sum(len(d.sections) for d in documents)
         total_keywords = len([n for n in graph.nodes.values() if n.type == "item"])
         total_models = len(formal_results)
+        total_wits = len(wit_results)
         
         errors = [i for i in issues if i.severity == "ERROR"]
         warnings = [i for i in issues if i.severity == "WARNING"]
@@ -41,11 +44,12 @@ class Reporter:
         lines.append(f"| Total Sections | {total_sections} |")
         lines.append(f"| Total Keywords / Entities | {total_keywords} |")
         lines.append(f"| Formal Verification Models | {total_models} |")
+        lines.append(f"| WIT Interface Files | {total_wits} |")
         lines.append(f"| Errors | **{len(errors)}** |")
         lines.append(f"| Warnings | {len(warnings)} |\n")
 
         # 3. Gate Status Table
-        gate_names = ["Format", "Traceability", "Hierarchy", "Formal"]
+        gate_names = ["Format", "Traceability", "Hierarchy", "Formal", "WIT"]
         lines.append("### Quality Gate Status\n")
         lines.append("| Gate | Status | Issues |")
         lines.append("| :--- | :--- | :--- |")
@@ -58,7 +62,7 @@ class Reporter:
         # 4. Violations / Issues Section
         lines.append("## 2. Issues & Violations\n")
         if not issues:
-            lines.append("✨ No issues detected. All specification rules, hierarchy boundaries, and formal models are valid.\n")
+            lines.append("✨ No issues detected. All specification rules, hierarchy boundaries, formal models, and WIT interfaces are valid.\n")
         else:
             lines.append("| Severity | Gate | Location | Rule | Message |")
             lines.append("| :--- | :--- | :--- | :--- | :--- |")
@@ -77,8 +81,21 @@ class Reporter:
                 lines.append(f"| `{r.component}` | `{r.model_file}` | {st} | {r.details} |")
             lines.append("")
 
-        # 6. Traceability Matrix
-        lines.append("## 4. Traceability Matrix\n")
+        # 6. WIT Interface Verification Details
+        if wit_results:
+            lines.append("## 4. WIT Interface Verification Results\n")
+            lines.append("| Component | WIT File | Interfaces / Worlds | Status | Details |")
+            lines.append("| :--- | :--- | :--- | :--- | :--- |")
+            for w in wit_results:
+                st = "🟢 PASS" if w.status == "PASS" else f"🔴 {w.status}"
+                ifaces = ", ".join(w.defined_interfaces) or "*(None)*"
+                wrlds = ", ".join(w.defined_worlds) or ""
+                summary = ifaces if not wrlds else f"{ifaces} (Worlds: {wrlds})"
+                lines.append(f"| `{w.component}` | `{w.wit_file}` | `{summary}` | {st} | {w.details} |")
+            lines.append("")
+
+        # 7. Traceability Matrix
+        lines.append("## 5. Traceability Matrix\n")
         subgraphs = graph.extract_item_subgraphs()
         lines.append("| Item / Requirement | Defined In | Referenced In (Design Specs) | Status |")
         lines.append("| :--- | :--- | :--- | :--- |")
@@ -90,8 +107,8 @@ class Reporter:
             lines.append(f"| {item_lbl} | {def_str} | {ref_str} | {status} |")
         lines.append("")
 
-        # 7. DocGraph Mermaid Diagram
-        lines.append("## 5. DocGraph Topology (Mermaid)\n")
+        # 8. DocGraph Mermaid Diagram
+        lines.append("## 6. DocGraph Topology (Mermaid)\n")
         lines.append("```mermaid")
         lines.append(graph.to_mermaid(max_nodes=120))
         lines.append("```\n")

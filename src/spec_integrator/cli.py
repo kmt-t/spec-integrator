@@ -15,6 +15,7 @@ from spec_integrator.parser import MarkdownParser
 from spec_integrator.graph import DocGraphBuilder
 from spec_integrator.verifier.static import StaticVerifier
 from spec_integrator.verifier.formal import FormalVerifier
+from spec_integrator.verifier.wit import WITVerifier
 from spec_integrator.judge.llm import LLMJudge
 from spec_integrator.reporter import Reporter
 
@@ -166,11 +167,18 @@ def cmd_check(args):
     for r in formal_results:
         db.insert_formal_model(r.component, r.model_file, "pymodelchecking", r.status, r.details)
 
-    # 3. Generate Report
+    # 3. WIT Interface Verification
+    print("Running WIT Interface Verifier...", flush=True)
+    wit_verifier = WITVerifier(config)
+    wit_issues, wit_results = wit_verifier.verify_documents(documents, docs_root)
+    issues.extend(wit_issues)
+    print(f"WIT verification finished: {len(wit_results)} file(s) evaluated.", flush=True)
+
+    # 4. Generate Report
     print("Generating Markdown Report & Graph JSON...", flush=True)
     report_path = Path(args.report).resolve()
     reporter = Reporter(config)
-    reporter.generate_markdown_report(documents, graph, issues, formal_results, report_path)
+    reporter.generate_markdown_report(documents, graph, issues, formal_results, wit_results, report_path)
     print(f"✔ Markdown Report generated: {report_path}", flush=True)
 
     if args.graph_json:
