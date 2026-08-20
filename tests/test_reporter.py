@@ -6,6 +6,7 @@ from spec_integrator.graph import DocGraphBuilder
 from spec_integrator.reporter import Reporter
 from spec_integrator.verifier.static import VerificationIssue
 from spec_integrator.verifier.formal import FormalModelResult
+from spec_integrator.verifier.wit import WITFileResult
 
 
 def test_reporter(tmp_path):
@@ -27,12 +28,15 @@ def test_reporter(tmp_path):
     formal_res = [
         FormalModelResult(component="tier1_core", model_file="formal/m.py", status="PASS", details="OK")
     ]
+    wit_res = [
+        WITFileResult(component="tier1_interface", wit_file="wit/api.wit", status="PASS", details="Valid WIT")
+    ]
 
     out_md = tmp_path / "report.md"
     out_json = tmp_path / "graph.json"
 
     reporter = Reporter(cfg)
-    report_text = reporter.generate_markdown_report([doc], graph, issues, formal_res, out_md)
+    report_text = reporter.generate_markdown_report([doc], graph, issues, formal_res, wit_res, out_md)
     reporter.export_graph_json(graph, out_json)
 
     assert out_md.exists()
@@ -40,3 +44,4 @@ def test_reporter(tmp_path):
     assert "Spec Verification Report" in report_text
     assert "FMT-01" in report_text
     assert "Formal Verification Results" in report_text
+    assert "WIT Interface Verification Results" in report_text
