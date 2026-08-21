@@ -151,16 +151,35 @@ class FormalVerifier:
         tagged_docs = [d for d in documents if formal_tag in d.all_tags]
 
         for doc in tagged_docs:
-            formal_dir = doc.full_path.parent / model_dir_name
-            dir_claimants.setdefault(str(formal_dir), []).append(doc)
+            cur = doc.full_path.parent
+            resolved_formal_dir = doc.full_path.parent / model_dir_name
+            while cur and cur != docs_root.parent and cur != docs_root:
+                cand_dir = cur / model_dir_name
+                if cand_dir.exists():
+                    files = [m for m in cand_dir.glob("*.py") if not m.name.startswith("_")]
+                    if files:
+                        resolved_formal_dir = cand_dir
+                        break
+                cur = cur.parent
+            dir_claimants.setdefault(str(resolved_formal_dir), []).append(doc)
 
         for doc in tagged_docs:
+            cur = doc.full_path.parent
+            model_files = []
             formal_dir = doc.full_path.parent / model_dir_name
-            model_files = sorted(formal_dir.glob("*.py")) if formal_dir.exists() else []
-            model_files = [m for m in model_files if not m.name.startswith("_")]
+            while cur and cur != docs_root.parent and cur != docs_root:
+                cand_dir = cur / model_dir_name
+                if cand_dir.exists():
+                    files = sorted(cand_dir.glob("*.py"))
+                    files = [m for m in files if not m.name.startswith("_")]
+                    if files:
+                        model_files = files
+                        formal_dir = cand_dir
+                        break
+                cur = cur.parent
 
             if not model_files:
-                rel_dir = self._rel(formal_dir, docs_root)
+                rel_dir = self._rel(doc.full_path.parent / model_dir_name, docs_root)
                 issues.append(VerificationIssue(
                     gate="Formal",
                     severity="ERROR",
@@ -168,7 +187,7 @@ class FormalVerifier:
                     line=1,
                     rule_code="FORMAL-MODEL-NOT-FOUND",
                     message=(f"Document declares '{formal_tag}' but no formal model script exists "
-                             f"in '{rel_dir}/'. A verification claim without a model is not admissible.")
+                             f"in '{rel_dir}/' or its parent component directories. A verification claim without a model is not admissible.")
                 ))
                 results.append(FormalModelResult(
                     component=doc.component,

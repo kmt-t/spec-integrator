@@ -26,11 +26,11 @@ Keywords/Tags: {keywords}
 === EVALUATION CRITERIA ===
 1. Complexity (1-5): State space size, asynchronous/coroutine behavior, zero-copy ownership transfer, cache lifecycle, low-level hardware interaction.
 2. Design Risk (1-5): Deadlock, race condition, memory corruption, starvation, unhandled failure modes, ambiguous/unspecified assumptions, missing error recovery.
-3. Formal Verification Need: Does this section contain critical concurrent state transitions, invariant conditions, or deadlock-prone resource handoffs that REQUIRE mathematical proof via pyModelChecking (CTL/LTL)?
+3. Formal Verification Need: Does this section contain critical concurrent state transitions, invariant conditions, or deadlock-prone resource handoffs that REQUIRE mathematical proof via pyModelChecking (CTL/LTL)? (Do NOT require pyModelChecking for declarative tables, constants, or static hardware abstraction definitions).
 4. Verification Triage:
-   - "pyModelChecking": For stateful, concurrent, invariant/liveness properties, deadlock-prone logic.
+   - "pyModelChecking": ONLY for stateful, concurrent, invariant/liveness properties, or deadlock-prone logic.
    - "LLM_Judge": For API contracts, semantic parameter alignment, cross-tier compliance.
-   - "Static": For simple declarative tables, constants, or stateless interfaces.
+   - "Static": For declarative tables, hardware abstractions, constants, or stateless interfaces.
 
 === OUTPUT FORMAT ===
 Respond ONLY with a valid JSON object in English in the following format:
