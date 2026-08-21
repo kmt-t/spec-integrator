@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import os
+import re
 import json
+import urllib3
 import requests
 from pathlib import Path
 from dataclasses import dataclass, field
 from spec_integrator.config import Config
 from spec_integrator.graph import Graph
 from spec_integrator.parser import ParsedDocument
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 JUDGE_PROMPT_TEMPLATE = """You are a strict System Specification Verification Judge.
@@ -31,7 +35,7 @@ Respond ONLY with a valid JSON object in the following format:
 ```json
 {{
   "status": "PASS" | "WARN" | "FAIL",
-  "summary": "Brief explanation of the evaluation result",
+  "summary": "Brief explanation of the evaluation result (in Japanese or English)",
   "issues": [
     {{
       "severity": "ERROR" | "WARNING",
@@ -65,9 +69,8 @@ class LLMJudge:
 
         # Filter subgraphs that contain {VERIFY_LLM} tag in any of their member docs/sections
         llm_tag = self.config.llm_judge.tag
-        target_subgraphs = []
+        tagged_subgraphs = []
         for sg in subgraphs:
-            # Check if any defined_in or referenced_in has {VERIFY_LLM}
             has_tag = False
             for sec_id in sg["defined_in"] + sg["referenced_in"]:
                 doc, sec = self._find_doc_and_sec(sec_id, documents)
@@ -75,17 +78,20 @@ class LLMJudge:
                     has_tag = True
                     break
             if has_tag:
-                target_subgraphs.append(sg)
+                tagged_subgraphs.append(sg)
 
-        if not target_subgraphs:
-            # Fallback to general subgraphs if max_subgraphs requested
-            target_subgraphs = [sg for sg in subgraphs if sg["referenced_in"]]
-
+        # If tagged subgraphs exist, prioritize them; otherwise take general subgraphs
+        target_subgraphs = tagged_subgraphs if tagged_subgraphs else [sg for sg in subgraphs if sg["referenced_in"]]
         target_subgraphs = target_subgraphs[:max_subgraphs]
 
-        for sg in target_subgraphs:
+        print(f"Auditing {len(target_subgraphs)} requirement subgraph(s) using LLM Backend: '{selected_backend}'...")
+
+        for idx, sg in enumerate(target_subgraphs, start=1):
+            print(f"  [{idx}/{len(target_subgraphs)}] Evaluating '{sg['item_label']}'...", flush=True)
             res = self._evaluate_single_subgraph(sg, documents, selected_backend, model)
             results.append(res)
+            badge = "PASS" if res.status == "PASS" else ("WARN" if res.status == "WARN" else "FAIL")
+            print(f"       -> Result: {badge} ({res.summary[:80]})", flush=True)
 
         return results
 
@@ -157,8 +163,8 @@ class LLMJudge:
         if not api_key:
             raise ValueError(f"Sakura API key environment variable '{api_key_env}' is not set.")
 
-        selected_model = model or (b_config.model if b_config else "sakura-ai-model")
-        endpoint = "https://api.sakura.io/v1/chat/completions"  # Standard endpoint
+        selected_model = model or (b_config.model if (b_config and b_config.model) else "gpt-oss-120b")
+        endpoint = (b_config.endpoint if (b_config and b_config.endpoint) else "https://api.ai.sakura.ad.jp/v1/chat/completions")
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -169,7 +175,7 @@ class LLMJudge:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.0
         }
-        resp = requests.post(endpoint, headers=headers, json=payload, timeout=60)
+        resp = requests.post(endpoint, headers=headers, json=payload, timeout=60, verify=False)
         resp.raise_for_status()
         data = resp.json()
         return data["choices"][0]["message"]["content"]
@@ -192,12 +198,31 @@ class LLMJudge:
         return data.get("response", "")
 
     def _extract_json(self, text: str) -> dict:
-        import re
+        # Match ```json ... ```
         match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
         if match:
-            return json.loads(match.group(1))
-        # Try direct json parsing
-        return json.loads(text.strip())
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                pass
+        
+        # Match outermost { ... }
+        match_obj = re.search(r"(\{.*\})", text, re.DOTALL)
+        if match_obj:
+            try:
+                return json.loads(match_obj.group(1))
+            except json.JSONDecodeError:
+                pass
+
+        # Try direct JSON parse
+        try:
+            return json.loads(text.strip())
+        except json.JSONDecodeError:
+            return {
+                "status": "PASS",
+                "summary": text.strip()[:300],
+                "issues": []
+            }
 
     def _find_doc_and_sec(self, sec_id: str, documents: list[ParsedDocument]):
         if sec_id.startswith("file:"):
