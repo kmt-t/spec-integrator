@@ -21,6 +21,7 @@ from spec_integrator.verifier.formal import FormalVerifier
 from spec_integrator.verifier.wit import WITVerifier
 from spec_integrator.verifier.evidence import EvidenceVerifier
 from spec_integrator.verifier.obligation import ObligationVerifier
+from spec_integrator.verifier.consistency import ConsistencyVerifier
 from spec_integrator.judge import SemanticJudge, RiskAssessor
 from spec_integrator.reporter import Reporter
 
@@ -220,12 +221,20 @@ def cmd_check(args):
           f"{obligation_summary.discharged}/{obligation_summary.demanded} obligation(s) discharged.",
           flush=True)
 
-    # 6. Generate Report
+    # 6. Consistency Verification (edits must reach every restatement of a fact)
+    print("Running Consistency Verifier (stale values, symbol drift, co-change)...", flush=True)
+    consistency_verifier = ConsistencyVerifier(config)
+    consistency_issues, consistency_summary = consistency_verifier.verify(documents, docs_root)
+    issues.extend(consistency_issues)
+    print(f"Consistency verification finished. Found {len(consistency_issues)} issue(s).", flush=True)
+
+    # 7. Generate Report
     print("Generating Markdown Report & Graph JSON...", flush=True)
     report_path = Path(args.report).resolve()
     reporter = Reporter(config)
     reporter.generate_markdown_report(documents, graph, issues, formal_results, wit_results,
-                                      report_path, obligation_summary=obligation_summary)
+                                      report_path, obligation_summary=obligation_summary,
+                                      consistency_summary=consistency_summary)
     print(f"✔ Markdown Report generated: {report_path}", flush=True)
 
     if args.graph_json:
@@ -253,6 +262,24 @@ def cmd_check(args):
               f"(verification obligations discharged: "
               f"{obligation_summary.discharged}/{obligation_summary.demanded}).")
         sys.exit(0)
+
+
+def cmd_sync(args):
+    """Records the current specification state as the consistency baseline."""
+    config = Config.load(args.config)
+    documents, graph, db, docs_root = _load_and_parse_all(config)
+
+    verifier = ConsistencyVerifier(config)
+    baseline = verifier.build_baseline(documents)
+    lock_path = verifier.write_baseline(documents)
+    db.close()
+
+    print(f"✔ Consistency baseline written: {lock_path}")
+    print(f"  {len(baseline['sections'])} section(s), "
+          f"{len(baseline['definitions'])} keyword definition(s), "
+          f"{sum(len(v) for v in baseline['references'].values())} reference edge(s).")
+    print("  Commit this file. `check` compares against it to find edits that did not propagate.")
+    sys.exit(0)
 
 
 def cmd_graph(args):
@@ -388,6 +415,12 @@ def main():
     p_check.add_argument("-g", "--graph-json", default="graph.json", help="Graph JSON output path")
     p_check.add_argument("--clean", action="store_true", help="Clear cache DB and run clean audit")
     p_check.set_defaults(func=cmd_check)
+
+    # sync
+    p_sync = subparsers.add_parser(
+        "sync", help="Record the current spec state as the consistency baseline (lockfile)")
+    p_sync.add_argument("-c", "--config", default="spec-integrator.yaml", help="Path to configuration file")
+    p_sync.set_defaults(func=cmd_sync)
 
     # graph
     p_graph = subparsers.add_parser("graph", help="Extract and visualize DocGraph")

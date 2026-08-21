@@ -85,6 +85,26 @@ class EvidenceConfig:
 
 
 @dataclass
+class ConsistencyConfig:
+    """Consistency Gate: an edit must reach every place that restates the same fact."""
+    enabled: bool = True
+    lockfile: str = "spec-consistency.lock"
+    cochange: bool = True
+    # Symbols whose value must be identical everywhere it appears. Zero-config drift
+    # detection: no registry to maintain, the symbol name is the key.
+    symbol_patterns: list[str] = field(default_factory=lambda: [
+        r"\bFB_CONF_[A-Z0-9_]+\b",
+        r"\bFB_[A-Z0-9_]+_(?:MAX|MIN|SIZE|BASE|LIMIT)\b",
+    ])
+    # Extra (non-Markdown) files to include, e.g. the configuration header.
+    extra_scan_globs: list[str] = field(default_factory=lambda: [
+        "inc/**/*.hxx", "inc/*.hxx", "src/**/*.hxx",
+    ])
+    # Values a migration moved away from, which must never reappear.
+    invariants: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class ObligationConfig:
     """Obligation Gate: verification demanded by the risk assessment must not be skipped."""
     enabled: bool = True
@@ -135,6 +155,7 @@ class Config:
     llm_judge: LLMJudgeConfig = field(default_factory=LLMJudgeConfig)
     evidence: EvidenceConfig = field(default_factory=EvidenceConfig)
     obligation: ObligationConfig = field(default_factory=ObligationConfig)
+    consistency: ConsistencyConfig = field(default_factory=ConsistencyConfig)
     config_dir: Path = field(default_factory=Path.cwd)
 
     def is_excluded(self, file_path: str | Path, docs_root: Path | None = None) -> bool:
@@ -272,6 +293,27 @@ class Config:
             backends=backends
         )
 
+        # Consistency Gate
+        cs_data = data.get("consistency", {})
+        cs_defaults = ConsistencyConfig()
+        invariants = list(cs_data.get("invariants", cs_defaults.invariants))
+        inv_file = cs_data.get("invariants_file")
+        if inv_file:
+            inv_path = (config_dir / inv_file) if not Path(inv_file).is_absolute() else Path(inv_file)
+            if inv_path.exists():
+                with open(inv_path, "r", encoding="utf-8") as f:
+                    extra = yaml.safe_load(f) or {}
+                invariants = invariants + list(extra.get("invariants", []))
+
+        consistency = ConsistencyConfig(
+            enabled=bool(cs_data.get("enabled", cs_defaults.enabled)),
+            lockfile=str(cs_data.get("lockfile", cs_defaults.lockfile)),
+            cochange=bool(cs_data.get("cochange", cs_defaults.cochange)),
+            symbol_patterns=list(cs_data.get("symbol_patterns", cs_defaults.symbol_patterns)),
+            extra_scan_globs=list(cs_data.get("extra_scan_globs", cs_defaults.extra_scan_globs)),
+            invariants=invariants,
+        )
+
         return cls(
             version=str(data.get("version", "1.0")),
             project=project,
@@ -282,6 +324,7 @@ class Config:
             llm_judge=llm_judge,
             evidence=evidence,
             obligation=obligation,
+            consistency=consistency,
             config_dir=config_dir
         )
 

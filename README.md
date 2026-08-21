@@ -16,6 +16,7 @@
   5. **WIT Gate**: `{VERIFY_WIT}` に連動した WIT インターフェイス定義の検証
   6. **Evidence Gate**: 「検証済み」「証明完了」等の主張が実際の成果物に裏付けられているかの検証
   7. **Obligation Gate**: リスク評価が要求した検証が実施されずに放置されていないかの検証
+  8. **Consistency Gate**: 修正漏れ（値のドリフト・定義変更が参照側へ未伝播）の検知
 
 ### 検証のサボりを検出する (Anti-Sabotage)
 
@@ -35,8 +36,23 @@
 | `OBLIG-ASSESSMENT-STALE` | 文書がリスク評価後に変更され、評価が現状を反映していない |
 | `OBLIG-VERIFICATION-SKIPPED` | リスク 4/5 以上と評価されたセクションに要求された検証タグが無い |
 | `OBLIG-JUDGE-MISSING` / `-SKIPPED` | `{VERIFY_LLM}` を宣言しながら意味監査が実行されていない／対象に含まれていない |
+| `CONSIST-SYMBOL-DRIFT` | 同一シンボルが場所によって違う値を持つ（設定不要。表記ゆれは正規化して比較） |
+| `CONSIST-COCHANGE-STALE` | キーワードの定義を変更したのに、参照側の節が旧記述のまま |
+| `CONSIST-STALE-VALUE` | 移行済みの旧値がどこかに残存している |
 
 形式検証モデルが満たすべき契約は **[docs/formal_model_contract.md](docs/formal_model_contract.md)** を参照。
+
+### 修正漏れの検知 (`sync` / lockfile)
+
+`check` は `spec-consistency.lock` を基準に「伝播しなかった編集」を検出します。
+
+```bash
+spec-integrator check   # 直す → 漏れが列挙される
+spec-integrator sync    # 全部直したら基準を更新（lockfile はコミットする）
+```
+
+`sync` を `check` に組み込んでいないのは意図的です。自動更新すると、漏れを暴くための記録そのものが消えます。
+co-change の依存関係は `{Keyword}` の既存トレーサビリティから自動導出されるため、宣言の手書きは不要です。
 - **LLM as a Judge セマンティック監査 (`judge` コマンド)**:
   - `{VERIFY_LLM}` 指定サブグラフの仕様矛盾・記述漏れを Sakura / Ollama バックエンドで診断。
 - **SQLite データベース・監査キャッシュ (`DocAuditDB`)**:

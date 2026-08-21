@@ -19,7 +19,8 @@ class Reporter:
                                  formal_results: list[FormalModelResult],
                                  wit_results: list[WITFileResult],
                                  out_path: Path,
-                                 obligation_summary=None) -> str:
+                                 obligation_summary=None,
+                                 consistency_summary=None) -> str:
         lines = []
 
         total_docs = len(documents)
@@ -58,7 +59,7 @@ class Reporter:
 
         # 3. Gate Status Table
         gate_names = ["Format", "Traceability", "Hierarchy", "Formal", "WIT",
-                      "Evidence", "Obligation"]
+                      "Evidence", "Obligation", "Consistency"]
         lines.append("### Quality Gate Status\n")
         lines.append("| Gate | Status | Issues |")
         lines.append("| :--- | :--- | :--- |")
@@ -121,6 +122,37 @@ class Reporter:
                     tags = ", ".join(f"`{t}`" for t in s["missing_tags"])
                     lines.append(f"| `{s['file_path']}` | {s['heading']} | "
                                  f"{s['risk_score']}/5 | {tags} |")
+                lines.append("")
+
+        # 5c. Consistency / propagation
+        if consistency_summary is not None:
+            lines.append("## 3.6 Change Propagation (Consistency)\n")
+            lines.append(f"- Symbols tracked: **{consistency_summary.symbols_tracked}** / "
+                         f"drifting: **{len(consistency_summary.drifting_symbols)}**")
+            lines.append(f"- Co-change edges tracked: **{consistency_summary.cochange_tracked}** / "
+                         f"stale: **{len(consistency_summary.cochange_stale)}**")
+            if not consistency_summary.baseline_present:
+                lines.append("- ⚠️ No baseline recorded — run `spec-integrator sync`.")
+            lines.append("")
+
+            if consistency_summary.drifting_symbols:
+                lines.append("### 3.6.1 Symbols With Conflicting Values\n")
+                lines.append("| Symbol | Value | Occurrences |")
+                lines.append("| :--- | :--- | :--- |")
+                for d in consistency_summary.drifting_symbols:
+                    for value, locs in sorted(d.values.items()):
+                        shown = ", ".join(f"`{l}`" for l in sorted(set(locs))[:4])
+                        lines.append(f"| `{d.symbol}` | **{value}** | {shown} |")
+                lines.append("")
+
+            if consistency_summary.cochange_stale:
+                lines.append("### 3.6.2 References Left Behind by an Edit\n")
+                lines.append("| Keyword | Changed Definition | Not Updated |")
+                lines.append("| :--- | :--- | :--- |")
+                for s in consistency_summary.cochange_stale:
+                    definer = s["definer"].replace("sec:", "")
+                    lines.append(f"| `{{{s['keyword']}}}` | `{definer}` | "
+                                 f"`{s['file_path']}` — {s['heading']} |")
                 lines.append("")
 
         # 6. WIT Interface Verification Details
