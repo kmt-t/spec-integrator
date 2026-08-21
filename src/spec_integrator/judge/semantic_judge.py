@@ -237,12 +237,31 @@ class SemanticJudge:
 
             # Parse JSON from response
             parsed = self._extract_json(raw_resp)
+            issues = parsed.get("issues", []) or []
+
+            # A verdict the model did not state is not a pass. Defaulting a missing
+            # status to PASS makes a truncated or off-format response indistinguishable
+            # from a clean audit — the gate would fail open.
+            status = parsed.get("status")
+            if not status:
+                status = "FAIL"
+                issues = list(issues) + [{
+                    "severity": "ERROR", "location": item_label,
+                    "description": "Judge response contained no 'status' field; "
+                                   "verdict cannot be established."
+                }]
+            # An audit that lists blocking issues has not passed, whatever it says.
+            elif status == "PASS" and any(
+                    str(i.get("severity", "")).upper() == "ERROR"
+                    for i in issues if isinstance(i, dict)):
+                status = "FAIL"
+
             return JudgeResult(
                 item_id=sg["item_id"],
                 item_label=item_label,
-                status=parsed.get("status", "PASS"),
+                status=status,
                 summary=parsed.get("summary", ""),
-                issues=parsed.get("issues", [])
+                issues=issues
             )
         except Exception as e:
             return JudgeResult(

@@ -156,3 +156,35 @@ def test_gate_can_be_disabled(tmp_path):
     cfg.obligation.enabled = False
     issues, _ = ObligationVerifier(cfg).verify([doc])
     assert issues == []
+
+
+def test_partial_assessment_is_rejected(tmp_path):
+    """A discharge rate computed over 15 of 663 sections is not coverage."""
+    cfg, doc = _setup(tmp_path, DOC_BODY)
+    out = tmp_path / "reports" / "doc_risk_report.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({
+        "total_evaluated": 1,          # only one section triaged
+        "assessments": [],
+        "doc_hashes": {doc.file_path: doc.content_hash},
+    }), encoding="utf-8")
+
+    issues, summary = ObligationVerifier(cfg).verify([doc])
+    partial = [i for i in issues if i.rule_code == "OBLIG-ASSESSMENT-PARTIAL"]
+    assert len(partial) == 1
+    assert summary.sections_assessed == 1
+    assert summary.sections_total == len(doc.sections)
+
+
+def test_full_assessment_is_accepted(tmp_path):
+    cfg, doc = _setup(tmp_path, DOC_BODY)
+    out = tmp_path / "reports" / "doc_risk_report.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({
+        "total_evaluated": len(doc.sections),
+        "assessments": [],
+        "doc_hashes": {doc.file_path: doc.content_hash},
+    }), encoding="utf-8")
+
+    issues, _ = ObligationVerifier(cfg).verify([doc])
+    assert [i for i in issues if i.rule_code == "OBLIG-ASSESSMENT-PARTIAL"] == []

@@ -25,6 +25,8 @@ class ObligationSummary:
     discharged: int = 0
     skipped: list[dict] = field(default_factory=list)
     judge_missing: list[str] = field(default_factory=list)
+    sections_total: int = 0
+    sections_assessed: int = 0
 
     @property
     def coverage(self) -> float:
@@ -71,6 +73,23 @@ class ObligationVerifier:
         assessments = payload.get("assessments", []) or []
         doc_hashes = payload.get("doc_hashes", {}) or {}
         doc_map = {d.file_path: d for d in documents}
+
+        # Coverage must be measured against the sections that exist now, not against
+        # the ones the assessment happened to look at. "13/13 discharged" is not a
+        # clean bill of health when the obligations were derived from 15 of 663
+        # sections — the other 648 have unknown obligations, not zero.
+        summary.sections_total = sum(len(d.sections) for d in documents)
+        summary.sections_assessed = int(payload.get("total_evaluated", 0) or 0)
+        if cfg.require_full_coverage and summary.sections_assessed < summary.sections_total:
+            issues.append(VerificationIssue(
+                gate="Obligation", severity="ERROR",
+                file_path=cfg.risk_report, line=1,
+                rule_code="OBLIG-ASSESSMENT-PARTIAL",
+                message=(f"Only {summary.sections_assessed} of {summary.sections_total} section(s) "
+                         "were risk-assessed, so the verification obligations of the remainder are "
+                         "unknown. A discharge rate computed over a partial assessment does not "
+                         "mean the specification is covered. Re-run 'assess --exhaustive'.")
+            ))
 
         # --- 1. Staleness: the assessment must describe the documents as they are now ---
         assessed_files = {a.get("file_path") for a in assessments if a.get("file_path")}

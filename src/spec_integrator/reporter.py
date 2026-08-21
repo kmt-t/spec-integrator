@@ -20,7 +20,8 @@ class Reporter:
                                  wit_results: list[WITFileResult],
                                  out_path: Path,
                                  obligation_summary=None,
-                                 consistency_summary=None) -> str:
+                                 consistency_summary=None,
+                                 topology_results=None) -> str:
         lines = []
 
         total_docs = len(documents)
@@ -31,6 +32,7 @@ class Reporter:
         distinct_models = {r.model_file for r in formal_results}
         passing_models = {r.model_file for r in formal_results if r.status == "PASS"}
         total_wits = len(wit_results)
+        total_topologies = len(topology_results) if topology_results else 0
 
         errors = [i for i in issues if i.severity == "ERROR"]
         warnings = [i for i in issues if i.severity == "WARNING"]
@@ -56,6 +58,7 @@ class Reporter:
         lines.append(f"| Formal Models (distinct scripts) | {len(distinct_models)} |")
         lines.append(f"| Formal Models Passing Audit | {len(passing_models)} |")
         lines.append(f"| WIT Interface Files | {total_wits} |")
+        lines.append(f"| Topology Graphs Evaluated | {total_topologies} |")
         if obligation_summary is not None:
             lines.append(f"| Verification Obligations Demanded | {obligation_summary.demanded} |")
             lines.append(f"| Verification Obligations Discharged | {obligation_summary.discharged} |")
@@ -64,7 +67,7 @@ class Reporter:
 
         # 3. Gate Status Table
         gate_names = ["Format", "Traceability", "Hierarchy", "Formal", "WIT",
-                      "Evidence", "Obligation", "Consistency"]
+                      "Evidence", "Obligation", "Consistency", "Topology"]
         lines.append("### Quality Gate Status\n")
         lines.append("| Gate | Status | Issues |")
         lines.append("| :--- | :--- | :--- |")
@@ -171,6 +174,15 @@ class Reporter:
                 wrlds = ", ".join(w.defined_worlds) or ""
                 summary = ifaces if not wrlds else f"{ifaces} (Worlds: {wrlds})"
                 lines.append(f"| `{w.component}` | `{w.wit_file}` | `{summary}` | {st} | {w.details} |")
+        # 4.4 Topology Verification Details
+        if topology_results:
+            lines.append("## 4.3 Static Channel & Messaging Topology Verification Details\n")
+            lines.append("| Document | Topology Graph | Nodes | Edges | Acyclic (Deadlock Free) | Status |")
+            lines.append("| :--- | :--- | :---: | :---: | :---: | :--- |")
+            for t in topology_results:
+                st = "🟢 PASS (Acyclic)" if t.is_acyclic else "🔴 FAIL (Cycle Detected)"
+                is_ac = "Yes (DAG)" if t.is_acyclic else "No (Cycle)"
+                lines.append(f"| `{t.document}` | {t.graph_name} | {len(t.nodes)} | {len(t.edges)} | {is_ac} | {st} |")
             lines.append("")
 
         # 7. Traceability Matrix

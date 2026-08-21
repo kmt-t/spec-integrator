@@ -65,3 +65,34 @@ def test_semantic_judge_mock():
     assert len(results) == 1
     assert results[0].status == "PASS"
     assert results[0].item_label == "RoleBasedAccessControl"
+
+
+def _judge_with(raw_response):
+    """Drives the real evaluation path with a canned backend response."""
+    from spec_integrator.judge.semantic_judge import SemanticJudge
+    from spec_integrator.config import Config
+
+    judge = SemanticJudge(Config())
+    judge._call_sakura = lambda prompt, model: raw_response
+    sg = {"item_id": "item:{K}", "item_label": "{K}",
+          "defined_in": [], "referenced_in": []}
+    return judge._evaluate_single_subgraph(sg, [], backend="sakura", model=None)
+
+
+def test_missing_status_field_is_not_a_pass():
+    """A verdict the model never stated must not default to PASS."""
+    res = _judge_with('{"summary": "looks fine", "issues": []}')
+    assert res.status == "FAIL"
+    assert any("no 'status' field" in str(i.get("description", "")) for i in res.issues)
+
+
+def test_pass_with_error_issues_is_downgraded():
+    """An audit listing blocking issues has not passed, whatever it says."""
+    res = _judge_with('{"status": "PASS", "summary": "x", '
+                      '"issues": [{"severity": "ERROR", "description": "contradiction"}]}')
+    assert res.status == "FAIL"
+
+
+def test_clean_pass_is_preserved():
+    res = _judge_with('{"status": "PASS", "summary": "ok", "issues": []}')
+    assert res.status == "PASS"

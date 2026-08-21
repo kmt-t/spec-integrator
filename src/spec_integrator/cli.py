@@ -22,6 +22,7 @@ from spec_integrator.verifier.wit import WITVerifier
 from spec_integrator.verifier.evidence import EvidenceVerifier
 from spec_integrator.verifier.obligation import ObligationVerifier
 from spec_integrator.verifier.consistency import ConsistencyVerifier
+from spec_integrator.verifier.topology import TopologyVerifier
 from spec_integrator.judge import SemanticJudge, RiskAssessor
 from spec_integrator.reporter import Reporter
 
@@ -228,13 +229,21 @@ def cmd_check(args):
     issues.extend(consistency_issues)
     print(f"Consistency verification finished. Found {len(consistency_issues)} issue(s).", flush=True)
 
-    # 7. Generate Report
+    # 7. Topology Verification (circular wait & deadlock freedom in messaging graphs)
+    print("Running Topology Verifier (static acyclic channel & messaging topology)...", flush=True)
+    topology_verifier = TopologyVerifier(config)
+    topology_issues, topology_results = topology_verifier.verify_documents(documents, docs_root)
+    issues.extend(topology_issues)
+    print(f"Topology verification finished: {len(topology_results)} topology graph(s) evaluated.", flush=True)
+
+    # 8. Generate Report
     print("Generating Markdown Report & Graph JSON...", flush=True)
     report_path = Path(args.report).resolve()
     reporter = Reporter(config)
     reporter.generate_markdown_report(documents, graph, issues, formal_results, wit_results,
                                       report_path, obligation_summary=obligation_summary,
-                                      consistency_summary=consistency_summary)
+                                      consistency_summary=consistency_summary,
+                                      topology_results=topology_results)
     print(f"✔ Markdown Report generated: {report_path}", flush=True)
 
     if args.graph_json:

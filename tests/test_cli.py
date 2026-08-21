@@ -33,14 +33,17 @@ def _write_clean_assessment(tmp_path, docs_dir):
     cfg = Config.load(tmp_path / "spec-integrator.yaml")
     parser = MarkdownParser(cfg)
     hashes = {}
+    sections = 0
     for md in sorted(docs_dir.rglob("*.md")):
         doc = parser.parse_file(md, docs_dir)
         hashes[doc.file_path] = doc.content_hash
+        sections += len(doc.sections)
 
     out = tmp_path / "reports" / "doc_risk_report.json"
     out.parent.mkdir(parents=True, exist_ok=True)
+    # A complete assessment covers every section; a partial one is not a clean bill.
     out.write_text(json.dumps({
-        "total_evaluated": 0, "assessments": [], "doc_hashes": hashes
+        "total_evaluated": sections, "assessments": [], "doc_hashes": hashes
     }), encoding="utf-8")
 
 

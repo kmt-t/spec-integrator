@@ -117,6 +117,8 @@ class ObligationConfig:
     require_judge: bool = True        # {VERIFY_LLM} tagged but never judged => NG
     risk_threshold: int = 4           # risk_score >= threshold demands the recommended verification
     stale_is_error: bool = True       # doc changed since it was assessed => NG
+    # A discharge rate over a partial assessment overstates coverage => NG
+    require_full_coverage: bool = True
 
 
 @dataclass
@@ -273,6 +275,8 @@ class Config:
             require_judge=bool(ob_data.get("require_judge", ob_defaults.require_judge)),
             risk_threshold=int(ob_data.get("risk_threshold", ob_defaults.risk_threshold)),
             stale_is_error=bool(ob_data.get("stale_is_error", ob_defaults.stale_is_error)),
+            require_full_coverage=bool(ob_data.get(
+                "require_full_coverage", ob_defaults.require_full_coverage)),
         )
 
         # WIT
