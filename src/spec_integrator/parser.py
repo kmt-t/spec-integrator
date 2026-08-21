@@ -179,9 +179,8 @@ class MarkdownParser:
 
             # Match AST-extracted links with their line number in section
             for link_text, link_url in extracted_links:
-                if link_url in line or link_text in line:
-                    target_file, target_anchor = self._split_link_target(link_url)
-                    # Only add if not already added for this line
+                target_file, target_anchor = self._split_link_target(link_url)
+                if (link_url in line) or (target_file and target_file in line) or (target_anchor and target_anchor in line) or (link_text and link_text in line):
                     parsed_link = ParsedLink(
                         source_file=rel_path,
                         source_line=curr_line_num,
@@ -224,10 +223,12 @@ class MarkdownParser:
 
     @staticmethod
     def _split_link_target(url: str) -> tuple[str, str]:
-        if "#" in url:
-            file_part, anchor_part = url.split("#", 1)
+        import urllib.parse
+        decoded = urllib.parse.unquote(url)
+        if "#" in decoded:
+            file_part, anchor_part = decoded.split("#", 1)
             return file_part, anchor_part
-        return url, ""
+        return decoded, ""
 
     @staticmethod
     def config_compute_hash(text: str) -> str:
