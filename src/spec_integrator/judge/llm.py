@@ -157,6 +157,7 @@ class LLMJudge:
             )
 
     def _call_sakura(self, prompt: str, model: str | None) -> str:
+        import time
         b_config = self.config.llm_judge.backends.get("sakura")
         api_key_env = b_config.api_key_env if b_config else "SAKURA_API_KEY"
         api_key = os.environ.get(api_key_env, "")
@@ -175,10 +176,19 @@ class LLMJudge:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.0
         }
-        resp = requests.post(endpoint, headers=headers, json=payload, timeout=60, verify=False)
-        resp.raise_for_status()
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        
+        last_err = None
+        for attempt in range(3):
+            try:
+                resp = requests.post(endpoint, headers=headers, json=payload, timeout=90, verify=False)
+                resp.raise_for_status()
+                data = resp.json()
+                return data["choices"][0]["message"]["content"]
+            except Exception as e:
+                last_err = e
+                time.sleep(2 * (attempt + 1))
+        
+        raise last_err or RuntimeError("Sakura API call failed after 3 attempts.")
 
     def _call_ollama(self, prompt: str, model: str | None) -> str:
         b_config = self.config.llm_judge.backends.get("ollama")
