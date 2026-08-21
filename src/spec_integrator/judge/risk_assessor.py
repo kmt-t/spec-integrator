@@ -33,7 +33,7 @@ Keywords/Tags: {keywords}
    - "Static": For simple declarative tables, constants, or stateless interfaces.
 
 === OUTPUT FORMAT ===
-Respond ONLY with a valid JSON object in the following format:
+Respond ONLY with a valid JSON object in English in the following format:
 ```json
 {{
   "complexity_score": 1 to 5,
@@ -42,10 +42,10 @@ Respond ONLY with a valid JSON object in the following format:
   "recommended_verification": "pyModelChecking" | "LLM_Judge" | "Static",
   "suggested_tags": ["{{VERIFY_FORMAL}}"] or ["{{VERIFY_LLM}}"] or [],
   "risk_factors": [
-    "Brief description of specific risk factor 1",
-    "Brief description of specific risk factor 2"
+    "Brief description of specific risk factor 1 in English",
+    "Brief description of specific risk factor 2 in English"
   ],
-  "summary": "Brief summary of complexity and risk assessment (in Japanese or English)"
+  "summary": "Concise summary of complexity and risk assessment in English"
 }}
 ```
 """
