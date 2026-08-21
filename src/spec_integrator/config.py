@@ -7,104 +7,45 @@ from pathlib import Path
 import yaml
 
 
-def glob_to_regex(pattern: str) -> re.Pattern:
-    """Converts a glob pattern supporting ** and wildcards to regex."""
-    # Normalize slashes
-    pat = pattern.replace("\\", "/")
-    # Expand braces if any
-    i = 0
-    res = "^"
-    n = len(pat)
-    while i < n:
-        c = pat[i]
-        if c == "*":
-            if i + 1 < n and pat[i + 1] == "*":
-                # Check for /**/
-                if i + 2 < n and pat[i + 2] == "/":
-                    res += "(?:.*/)?"
-                    i += 3
-                    continue
-                else:
-                    res += ".*"
-                    i += 2
-                    continue
-            else:
-                res += "[^/]*"
-                i += 1
-                continue
-        elif c == "?":
-            res += "[^/]"
-            i += 1
-        elif c in r"\.+^$()|[]{}":
-            res += "\\" + c
-            i += 1
+def regex_match(pattern: str, rel_path: str) -> bool:
+    """Matches a relative path against a regular expression pattern."""
+    norm_path = rel_path.replace("\\", "/").lstrip("./")
+    try:
+        if re.search(pattern, norm_path):
+            return True
+        # Match with or without leading docs/
+        if not norm_path.startswith("docs/"):
+            if re.search(pattern, f"docs/{norm_path}"):
+                return True
         else:
-            res += c
-            i += 1
-    res += "$"
-    return re.compile(res)
+            if re.search(pattern, norm_path[5:]):
+                return True
+    except re.error:
+        pass
+    return False
 
 
 @dataclass
 class TierConfig:
     tier: int | str  # 0, 1, 2, 3 or "meta"
     name: str
-    path_pattern: str
+    path_pattern: str  # Regular expression pattern
     description: str = ""
 
     def matches(self, rel_path: str) -> bool:
-        """Checks if a relative path matches the tier's pattern."""
-        norm_path = rel_path.replace("\\", "/").lstrip("./")
-        patterns = self._expand_braces(self.path_pattern)
-        for pat in patterns:
-            # Also allow pattern without leading docs/ if rel_path is relative to docs_root
-            clean_pat = pat.lstrip("./")
-            regex = glob_to_regex(clean_pat)
-            if regex.match(norm_path):
-                return True
-            # Try matching with/without leading docs/
-            if clean_pat.startswith("docs/") and not norm_path.startswith("docs/"):
-                if glob_to_regex(clean_pat[5:]).match(norm_path):
-                    return True
-            elif not clean_pat.startswith("docs/") and norm_path.startswith("docs/"):
-                if glob_to_regex(f"docs/{clean_pat}").match(norm_path):
-                    return True
-        return False
-
-    @staticmethod
-    def _expand_braces(pattern: str) -> list[str]:
-        if "{" not in pattern or "}" not in pattern:
-            return [pattern]
-        prefix, rest = pattern.split("{", 1)
-        braces_content, suffix = rest.split("}", 1)
-        choices = [c.strip() for c in braces_content.split(",")]
-        res = []
-        for choice in choices:
-            res.extend(TierConfig._expand_braces(f"{prefix}{choice}{suffix}"))
-        return res
+        """Checks if a relative path matches the tier's regex pattern."""
+        return regex_match(self.path_pattern, rel_path)
 
 
 @dataclass
 class KeywordRule:
-    pattern: str
-    defined_in: str
+    pattern: str       # Regular expression pattern for keyword syntax (e.g. ^REQ_[A-Z0-9_]+$)
+    defined_in: str    # Regular expression pattern for definition file path (e.g. requires/.*\.md)
     description: str = ""
 
     def is_definition_file(self, rel_path: str) -> bool:
-        norm_path = rel_path.replace("\\", "/").lstrip("./")
-        patterns = TierConfig._expand_braces(self.defined_in)
-        for pat in patterns:
-            clean_pat = pat.lstrip("./")
-            regex = glob_to_regex(clean_pat)
-            if regex.match(norm_path):
-                return True
-            if clean_pat.startswith("docs/") and not norm_path.startswith("docs/"):
-                if glob_to_regex(clean_pat[5:]).match(norm_path):
-                    return True
-            elif not clean_pat.startswith("docs/") and norm_path.startswith("docs/"):
-                if glob_to_regex(f"docs/{clean_pat}").match(norm_path):
-                    return True
-        return False
+        """Checks if the file matches the regex pattern for where the keyword is defined."""
+        return regex_match(self.defined_in, rel_path)
 
 
 @dataclass
@@ -236,7 +177,7 @@ class Config:
         )
 
     def get_tier_for_path(self, rel_path: str) -> int | str | None:
-        """Determines the tier of a given file path based on configured patterns."""
+        """Determines the tier of a given file path based on configured regex patterns."""
         for t in self.tiers:
             if t.matches(rel_path):
                 return t.tier

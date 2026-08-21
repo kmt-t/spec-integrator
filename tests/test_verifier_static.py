@@ -13,11 +13,11 @@ def test_static_verifier_gates(tmp_path):
     # Setup configuration with 3 Tiers
     cfg = Config()
     cfg.tiers = [
-        TierConfig(tier=0, name="Reqs", path_pattern="requires/**/*.md"),
-        TierConfig(tier=1, name="Core", path_pattern="tier1_*/**/*.md"),
-        TierConfig(tier=2, name="Runtime", path_pattern="tier2_*/**/*.md"),
+        TierConfig(tier=0, name="Reqs", path_pattern=r"requires/.*\.md"),
+        TierConfig(tier=1, name="Core", path_pattern=r"tier1_.*\.md"),
+        TierConfig(tier=2, name="Runtime", path_pattern=r"tier2_.*\.md"),
     ]
-    cfg.keywords["local"] = KeywordRule(pattern="^REQ_[A-Z0-9_]+$", defined_in="requires/**/*.md")
+    cfg.keywords["local"] = KeywordRule(pattern="^REQ_[A-Z0-9_]+$", defined_in=r"requires/.*\.md")
 
     # 1. Tier 0
     (docs_dir / "requires").mkdir()
