@@ -73,9 +73,9 @@ class RiskAssessmentReport:
     formal_candidates_count: int = 0
     llm_candidates_count: int = 0
 
-    def to_markdown(self) -> str:
+    def to_markdown(self, project_name: str = "Fireball") -> str:
         lines = [
-            "# Fireball 設計複雑度 & リスク評価レポート (Risk Assessment Report)",
+            f"# {project_name} 設計複雑度 & リスク評価レポート (Risk Assessment Report)",
             "",
             f"- **評価セクション総数**: {self.total_evaluated}",
             f"- **形式検証 (pyModelChecking) 推奨セクション**: {self.formal_candidates_count}",
@@ -125,37 +125,62 @@ class RiskAssessor:
 
     def assess_documents(self, documents: list[ParsedDocument],
                          backend: str | None = None, model: str | None = None,
-                         max_sections: int = 15) -> RiskAssessmentReport:
+                         max_sections: int = 15,
+                         exhaustive: bool = False,
+                         min_length: int = 50,
+                         include_meta: bool = False,
+                         include_reqs: bool = False,
+                         target_tiers: list[int | str] | None = None) -> RiskAssessmentReport:
         report = RiskAssessmentReport()
         selected_backend = backend or self.config.llm_judge.default_backend
 
-        # Select target candidate sections (ignore root/format, focus on core logic, algorithms, state machines)
+        # Select candidate sections using generic structural metrics (length, level, tier)
         candidates: list[tuple[ParsedDocument, ParsedSection]] = []
         for doc in documents:
-            if doc.tier == 0 or doc.tier == "meta":
+            if not exhaustive:
+                if not include_reqs and doc.tier == 0:
+                    continue
+                if not include_meta and doc.tier == "meta":
+                    continue
+            if target_tiers is not None and str(doc.tier) not in [str(t) for t in target_tiers]:
                 continue
-            for sec in doc.sections:
-                if sec.level in (2, 3) and len(sec.body_text.strip()) > 100:
-                    # Filter out purely structural headings
-                    if any(kw in sec.heading.lower() for kw in ["アーキテクチャ分類", "静的モデル", "ディレクトリ", "目次"]):
-                        continue
-                    candidates.append((doc, sec))
 
-        # Sort candidates to prioritize algorithmic, protocol, stateful, or verification sections
-        def candidate_priority(item: tuple[ParsedDocument, ParsedSection]) -> int:
+            for sec in doc.sections:
+                if len(sec.body_text.strip()) < min_length:
+                    continue
+                if not exhaustive and sec.level not in (2, 3):
+                    continue
+                candidates.append((doc, sec))
+
+        # Prioritize candidates based purely on structural information:
+        # 1. Verification tags present (e.g. {VERIFY_FORMAL}, {VERIFY_LLM})
+        # 2. Number of requirement / design keywords attached to the section
+        # 3. Presence of code blocks or structured tables
+        # 4. Length of content (richness of specification)
+        def structural_priority(item: tuple[ParsedDocument, ParsedSection]) -> int:
             _, s = item
             score = 0
-            text = (s.heading + " " + s.body_text).lower()
-            if any(k in text for k in ["algorithm", "アルゴリズム", "state", "状態遷移", "handoff", "channel", "lock", "queue", "interrupt", "割り込み", "cache", "jit"]):
-                score += 10
+            if s.tags:
+                score += 20
             if s.keywords:
+                score += len(s.keywords) * 5
+            if "```" in s.body_text:
+                score += 10
+            if "|" in s.body_text and "-|-" in s.body_text:
                 score += 5
+            score += min(len(s.body_text) // 200, 10)
             return score
 
-        candidates.sort(key=candidate_priority, reverse=True)
-        target_candidates = candidates[:max_sections]
+        candidates.sort(key=structural_priority, reverse=True)
+
+        if max_sections > 0:
+            target_candidates = candidates[:max_sections]
+        else:
+            target_candidates = candidates
 
         print(f"Assessing complexity & design risk for {len(target_candidates)} candidate section(s) using Backend: '{selected_backend}'...")
+        if exhaustive:
+            print("  (Exhaustive mode: evaluating all sections across all tiers)")
 
         for idx, (doc, sec) in enumerate(target_candidates, start=1):
             print(f"  [{idx}/{len(target_candidates)}] Assessing '{doc.file_path} -> {sec.heading}'...", flush=True)

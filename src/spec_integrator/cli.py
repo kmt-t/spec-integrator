@@ -317,11 +317,13 @@ def cmd_judge(args):
     judge = SemanticJudge(config)
 
     print(f"Running LLM as a Judge on candidate subgraphs (backend: {args.backend or config.llm_judge.default_backend})...")
-    results = judge.judge_subgraphs(
+    report = judge.judge_subgraphs(
         subgraphs, documents,
         backend=args.backend,
         model=args.model,
-        max_subgraphs=args.max_subgraphs
+        max_subgraphs=args.max_subgraphs,
+        exhaustive=args.exhaustive,
+        min_references=args.min_references,
     )
 
     db.close()
@@ -331,11 +333,17 @@ def cmd_judge(args):
         out_p.parent.mkdir(parents=True, exist_ok=True)
         with open(out_p, "w", encoding="utf-8") as f:
             import json
-            json.dump([asdict(r) for r in results], f, indent=2, ensure_ascii=False)
-        print(f"✔ Judge report saved to {out_p}")
+            json.dump([asdict(r) for r in report.results], f, indent=2, ensure_ascii=False)
+        print(f"✔ Judge report JSON saved to {out_p}")
 
-    has_fail = any(r.status == "FAIL" for r in results)
-    print(f"Judge finished. {len(results)} evaluated. Fails: {sum(1 for r in results if r.status == 'FAIL')}")
+    if args.report:
+        rep_p = Path(args.report).resolve()
+        rep_p.parent.mkdir(parents=True, exist_ok=True)
+        rep_p.write_text(report.to_markdown(), encoding="utf-8")
+        print(f"✔ Judge Markdown report saved to {rep_p}")
+
+    has_fail = report.fail_count > 0
+    print(f"Judge finished. {report.total_evaluated} evaluated. PASS: {report.pass_count}, WARN: {report.warn_count}, FAIL: {report.fail_count}")
     sys.exit(1 if has_fail else 0)
 
 
@@ -344,13 +352,20 @@ def cmd_assess(args):
     config = Config.load(config_path)
     documents, graph, db, docs_root = _load_and_parse_all(config)
 
+    target_tiers = [t.strip() for t in args.tier.split(",")] if args.tier else None
+
     assessor = RiskAssessor(config)
     print(f"Running Content Complexity & Risk Assessment (backend: {args.backend or config.llm_judge.default_backend})...")
     report = assessor.assess_documents(
         documents,
         backend=args.backend,
         model=args.model,
-        max_sections=args.max_sections
+        max_sections=args.max_sections,
+        exhaustive=args.exhaustive,
+        min_length=args.min_length,
+        include_meta=args.include_meta or args.exhaustive,
+        include_reqs=args.include_reqs or args.exhaustive,
+        target_tiers=target_tiers,
     )
 
     db.close()
@@ -434,8 +449,13 @@ def main():
     p_judge.add_argument("-c", "--config", default="spec-integrator.yaml", help="Path to configuration file")
     p_judge.add_argument("--backend", choices=["sakura", "ollama", "mock"], help="LLM backend")
     p_judge.add_argument("--model", help="LLM model name override")
-    p_judge.add_argument("--max-subgraphs", type=int, default=10, help="Max subgraphs to evaluate")
+    p_judge.add_argument("--max-subgraphs", type=int, default=10, help="Max subgraphs to evaluate (0 for unlimited)")
+    p_judge.add_argument("-a", "--all", "--exhaustive", dest="exhaustive", action="store_true",
+                         help="Exhaustive audit: check all requirement subgraphs regardless of {VERIFY_LLM} tag")
+    p_judge.add_argument("--min-references", type=int, default=1,
+                         help="Minimum referencing sections required to include a subgraph (default: 1, 0 for all)")
     p_judge.add_argument("-o", "--out", default="judge_report.json", help="Output JSON path")
+    p_judge.add_argument("-r", "--report", default="reports/doc_judge_report.md", help="Markdown report output path")
     p_judge.set_defaults(func=cmd_judge)
 
     # assess
@@ -443,7 +463,13 @@ def main():
     p_assess.add_argument("-c", "--config", default="spec-integrator.yaml", help="Path to configuration file")
     p_assess.add_argument("--backend", choices=["sakura", "ollama", "mock"], help="LLM backend")
     p_assess.add_argument("--model", help="LLM model name override")
-    p_assess.add_argument("--max-sections", type=int, default=15, help="Max sections to assess")
+    p_assess.add_argument("--max-sections", type=int, default=15, help="Max sections to assess (0 for unlimited)")
+    p_assess.add_argument("-a", "--all", "--exhaustive", dest="exhaustive", action="store_true",
+                          help="Exhaustive assessment: evaluate all sections across all tiers including Requirements and Meta")
+    p_assess.add_argument("--min-length", type=int, default=50, help="Minimum body character length to evaluate (default: 50)")
+    p_assess.add_argument("--include-meta", action="store_true", help="Include Architecture and Meta tier in candidate selection")
+    p_assess.add_argument("--include-reqs", action="store_true", help="Include Tier 0 (Requirements) in candidate selection")
+    p_assess.add_argument("--tier", help="Comma-separated target tiers to assess (e.g. '0,1,2')")
     p_assess.add_argument("-o", "--out", default="doc_risk_report.json", help="Output JSON path")
     p_assess.add_argument("-r", "--report", default="doc_risk_report.md", help="Output Markdown report path")
     p_assess.add_argument("--strict", dest="strict", action="store_true", default=True,

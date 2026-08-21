@@ -59,6 +59,9 @@ class FormalVerificationConfig:
     check_reachability: bool = True   # states unreachable from S0 => NG
     check_nondeterminism: bool = True # single-path model cannot exhibit interleaving => NG
     min_states: int = 4               # models smaller than this cannot back a concurrency claim
+    # Mutation test: disabling the guard must make the violation reachable, otherwise
+    # the safety property holds because the transition was omitted, not prevented.
+    check_guard_effectiveness: bool = True
 
 
 @dataclass
@@ -243,6 +246,8 @@ class Config:
             check_reachability=bool(fv_data.get("check_reachability", fv_defaults.check_reachability)),
             check_nondeterminism=bool(fv_data.get("check_nondeterminism", fv_defaults.check_nondeterminism)),
             min_states=int(fv_data.get("min_states", fv_defaults.min_states)),
+            check_guard_effectiveness=bool(fv_data.get(
+                "check_guard_effectiveness", fv_defaults.check_guard_effectiveness)),
         )
 
         # Evidence Gate

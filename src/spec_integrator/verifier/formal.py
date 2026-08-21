@@ -250,6 +250,7 @@ class FormalVerifier:
         audit = self._audit_structure(model, props)
         audit["backs"] = self._load_backs(module)
         prop_results = [self._audit_property(model, p, audit) for p in props]
+        prop_results = self._audit_guard_effectiveness(module, props, prop_results)
 
         failed = [p for p in prop_results if p.status not in ("PASS", "REFUTED")]
         if audit.get("errors"):
@@ -317,6 +318,101 @@ class FormalVerifier:
         if not isinstance(props, (list, tuple)):
             raise ModelContractError("properties() must return a list of property descriptors.")
         return list(props)
+
+    def _audit_guard_effectiveness(self, module, props: list[dict],
+                                   results: list[PropertyResult]) -> list[PropertyResult]:
+        """Mutation test: a violation must be unreachable *because a guard prevents it*.
+
+        A safety proof claims the design keeps the bad state out of reach. But a model
+        in which the bad state simply has no incoming edge proves exactly the same
+        formula while encoding no protection at all — the modeller merely omitted the
+        transition. The two are structurally indistinguishable.
+
+        So the model must expose its protection as something that can be switched off:
+        `build_model(guards=False)`. With the guard disabled the violation has to become
+        reachable. If it does not, the guard is doing no work and the property holds by
+        omission rather than by design.
+        """
+        if not self.config.formal_verification.check_guard_effectiveness:
+            return results
+
+        # Only properties that *claim protection* need a guard.
+        claims = [(i, p) for i, p in enumerate(props)
+                  if p.get("expect", True)
+                  and (p.get("violation") is not None or _derive_violation(p.get("formula")) is not None)]
+        if not claims:
+            return results
+
+        builder = getattr(module, "build_model", None)
+        if builder is None:
+            return results
+
+        import inspect
+        try:
+            accepts_guards = "guards" in inspect.signature(builder).parameters
+        except (TypeError, ValueError):
+            accepts_guards = False
+
+        if not accepts_guards:
+            for i, p in claims:
+                if results[i].status != "PASS":
+                    continue  # already rejected for a more fundamental reason
+                results[i] = PropertyResult(
+                    str(p.get("name", "<unnamed>")), str(p.get("kind", "safety")), "INVALID",
+                    "claims the design prevents this violation, but the model offers no way to "
+                    "test that claim. Define 'build_model(*, guards: bool = True)' so the "
+                    "protection can be switched off: with guards=False the violation must become "
+                    "reachable. Otherwise the property holds because the transition was never "
+                    "drawn, not because the design prevents it"
+                )
+            return results
+
+        try:
+            unguarded = builder(guards=False)
+        except Exception as e:
+            for i, p in claims:
+                if results[i].status != "PASS":
+                    continue
+                results[i] = PropertyResult(
+                    str(p.get("name", "<unnamed>")), str(p.get("kind", "safety")), "INVALID",
+                    f"build_model(guards=False) raised: {e}")
+            return results
+
+        try:
+            reachable = set(unguarded.get_reachable_set_from(set(unguarded.S0)))
+        except Exception:
+            reachable = set(unguarded.states())
+
+        for i, p in claims:
+            if results[i].status != "PASS":
+                continue
+            violation = p.get("violation") or _derive_violation(p.get("formula"))
+            modelcheck = self._resolve_modelcheck(p, p.get("formula"))
+            if modelcheck is None:
+                continue
+            try:
+                bad_states = set(modelcheck(unguarded, violation)) & reachable
+            except Exception as e:
+                results[i] = PropertyResult(
+                    results[i].name, results[i].kind, "INVALID",
+                    f"violation could not be checked on the unguarded model: {e}")
+                continue
+
+            if not bad_states:
+                results[i] = PropertyResult(
+                    results[i].name, results[i].kind, "INVALID",
+                    "the violation stays unreachable even with guards disabled, so the guard "
+                    "prevents nothing. The property holds because the transition leading to the "
+                    "violation is absent from the model, not because the design blocks it — "
+                    "model the path that would cause the violation, then show the guard cuts it"
+                )
+            else:
+                results[i] = PropertyResult(
+                    results[i].name, results[i].kind, "PASS",
+                    f"{results[i].details}; guard verified by mutation "
+                    f"(violation reachable in {len(bad_states)} state(s) when disabled)"
+                )
+        return results
 
     @staticmethod
     def _load_backs(module) -> list[str]:

@@ -305,29 +305,17 @@ def test_refuted_property_is_surfaced_against_its_backed_documents(tmp_path):
     assert "tier1_core/scheduler.md" in refuted[0].message
 
 
-def test_proof_model_with_unreachable_violation_passes(tmp_path):
-    """A proof model where the violation state is representable but unreachable by protection."""
-    proof = _HEADER + '''
-BACKS = ["tier1_core/scheduler.md"]
-
-def build_model():
-    S = ["s_idle", "s_a_lock", "s_a_crit", "s_b_wait", "s_b_crit", "s_both_crit"]
+_UNGUARDED_BODY = '''
+    S = ["s_idle", "s_a_crit", "s_b_crit", "s_both_crit", "s_wait"]
     R = [
-        ("s_idle", "s_a_lock"), ("s_a_lock", "s_a_crit"), ("s_a_crit", "s_idle"),
-        ("s_idle", "s_b_wait"), ("s_b_wait", "s_b_crit"), ("s_b_crit", "s_idle"),
-        ("s_b_wait", "s_idle"),
+        ("s_idle", "s_a_crit"), ("s_idle", "s_b_crit"), ("s_idle", "s_wait"),
+        ("s_a_crit", "s_idle"), ("s_b_crit", "s_idle"),
+        ("s_wait", "s_b_crit"), ("s_wait", "s_idle"),
         ("s_both_crit", "s_idle"),
     ]
-    L = {
-        "s_idle": {"idle"},
-        "s_a_lock": {"a_lock"},
-        "s_a_crit": {"a_crit"},
-        "s_b_wait": {"b_wait"},
-        "s_b_crit": {"b_crit"},
-        "s_both_crit": {"a_crit", "b_crit"},
-    }
-    return Kripke(S=S, S0={"s_idle"}, R=R, L=L)
+'''
 
+_PROOF_PROPS = '''
 def properties():
     bad = And(AtomicProposition("a_crit"), AtomicProposition("b_crit"))
     return [{
@@ -339,10 +327,57 @@ def properties():
         "expect": True,
     }]
 '''
-    cfg, doc, docs_dir = _make_doc(tmp_path, proof)
+
+_LABELS = '''
+    L = {
+        "s_idle": {"idle"},
+        "s_a_crit": {"a_crit"},
+        "s_b_crit": {"b_crit"},
+        "s_both_crit": {"a_crit", "b_crit"},
+        "s_wait": {"waiting"},
+    }
+    return Kripke(S=S, S0={"s_idle"}, R=R, L=L)
+'''
+
+
+def test_proof_by_omission_is_rejected(tmp_path):
+    """The violation is unreachable only because the transition was never drawn."""
+    omission = (_HEADER + 'BACKS = ["tier1_core/scheduler.md"]\n\ndef build_model():'
+                + _UNGUARDED_BODY + _LABELS + _PROOF_PROPS)
+    cfg, doc, docs_dir = _make_doc(tmp_path, omission)
+    issues, results = FormalVerifier(cfg).verify_documents([doc], docs_dir)
+
+    assert results[0].properties[0].status == "INVALID"
+    assert any(i.rule_code == "FORMAL-PROPERTY-INVALID" for i in issues)
+    assert any("guards" in i.message for i in issues)
+
+
+def test_proof_with_an_effective_guard_passes(tmp_path):
+    """Disabling the guard must make the violation reachable, proving the guard works."""
+    guarded = (_HEADER + 'BACKS = ["tier1_core/scheduler.md"]\n\n'
+               'def build_model(*, guards: bool = True):'
+               + _UNGUARDED_BODY + '''
+    if not guards:
+        # ロックが無ければ、A が臨界区間にいる間に B も入れてしまう
+        R = R + [("s_a_crit", "s_both_crit"), ("s_b_crit", "s_both_crit")]
+''' + _LABELS + _PROOF_PROPS)
+    cfg, doc, docs_dir = _make_doc(tmp_path, guarded)
     issues, results = FormalVerifier(cfg).verify_documents([doc], docs_dir)
 
     assert results[0].status == "PASS", results[0].details
     assert results[0].properties[0].status == "PASS"
-    assert [i for i in issues if i.gate == "Formal"] == []
+    assert "guard verified by mutation" in results[0].properties[0].details
+    assert [i for i in issues if i.severity == "ERROR"] == []
+
+
+def test_guard_that_prevents_nothing_is_rejected(tmp_path):
+    """A `guards` parameter that changes nothing is not a protection mechanism."""
+    fake = (_HEADER + 'BACKS = ["tier1_core/scheduler.md"]\n\n'
+            'def build_model(*, guards: bool = True):'
+            + _UNGUARDED_BODY + _LABELS + _PROOF_PROPS)
+    cfg, doc, docs_dir = _make_doc(tmp_path, fake)
+    issues, results = FormalVerifier(cfg).verify_documents([doc], docs_dir)
+
+    assert results[0].properties[0].status == "INVALID"
+    assert any("guard prevents nothing" in i.message for i in issues)
 
