@@ -227,3 +227,56 @@ def test_missing_model_for_tagged_document_is_rejected(tmp_path):
 
     assert results[0].status == "NOT_FOUND"
     assert any(i.rule_code == "FORMAL-MODEL-NOT-FOUND" for i in issues)
+
+
+def test_liveness_claimed_with_existential_eventuality_is_rejected(tmp_path):
+    """AG(p -> EF q) proves q is reachable, not that it inevitably happens."""
+    weak = _HEADER + '''
+def build_model():
+    S = ["s_idle", "s_req", "s_done", "s_spin"]
+    R = [("s_idle", "s_req"), ("s_req", "s_done"), ("s_req", "s_spin"),
+         ("s_spin", "s_req"), ("s_done", "s_idle")]
+    L = {"s_idle": {"idle"}, "s_req": {"requested"},
+         "s_done": {"progress"}, "s_spin": {"spinning"}}
+    return Kripke(S=S, S0={"s_idle"}, R=R, L=L)
+
+def properties():
+    from pyModelChecking.CTL import Imply
+    return [{
+        "name": "request_progresses", "kind": "liveness", "logic": "CTL",
+        "formula": AG(Imply(AtomicProposition("requested"),
+                            EF(AtomicProposition("progress")))),
+        "expect": True,
+    }]
+'''
+    cfg, doc, docs_dir = _make_doc(tmp_path, weak)
+    issues, _ = FormalVerifier(cfg).verify_documents([doc], docs_dir)
+
+    assert any(i.rule_code == "FORMAL-PROPERTY-INVALID" for i in issues)
+    assert any("existential eventuality" in i.message for i in issues)
+
+
+def test_liveness_with_universal_eventuality_is_accepted(tmp_path):
+    strong = _HEADER + '''
+def build_model():
+    S = ["s_idle", "s_req", "s_done", "s_alt"]
+    R = [("s_idle", "s_req"), ("s_idle", "s_alt"), ("s_alt", "s_idle"),
+         ("s_req", "s_done"), ("s_done", "s_idle")]
+    L = {"s_idle": {"idle"}, "s_req": {"requested"},
+         "s_done": {"progress"}, "s_alt": {"other"}}
+    return Kripke(S=S, S0={"s_idle"}, R=R, L=L)
+
+def properties():
+    from pyModelChecking.CTL import Imply
+    return [{
+        "name": "request_progresses", "kind": "liveness", "logic": "CTL",
+        "formula": AG(Imply(AtomicProposition("requested"),
+                            AF(AtomicProposition("progress")))),
+        "expect": True,
+    }]
+'''
+    cfg, doc, docs_dir = _make_doc(tmp_path, strong)
+    issues, results = FormalVerifier(cfg).verify_documents([doc], docs_dir)
+
+    assert results[0].status == "PASS", results[0].details
+    assert [i for i in issues if i.gate == "Formal"] == []

@@ -10,9 +10,18 @@ from spec_integrator.parser import ParsedDocument
 from spec_integrator.verifier.static import VerificationIssue
 
 
-# Operator-kind classification used to reject "liveness" claims written with
-# purely universal-invariant operators.
-EVENTUALITY_MARKERS = ("AF", "EF", "F", "U", "AU", "EU", "R")
+# Only a *universal* eventuality expresses progress: AF q means every path reaches q.
+# EF q merely means q is reachable, which an execution that loops forever without ever
+# taking that branch still satisfies. A liveness claim written with EF proves
+# possibility, not inevitability, and is not a progress guarantee.
+#
+# In pyModelChecking, AF/EF/AG/... are *functions*, not classes: at runtime AF(x)
+# is A(F(x)) and EF(x) is E(F(x)). The quantifier therefore has to be read from the
+# parent node, not from the operator's own type name.
+PATH_QUANTIFIERS = ("A", "E")
+EVENTUALITY_OPERATORS = ("F", "U")
+
+LIVENESS_KINDS = ("liveness", "response", "deadlock_freedom", "progress")
 
 
 @dataclass
@@ -84,21 +93,37 @@ def _derive_violation(formula):
         return None
 
 
-def _has_eventuality(formula) -> bool:
-    stack = [formula]
+def _eventuality_quantifier(formula) -> str | None:
+    """Returns 'universal', 'existential', or None for the strongest eventuality used."""
+    found: set[str] = set()
+    stack: list[tuple[object, str | None]] = [(formula, None)]
     seen = 0
     while stack and seen < 10000:
-        node = stack.pop()
+        node, enclosing = stack.pop()
         seen += 1
         if node is None:
             continue
-        if type(node).__name__ in EVENTUALITY_MARKERS:
-            return True
+        name = type(node).__name__
+
+        if name in EVENTUALITY_OPERATORS:
+            if enclosing == "E":
+                found.add("existential")
+            else:
+                # A(F ...) is universal; a bare F/U is LTL, where all paths are implied.
+                found.add("universal")
+
+        child_quantifier = name if name in PATH_QUANTIFIERS else None
         try:
-            stack.extend(list(node.subformulas()))
+            for sub in node.subformulas():
+                stack.append((sub, child_quantifier))
         except Exception:
             pass
-    return False
+
+    if "universal" in found:
+        return "universal"
+    if "existential" in found:
+        return "existential"
+    return None
 
 
 class FormalVerifier:
@@ -392,12 +417,22 @@ class FormalVerifier:
             )
 
         # 2. Kind / operator consistency.
-        if kind in ("liveness", "response", "deadlock_freedom") and not _has_eventuality(formula):
-            return PropertyResult(
-                name, kind, "INVALID",
-                f"declared as '{kind}' but the formula contains no eventuality operator "
-                "(AF/EF/F/U); an invariant cannot express a liveness claim"
-            )
+        if kind in LIVENESS_KINDS:
+            quantifier = _eventuality_quantifier(formula)
+            if quantifier is None:
+                return PropertyResult(
+                    name, kind, "INVALID",
+                    f"declared as '{kind}' but the formula contains no eventuality operator "
+                    "(AF/AU/F/U); an invariant cannot express a liveness claim"
+                )
+            if quantifier == "existential":
+                return PropertyResult(
+                    name, kind, "INVALID",
+                    f"declared as '{kind}' but progress is expressed with an existential "
+                    "eventuality (EF/EU). 'EF q' only says q is *reachable*; an execution that "
+                    "loops forever without ever taking that branch still satisfies it. Use a "
+                    "universal eventuality (AF q) to claim q is inevitable"
+                )
 
         # 3. Falsifiability: the violating condition must be representable.
         if self.config.formal_verification.check_vacuity:

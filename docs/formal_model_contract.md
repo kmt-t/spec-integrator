@@ -45,7 +45,7 @@ Formal Gate はこれを機械的に拒否する。
 | :--- | :--- |
 | `FORMAL-MODEL-NO-CONTRACT` | `build_model()` / `properties()` が無く、状態空間を検査できない。 |
 | `FORMAL-PROPERTY-VACUOUS` | `violation` を満たす状態が状態空間に**存在しない**。プロパティは設計ではなくラベル付けの都合で真になっている。 |
-| `FORMAL-PROPERTY-INVALID` | 式中の原子命題がどの状態ラベルにも現れない／`liveness` を宣言しながら `AF`・`EF`・`U` 等の到達性演算子を含まない。 |
+| `FORMAL-PROPERTY-INVALID` | 式中の原子命題がどの状態ラベルにも現れない／`liveness` を宣言しながら到達性演算子を含まない、**または `EF`・`EU`（存在量化）で進行を主張している**。 |
 | `FORMAL-MODEL-UNSOUND` | 初期状態から到達不能な状態がある／状態数が `min_states` 未満／全到達状態の後続が1つ以下（単一経路モデル）。 |
 | `FORMAL-BACKING-AMBIGUOUS` | 複数の設計書が同じ `formal/` を根拠にしているのに、どのモデルがどの主張を引き受けるか宣言されていない。 |
 
@@ -123,8 +123,23 @@ def properties():
 {
     "name": "deadlock_freedom",
     "kind": "deadlock_freedom",
-    "formula": AG(EF(AtomicProposition("progress"))),
+    # AF: どの実行経路をたどっても必ず progress に到達する
+    "formula": AG(Imply(AtomicProposition("requested"), AF(AtomicProposition("progress")))),
     "violation": AtomicProposition("deadlock"),
     "expect": True,
 }
 ```
+
+## 5. 進行の主張には全称量化子を使うこと
+
+`liveness` / `deadlock_freedom` / `response` を宣言したプロパティで
+**`EF`・`EU`（存在量化）を使うことは禁止**であり、ゲートは ERROR とする。
+
+| 式 | 意味 | 進行の証明になるか |
+| :--- | :--- | :---: |
+| `AG(p -> EF q)` | p のとき q に到達**し得る** | ❌ |
+| `AG(p -> AF q)` | p のとき q に**必ず到達する** | ✅ |
+
+`AG(p -> EF q)` は、その分岐を永久に選ばずループし続ける実行を許す。
+分岐が1つでも存在すれば真になるため、強連結なモデルではほぼ自明に成立する。
+**「到達可能である」は「進行する」ではない。**
