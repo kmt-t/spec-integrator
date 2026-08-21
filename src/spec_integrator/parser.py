@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import re
+import hashlib
 from pathlib import Path
 from dataclasses import dataclass, field
+import mistune
 from spec_integrator.config import Config
 
 
@@ -17,7 +19,7 @@ class ParsedLink:
 
 @dataclass
 class ParsedSection:
-    section_id: str  # "rel_path#Heading"
+    section_id: str  # "sec:rel_path#Heading"
     file_path: str
     heading: str
     level: int
@@ -25,7 +27,7 @@ class ParsedSection:
     line_end: int
     body_text: str
     keywords: list[str] = field(default_factory=list)
-    tags: list[str] = field(default_factory=list)  # e.g. {VERIFY_FORMAL}, {VERIFY_LLM}
+    tags: list[str] = field(default_factory=list)  # e.g. {VERIFY_FORMAL}, {VERIFY_LLM}, {VERIFY_WIT}
     links: list[ParsedLink] = field(default_factory=list)
 
 
@@ -45,11 +47,12 @@ class ParsedDocument:
 
 class MarkdownParser:
     KEYWORD_REGEX = re.compile(r"\{([A-Za-z0-9_\-]+)\}")
-    LINK_REGEX = re.compile(r"\[([^\]]+)\]\(([^)#]+\.md)?(#[^)]+)?\)")
     TEMPLATE_PREFIXES = ("Decision_", "Strategy_", "Requirement_", "req_", "concept", "Constraint_")
 
     def __init__(self, config: Config):
         self.config = config
+        # Initialize mistune markdown AST parser
+        self.md_parser = mistune.create_markdown(renderer=None)
 
     def parse_file(self, file_path: Path, docs_root: Path) -> ParsedDocument:
         rel_path = file_path.relative_to(docs_root).as_posix()
@@ -59,25 +62,24 @@ class MarkdownParser:
         component = self._extract_component(rel_path)
 
         lines = content.splitlines()
-        sections: list[ParsedSection] = []
         
-        # Heading scan
-        heading_indices = []
-        for idx, line in enumerate(lines, start=1):
-            h_match = re.match(r"^(#{1,6})\s+(.+)$", line)
-            if h_match:
-                level = len(h_match.group(1))
-                raw_heading = h_match.group(2).strip()
-                heading_indices.append((idx, level, raw_heading))
+        # 1. Parse AST using mistune
+        tokens = self.md_parser(content)
+        
+        # 2. Extract Headings and line boundaries from AST
+        sections: list[ParsedSection] = []
+        heading_indices = self._find_heading_lines(lines, tokens)
 
         if not heading_indices:
-            # File without headings
-            sec = self._create_section(rel_path, "", 1, 1, len(lines), lines)
+            sec = self._create_section(rel_path, "", 1, 1, max(len(lines), 1), lines)
             sections.append(sec)
         else:
-            # If there's content before first heading
+            # Preamble section if content exists before first heading
             if heading_indices[0][0] > 1:
-                pre_sec = self._create_section(rel_path, "(Overview)", 1, 1, heading_indices[0][0] - 1, lines[:heading_indices[0][0] - 1])
+                pre_sec = self._create_section(
+                    rel_path, "(Overview)", 1, 1, heading_indices[0][0] - 1,
+                    lines[:heading_indices[0][0] - 1]
+                )
                 sections.append(pre_sec)
 
             for i, (line_start, level, heading) in enumerate(heading_indices):
@@ -107,6 +109,46 @@ class MarkdownParser:
             all_links=all_links
         )
 
+    def _find_heading_lines(self, lines: list[str], tokens: list[dict]) -> list[tuple[int, int, str]]:
+        """Extracts heading line numbers, levels, and text guided by mistune AST tokens."""
+        ast_headings = []
+        for tok in tokens:
+            if tok.get("type") == "heading":
+                level = tok.get("attrs", {}).get("level", 1)
+                text = self._extract_text_from_children(tok.get("children", []))
+                ast_headings.append((level, text.strip()))
+
+        heading_indices = []
+        line_idx = 0
+        total_lines = len(lines)
+
+        for level, heading_text in ast_headings:
+            # Search forward in source lines for matching heading
+            while line_idx < total_lines:
+                line = lines[line_idx]
+                h_match = re.match(r"^(#{1,6})\s+(.+)$", line)
+                if h_match and len(h_match.group(1)) == level:
+                    raw_title = h_match.group(2).strip()
+                    # Match heading text (ignoring trailing tags/anchors if any)
+                    heading_indices.append((line_idx + 1, level, raw_title))
+                    line_idx += 1
+                    break
+                line_idx += 1
+
+        return heading_indices
+
+    def _extract_text_from_children(self, children: list[dict]) -> str:
+        """Recursively extracts plain text from mistune AST token children."""
+        res = []
+        for child in children:
+            if "raw" in child:
+                res.append(child["raw"])
+            elif "text" in child:
+                res.append(child["text"])
+            elif "children" in child:
+                res.append(self._extract_text_from_children(child["children"]))
+        return "".join(res)
+
     def _create_section(self, rel_path: str, heading: str, level: int,
                         line_start: int, line_end: int, lines: list[str]) -> ParsedSection:
         body_text = "\n".join(lines)
@@ -116,10 +158,15 @@ class MarkdownParser:
         tags = []
         links = []
 
+        # Parse section body with mistune AST to reliably find links and inline elements
+        sec_tokens = self.md_parser(body_text)
+        extracted_links = self._extract_links_from_tokens(sec_tokens)
+
+        # Line mapping for links and keywords
         for line_offset, line in enumerate(lines):
             curr_line_num = line_start + line_offset
-            
-            # Keywords and tags
+
+            # Keywords and tags extraction
             for m in self.KEYWORD_REGEX.finditer(line):
                 kw_val = m.group(1)
                 full_kw = f"{{{kw_val}}}"
@@ -130,18 +177,20 @@ class MarkdownParser:
                 else:
                     keywords.append(kw_val)
 
-            # Markdown links
-            for m in self.LINK_REGEX.finditer(line):
-                link_text = m.group(1)
-                target_file = m.group(2) or ""
-                target_anchor = (m.group(3) or "").lstrip("#")
-                links.append(ParsedLink(
-                    source_file=rel_path,
-                    source_line=curr_line_num,
-                    text=link_text,
-                    target_path=target_file,
-                    target_anchor=target_anchor
-                ))
+            # Match AST-extracted links with their line number in section
+            for link_text, link_url in extracted_links:
+                if link_url in line or link_text in line:
+                    target_file, target_anchor = self._split_link_target(link_url)
+                    # Only add if not already added for this line
+                    parsed_link = ParsedLink(
+                        source_file=rel_path,
+                        source_line=curr_line_num,
+                        text=link_text,
+                        target_path=target_file,
+                        target_anchor=target_anchor
+                    )
+                    if parsed_link not in links:
+                        links.append(parsed_link)
 
         return ParsedSection(
             section_id=section_id,
@@ -151,22 +200,43 @@ class MarkdownParser:
             line_start=line_start,
             line_end=line_end,
             body_text=body_text,
-            keywords=list(dict.fromkeys(keywords)),
-            tags=list(dict.fromkeys(tags)),
+            keywords=keywords,
+            tags=tags,
             links=links
         )
 
-    def _extract_component(self, rel_path: str) -> str:
-        parts = rel_path.replace("\\", "/").split("/")
-        # If inside docs/components/tierX_name -> component is tierX_name
-        for p in parts:
-            if p.startswith("tier1_") or p.startswith("tier2_") or p.startswith("tier3_"):
-                return p
-        if len(parts) > 1:
-            return parts[0]
-        return "root"
+    def _extract_links_from_tokens(self, tokens: list[dict]) -> list[tuple[str, str]]:
+        """Extracts (link_text, url) pairs from mistune AST tokens."""
+        links = []
+
+        def walk(toks):
+            for t in toks:
+                if t.get("type") == "link":
+                    url = t.get("attrs", {}).get("url", "")
+                    text = self._extract_text_from_children(t.get("children", []))
+                    if url and (url.endswith(".md") or ".md#" in url or url.startswith("#")):
+                        links.append((text, url))
+                if "children" in t:
+                    walk(t["children"])
+
+        walk(tokens)
+        return links
 
     @staticmethod
-    def config_compute_hash(content: str) -> str:
-        import hashlib
-        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+    def _split_link_target(url: str) -> tuple[str, str]:
+        if "#" in url:
+            file_part, anchor_part = url.split("#", 1)
+            return file_part, anchor_part
+        return url, ""
+
+    @staticmethod
+    def config_compute_hash(text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _extract_component(self, rel_path: str) -> str:
+        parts = rel_path.split("/")
+        if len(parts) >= 2 and parts[0] == "components":
+            return parts[1]
+        elif len(parts) >= 1:
+            return parts[0]
+        return "unknown"

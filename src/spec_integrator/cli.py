@@ -26,7 +26,7 @@ def cmd_init(args):
         print(f"[Error] '{target}' already exists.")
         sys.exit(1)
 
-    template = """version: "1.0"
+    template = r"""version: "1.0"
 
 project:
   name: "My Specification Project"
@@ -36,39 +36,39 @@ project:
 tiers:
   - tier: 0
     name: "Requirements"
-    path_pattern: "docs/requires/**/*.md"
+    path_pattern: 'requires/.*\.md'
     description: "System Requirements"
 
   - tier: 1
     name: "Core"
-    path_pattern: "docs/components/tier1_*/**/*.md"
+    path_pattern: 'components/tier1_.*\.md'
     description: "Core System Components"
 
   - tier: 2
     name: "Runtime"
-    path_pattern: "docs/components/tier2_*/**/*.md"
+    path_pattern: 'components/tier2_.*\.md'
     description: "Runtime & Execution Engine"
 
   - tier: 3
     name: "Platform"
-    path_pattern: "docs/components/tier3_*/**/*.md"
+    path_pattern: 'components/tier3_.*\.md'
     description: "Platform Abstraction & Drivers"
 
   - tier: "meta"
     name: "Architecture & Plans"
-    path_pattern: "docs/{architecture,plans}/**/*.md"
+    path_pattern: '(architecture|plans)/.*\.md'
     description: "Architecture & Plans"
 
 keywords:
   meta:
-    pattern: "^META_[A-Za-z0-9_]+$"
-    defined_in: "docs/architecture/document_structure.md"
+    pattern: '^META_[A-Za-z0-9_]+$'
+    defined_in: 'architecture/document_structure\.md'
   global:
-    pattern: "^GLOBAL_[A-Za-z0-9_]+$"
-    defined_in: "docs/architecture/document_structure.md"
+    pattern: '^GLOBAL_[A-Za-z0-9_]+$'
+    defined_in: 'architecture/document_structure\.md'
   local:
-    pattern: "^[A-Za-z0-9_]+$"
-    defined_in: "docs/requires/**/*.md"
+    pattern: '^[A-Za-z0-9_]+$'
+    defined_in: 'requires/.*\.md'
 
 formal_verification:
   model_dir_name: "formal"
