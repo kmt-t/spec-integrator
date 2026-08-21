@@ -80,6 +80,7 @@ class ProjectConfig:
     name: str = "Spec Project"
     docs_root: str = "docs"
     cache_db: str = ".spec-integrator/doc_cache.db"
+    exclude_patterns: list[str] = field(default_factory=lambda: ["**/FORMAT.md", "FORMAT.md"])
 
 
 @dataclass
@@ -92,6 +93,33 @@ class Config:
     wit_verification: WITVerificationConfig = field(default_factory=WITVerificationConfig)
     llm_judge: LLMJudgeConfig = field(default_factory=LLMJudgeConfig)
     config_dir: Path = field(default_factory=Path.cwd)
+
+    def is_excluded(self, file_path: str | Path, docs_root: Path | None = None) -> bool:
+        """Checks if a file path matches any exclusion patterns."""
+        import fnmatch
+        p_str = str(file_path).replace("\\", "/").lstrip("./")
+        if docs_root:
+            try:
+                p_rel = Path(file_path).relative_to(docs_root).as_posix().lstrip("./")
+            except ValueError:
+                p_rel = p_str
+        else:
+            p_rel = p_str
+
+        file_name = Path(p_str).name
+
+        for pat in self.project.exclude_patterns:
+            norm_pat = pat.replace("\\", "/").lstrip("./")
+            # 1. Direct filename match (e.g. FORMAT.md)
+            if file_name == norm_pat or norm_pat == f"**/{file_name}":
+                return True
+            # 2. Glob match
+            if fnmatch.fnmatch(p_rel, norm_pat) or fnmatch.fnmatch(p_str, norm_pat) or fnmatch.fnmatch(file_name, norm_pat):
+                return True
+            # 3. Regex match
+            if regex_match(norm_pat, p_rel) or regex_match(norm_pat, p_str):
+                return True
+        return False
 
     @classmethod
     def load(cls, config_path: str | Path) -> Config:
@@ -106,10 +134,15 @@ class Config:
 
         # Project
         proj_data = data.get("project", {})
+        default_excludes = ["**/FORMAT.md", "FORMAT.md"]
+        custom_excludes = proj_data.get("exclude_patterns", [])
+        combined_excludes = list(dict.fromkeys(default_excludes + custom_excludes))
+
         project = ProjectConfig(
             name=proj_data.get("name", "Spec Project"),
             docs_root=proj_data.get("docs_root", "docs"),
-            cache_db=proj_data.get("cache_db", ".spec-integrator/doc_cache.db")
+            cache_db=proj_data.get("cache_db", ".spec-integrator/doc_cache.db"),
+            exclude_patterns=combined_excludes
         )
 
         # Tiers

@@ -40,3 +40,23 @@ keywords:
     assert len(cfg.tiers) == 1
     assert cfg.get_tier_for_path("docs/requires/spec.md") == 0
     assert cfg.get_tier_for_path("docs/other/spec.md") is None
+
+
+def test_config_exclude_patterns(tmp_path):
+    yaml_content = """version: "1.0"
+project:
+  name: "Test Exclude"
+  docs_root: "docs"
+  exclude_patterns:
+    - "**/FORMAT.md"
+    - "templates/*.md"
+"""
+    cfg_file = tmp_path / "spec-integrator.yaml"
+    cfg_file.write_text(yaml_content, encoding="utf-8")
+
+    cfg = Config.load(cfg_file)
+    assert cfg.is_excluded("docs/components/FORMAT.md")
+    assert cfg.is_excluded("architecture/FORMAT.md")
+    assert cfg.is_excluded("FORMAT.md")
+    assert cfg.is_excluded("templates/custom_spec.md")
+    assert not cfg.is_excluded("components/tier1_core/os_coos.md")

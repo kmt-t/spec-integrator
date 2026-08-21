@@ -108,7 +108,8 @@ def _load_and_parse_all(config: Config, clean: bool = False):
         db.clear_all()
 
     parser = MarkdownParser(config)
-    md_files = sorted(list(docs_root.rglob("*.md")))
+    all_md = sorted(list(docs_root.rglob("*.md")))
+    md_files = [f for f in all_md if not config.is_excluded(f, docs_root)]
 
     print(f"Scanning {len(md_files)} markdown files in {docs_root}...", flush=True)
     documents = []
