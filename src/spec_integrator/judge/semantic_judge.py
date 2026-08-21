@@ -31,16 +31,16 @@ Target Keyword/Requirement ID: {item_label}
 3. Clarity: Are there any ambiguous or unspecified requirements left unresolved?
 
 === OUTPUT FORMAT ===
-Respond ONLY with a valid JSON object in the following format:
+Respond ONLY with a valid JSON object in English in the following format:
 ```json
 {{
   "status": "PASS" | "WARN" | "FAIL",
-  "summary": "Brief explanation of the evaluation result (in Japanese or English)",
+  "summary": "Concise explanation of the evaluation result in English",
   "issues": [
     {{
       "severity": "ERROR" | "WARNING",
       "location": "File or Section name",
-      "description": "Detailed explanation of contradiction or missing spec"
+      "description": "Detailed explanation of contradiction or missing spec in English"
     }}
   ]
 }}
