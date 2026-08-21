@@ -251,7 +251,7 @@ class FormalVerifier:
         audit["backs"] = self._load_backs(module)
         prop_results = [self._audit_property(model, p, audit) for p in props]
 
-        failed = [p for p in prop_results if p.status != "PASS"]
+        failed = [p for p in prop_results if p.status not in ("PASS", "REFUTED")]
         if audit.get("errors"):
             status = "FAIL"
         elif failed:
@@ -460,7 +460,18 @@ class FormalVerifier:
                         "design prevents the violation — this is not a proof"
                     )
 
-        # 4. Actually check the property.
+        # 4. A property the model deliberately refutes states a limitation of the
+        #    design, so the author must write down what that limitation is. Without
+        #    it, "expect: False" quietly reads as a pass in every summary.
+        if not expect and not str(prop.get("refutation_note", "")).strip():
+            return PropertyResult(
+                name, kind, "INVALID",
+                "declared 'expect: False' without a 'refutation_note'. The model asserts this "
+                "property does NOT hold, which is a statement about the design's limits — "
+                "state it explicitly so the specification cannot claim the opposite"
+            )
+
+        # 5. Actually check the property.
         try:
             sat = set(modelcheck(model, formula))
         except Exception as e:
@@ -468,8 +479,11 @@ class FormalVerifier:
 
         holds = set(model.S0).issubset(sat)
         if holds == expect:
-            return PropertyResult(name, kind, "PASS",
-                                  f"{'holds' if holds else 'refuted as expected'} at all initial states")
+            if not expect:
+                return PropertyResult(
+                    name, kind, "REFUTED",
+                    f"refuted as expected — {prop.get('refutation_note', '')}")
+            return PropertyResult(name, kind, "PASS", "holds at all initial states")
         return PropertyResult(
             name, kind, "FAIL",
             f"expected the property to {'hold' if expect else 'be refuted'}, but it "
@@ -530,6 +544,14 @@ class FormalVerifier:
             elif p.status == "INVALID":
                 add("FORMAL-PROPERTY-INVALID",
                     f"Property '{p.name}' in '{model_file.name}' is not admissible: {p.details}")
+            elif p.status == "REFUTED":
+                issues.append(VerificationIssue(
+                    gate="Formal", severity="WARNING", file_path=loc, line=1,
+                    rule_code="FORMAL-PROPERTY-REFUTED",
+                    message=(f"Model '{model_file.name}' REFUTES '{p.name}'. "
+                             f"{p.details} Confirm that no document backed by this model "
+                             f"claims the property holds: "
+                             f"{', '.join(res.backing_documents) or '(none declared)'}")))
             elif p.status == "FAIL":
                 add("FORMAL-VERIFICATION-FAILED",
                     f"Property '{p.name}' in '{model_file.name}' failed: {p.details}")

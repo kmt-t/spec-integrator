@@ -45,3 +45,16 @@ def test_reporter(tmp_path):
     assert "FMT-01" in report_text
     assert "Formal Verification Results" in report_text
     assert "WIT Interface Verification Results" in report_text
+
+
+def test_report_records_the_verifier_revision(tmp_path):
+    """A verdict is only meaningful if the checker that produced it is identified."""
+    from spec_integrator.reporter import Reporter
+    from spec_integrator.config import Config
+    from spec_integrator.graph import Graph
+
+    out = tmp_path / "report.md"
+    content = Reporter(Config()).generate_markdown_report([], Graph(), [], [], [], out)
+
+    assert "**Verifier**:" in content
+    assert "spec-integrator @" in content

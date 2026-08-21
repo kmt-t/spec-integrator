@@ -104,8 +104,44 @@ def properties():
     ]
 ```
 
-保護機構（ロック変数・ターン変数など）を状態に加えれば `expect: True` に変わる。
-**`expect` を True にするために違反状態を消してはならない。** それが `FORMAL-PROPERTY-VACUOUS` である。
+### ⚠ これは出発点であって、到達点ではない
+
+上の例は **`expect: False`**、すなわち「このモデルは相互排除を保証しない」と述べているだけである。
+反証可能性は確保されたが、**設計が正しいことは何も証明していない。**
+
+到達すべき形は、**違反状態を状態集合に残したまま、保護機構によって到達不能にすること**である。
+
+```python
+def build_model() -> Kripke:
+    # s_both_crit は状態集合に「残す」。ただしロック変数により入る辺を持たせない。
+    S = ["s_idle", "s_a_lock", "s_a_crit", "s_b_wait", "s_b_crit", "s_both_crit"]
+    R = [
+        ("s_idle", "s_a_lock"), ("s_a_lock", "s_a_crit"), ("s_a_crit", "s_idle"),
+        ("s_idle", "s_b_wait"), ("s_b_wait", "s_b_crit"), ("s_b_crit", "s_idle"),
+        ("s_b_wait", "s_idle"),
+        ("s_both_crit", "s_idle"),   # 出る辺だけ。入る辺は存在しない
+    ]
+    ...
+
+{
+    "name": "mutual_exclusion",
+    "kind": "safety",
+    "formula": AG(Not(bad)),
+    "violation": bad,
+    "expect": True,      # ← 違反状態は表現されているが、到達しない
+}
+```
+
+| 状態 | `violation` を満たす状態が… | `expect` | 意味 |
+| :--- | :--- | :---: | :--- |
+| 空虚 | 状態集合に**存在しない** | True | ❌ ラベル付けの都合で真。証明ではない |
+| 反証デモ | **到達可能** | False | ⚠ 検査器が動くことの実証。設計は未証明 |
+| **証明** | **存在するが到達不能** | True | ✅ 保護機構が違反を防いでいることの証明 |
+
+**`expect: False` のモデルしか無い状態で、設計書がその性質を「満たす」と書いてはならない。**
+モデルは反対のことを述べている。この矛盾はゲートでは検出できないため、
+`expect: False` には `refutation_note` の記載を必須とし、
+それが根拠として紐づく設計書（`BACKS`）に対して警告を出す。
 
 ---
 

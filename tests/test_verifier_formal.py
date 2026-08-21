@@ -45,6 +45,7 @@ def properties():
         "violation": bad,
         # This naive model does NOT enforce mutual exclusion, and says so honestly.
         "expect": False,
+        "refutation_note": "この素朴なモデルは相互排除を保証しない。保護機構は未モデル化である。",
     }]
 '''
 
@@ -125,8 +126,8 @@ def test_falsifiable_model_passes(tmp_path):
     issues, results = FormalVerifier(cfg).verify_documents([doc], docs_dir)
 
     assert results[0].status == "PASS", results[0].details
-    assert results[0].properties[0].status == "PASS"
-    assert [i for i in issues if i.gate == "Formal"] == []
+    assert results[0].properties[0].status == "REFUTED"
+    assert [i for i in issues if i.severity == "ERROR"] == []
 
 
 def test_vacuous_safety_property_is_rejected(tmp_path):
@@ -280,3 +281,25 @@ def properties():
 
     assert results[0].status == "PASS", results[0].details
     assert [i for i in issues if i.gate == "Formal"] == []
+
+
+def test_refuted_property_without_a_note_is_rejected(tmp_path):
+    """`expect: False` states a limitation of the design; it must be written down."""
+    silent = chr(10).join(l for l in FALSIFIABLE_MODEL.splitlines()
+                          if "refutation_note" not in l)
+    cfg, doc, docs_dir = _make_doc(tmp_path, silent)
+    issues, _ = FormalVerifier(cfg).verify_documents([doc], docs_dir)
+
+    assert any(i.rule_code == "FORMAL-PROPERTY-INVALID" for i in issues)
+    assert any("refutation_note" in i.message for i in issues)
+
+
+def test_refuted_property_is_surfaced_against_its_backed_documents(tmp_path):
+    """A refutation must be visible next to the specs that lean on the model."""
+    cfg, doc, docs_dir = _make_doc(tmp_path, FALSIFIABLE_MODEL)
+    issues, results = FormalVerifier(cfg).verify_documents([doc], docs_dir)
+
+    refuted = [i for i in issues if i.rule_code == "FORMAL-PROPERTY-REFUTED"]
+    assert len(refuted) == 1
+    assert refuted[0].severity == "WARNING"
+    assert "tier1_core/scheduler.md" in refuted[0].message

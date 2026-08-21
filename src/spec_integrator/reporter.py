@@ -41,6 +41,11 @@ class Reporter:
         status_badge = "✅ **ALL GATES PASSED**" if is_passed else "❌ **VERIFICATION FAILED**"
         lines.append(f"**Overall Status**: {status_badge}\n")
 
+        # A verdict is only meaningful if the verifier that produced it is identified.
+        # Without this, "0 Errors" means "0 Errors under some unspecified checker".
+        verifier = self._verifier_revision()
+        lines.append(f"**Verifier**: `{verifier}`\n")
+
         # 2. Executive Summary Table
         lines.append("## 1. Executive Summary\n")
         lines.append("| Metric | Value |")
@@ -191,6 +196,24 @@ class Reporter:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(report_content, encoding="utf-8")
         return report_content
+
+    @staticmethod
+    def _verifier_revision() -> str:
+        """Identifies the checker that produced this report, dirty state included."""
+        import subprocess
+        from spec_integrator import __version__ as pkg_version  # noqa: F401
+        pkg_root = Path(__file__).resolve().parent.parent.parent
+        try:
+            sha = subprocess.run(
+                ["git", "-C", str(pkg_root), "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True, timeout=5, check=True).stdout.strip()
+            dirty = subprocess.run(
+                ["git", "-C", str(pkg_root), "status", "--porcelain"],
+                capture_output=True, text=True, timeout=5, check=True).stdout.strip()
+            suffix = " (UNCOMMITTED CHANGES — result is not reproducible)" if dirty else ""
+            return f"spec-integrator @ {sha}{suffix}"
+        except Exception:
+            return "spec-integrator @ unknown revision (not a git checkout)"
 
     def export_graph_json(self, graph: Graph, out_path: Path):
         out_path.parent.mkdir(parents=True, exist_ok=True)
