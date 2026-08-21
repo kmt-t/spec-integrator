@@ -116,66 +116,31 @@ class StaticVerifier:
                 rule_code="FMT-EMPTY-MERMAID", message="Empty Mermaid diagram block."
             )]
 
-        header_line = non_empty[0][1]
-        first_word = header_line.split()[0] if header_line.split() else ""
+        diagram_code = "\n".join(text for _, text in lines_with_no)
 
-        if first_word in ("graph", "flowchart"):
-            subgraph_stack: list[int] = []
-            for lno, text in non_empty[1:]:
-                if text.startswith("subgraph"):
-                    subgraph_stack.append(lno)
-                elif text in ("end", "end;") or text.startswith("end "):
-                    if not subgraph_stack:
-                        issues.append(VerificationIssue(
-                            gate="Format", severity="ERROR", file_path=file_path, line=lno,
-                            rule_code="FMT-INVALID-MERMAID", message="Unexpected 'end' without matching 'subgraph'."
-                        ))
-                    else:
-                        subgraph_stack.pop()
+        try:
+            import mermaidx
+            diag = mermaidx.Diagram(diagram_code)
+            _ = diag.svg()
+        except ImportError:
+            # Fallback or pass if mermaidx is optional
+            pass
+        except Exception as e:
+            err_msg = str(e).strip()
+            err_line = start_line
+            m = re.search(r"line\s+(\d+)", err_msg, re.IGNORECASE)
+            if m:
+                err_line = start_line + int(m.group(1))
 
-                # Unquoted special characters in node label
-                for m in re.finditer(r'(\b[A-Za-z0-9_]+)\[([^"\]\n]*[(){}:,][^"\]\n]*)\]', text):
-                    node_id = m.group(1)
-                    inner = m.group(2)
-                    if not inner.startswith('"'):
-                        issues.append(VerificationIssue(
-                            gate="Format", severity="ERROR", file_path=file_path, line=lno,
-                            rule_code="FMT-INVALID-MERMAID",
-                            message=f"Unquoted special characters in node label '{node_id}[{inner}]'. Wrap label in double quotes: '{node_id}[\"{inner}\"]'."
-                        ))
-
-            if subgraph_stack:
-                issues.append(VerificationIssue(
-                    gate="Format", severity="ERROR", file_path=file_path, line=subgraph_stack[-1],
-                    rule_code="FMT-INVALID-MERMAID", message="Unclosed 'subgraph' (missing 'end')."
-                ))
-
-        elif first_word == "sequenceDiagram":
-            block_stack: list[tuple[str, int]] = []
-            for lno, text in non_empty[1:]:
-                fw = text.split()[0] if text.split() else ""
-                if fw in ("alt", "opt", "loop", "par", "critical", "rect", "group"):
-                    block_stack.append((fw, lno))
-                elif fw == "else":
-                    if not block_stack or block_stack[-1][0] not in ("alt", "critical", "par"):
-                        issues.append(VerificationIssue(
-                            gate="Format", severity="ERROR", file_path=file_path, line=lno,
-                            rule_code="FMT-INVALID-MERMAID", message="'else' without matching 'alt' block."
-                        ))
-                elif fw in ("end", "end;") or text.startswith("end "):
-                    if not block_stack:
-                        issues.append(VerificationIssue(
-                            gate="Format", severity="ERROR", file_path=file_path, line=lno,
-                            rule_code="FMT-INVALID-MERMAID", message="Unexpected 'end' in sequenceDiagram without matching block."
-                        ))
-                    else:
-                        block_stack.pop()
-
-            for blk, blk_line in block_stack:
-                issues.append(VerificationIssue(
-                    gate="Format", severity="ERROR", file_path=file_path, line=blk_line,
-                    rule_code="FMT-INVALID-MERMAID", message=f"Unclosed sequence block '{blk}' (missing 'end')."
-                ))
+            first_err_line = err_msg.splitlines()[0] if err_msg.splitlines() else err_msg
+            issues.append(VerificationIssue(
+                gate="Format",
+                severity="ERROR",
+                file_path=file_path,
+                line=err_line,
+                rule_code="FMT-INVALID-MERMAID",
+                message=f"Mermaid syntax error (mermaidx engine): {first_err_line}"
+            ))
 
         return issues
 

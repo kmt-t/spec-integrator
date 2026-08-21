@@ -17,6 +17,7 @@ dependencies = [
     "mistune>=3.0.0",
     "pymodelchecking>=1.3.4",
     "requests>=2.31.0",
+    "mermaidx>=0.9.4",
 ]
 
 [project.optional-dependencies]
