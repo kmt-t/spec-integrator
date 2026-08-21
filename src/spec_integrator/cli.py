@@ -19,6 +19,7 @@ from spec_integrator.verifier.static import StaticVerifier
 from spec_integrator.verifier.formal import FormalVerifier
 from spec_integrator.verifier.wit import WITVerifier
 from spec_integrator.judge.llm import LLMJudge
+from spec_integrator.judge.risk_assessor import RiskAssessor
 from spec_integrator.reporter import Reporter
 
 
@@ -265,6 +266,46 @@ def cmd_judge(args):
     sys.exit(1 if has_fail else 0)
 
 
+def cmd_assess(args):
+    config_path = args.config
+    config = Config.load(config_path)
+    documents, graph, db, docs_root = _load_and_parse_all(config)
+
+    assessor = RiskAssessor(config)
+    print(f"Running Content Complexity & Risk Assessment (backend: {args.backend or config.llm_judge.default_backend})...")
+    report = assessor.assess_documents(
+        documents,
+        backend=args.backend,
+        model=args.model,
+        max_sections=args.max_sections
+    )
+
+    db.close()
+
+    if args.out:
+        out_p = Path(args.out).resolve()
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_p, "w", encoding="utf-8") as f:
+            json.dump({
+                "total_evaluated": report.total_evaluated,
+                "formal_candidates_count": report.formal_candidates_count,
+                "llm_candidates_count": report.llm_candidates_count,
+                "assessments": [asdict(a) for a in report.assessments]
+            }, f, indent=2, ensure_ascii=False)
+        print(f"✔ Risk assessment JSON saved to {out_p}")
+
+    if args.report:
+        rep_p = Path(args.report).resolve()
+        rep_p.parent.mkdir(parents=True, exist_ok=True)
+        rep_p.write_text(report.to_markdown(), encoding="utf-8")
+        print(f"✔ Risk assessment Markdown report saved to {rep_p}")
+
+    print(f"\nAssessment finished. Evaluated {report.total_evaluated} sections.")
+    print(f"  - Formal verification (pyModelChecking) candidates: {report.formal_candidates_count}")
+    print(f"  - LLM Judge candidates: {report.llm_candidates_count}")
+    sys.exit(0)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="spec-integrator",
@@ -299,6 +340,16 @@ def main():
     p_judge.add_argument("--max-subgraphs", type=int, default=10, help="Max subgraphs to evaluate")
     p_judge.add_argument("-o", "--out", default="judge_report.json", help="Output JSON path")
     p_judge.set_defaults(func=cmd_judge)
+
+    # assess
+    p_assess = subparsers.add_parser("assess", help="Assess section complexity, design risk & formal candidates via LLM")
+    p_assess.add_argument("-c", "--config", default="spec-integrator.yaml", help="Path to configuration file")
+    p_assess.add_argument("--backend", choices=["sakura", "ollama", "mock"], help="LLM backend")
+    p_assess.add_argument("--model", help="LLM model name override")
+    p_assess.add_argument("--max-sections", type=int, default=15, help="Max sections to assess")
+    p_assess.add_argument("-o", "--out", default="doc_risk_report.json", help="Output JSON path")
+    p_assess.add_argument("-r", "--report", default="doc_risk_report.md", help="Output Markdown report path")
+    p_assess.set_defaults(func=cmd_assess)
 
     args = parser.parse_args()
     if not hasattr(args, "func"):
