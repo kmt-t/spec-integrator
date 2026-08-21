@@ -18,8 +18,7 @@ from spec_integrator.graph import DocGraphBuilder
 from spec_integrator.verifier.static import StaticVerifier
 from spec_integrator.verifier.formal import FormalVerifier
 from spec_integrator.verifier.wit import WITVerifier
-from spec_integrator.judge.llm import LLMJudge
-from spec_integrator.judge.risk_assessor import RiskAssessor
+from spec_integrator.judge import SemanticJudge, RiskAssessor
 from spec_integrator.reporter import Reporter
 
 
@@ -241,7 +240,7 @@ def cmd_judge(args):
     documents, graph, db, docs_root = _load_and_parse_all(config)
 
     subgraphs = graph.extract_item_subgraphs()
-    judge = LLMJudge(config)
+    judge = SemanticJudge(config)
 
     print(f"Running LLM as a Judge on candidate subgraphs (backend: {args.backend or config.llm_judge.default_backend})...")
     results = judge.judge_subgraphs(

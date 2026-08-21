@@ -57,13 +57,18 @@ class JudgeResult:
     issues: list[dict] = field(default_factory=list)
 
 
-class LLMJudge:
+class SemanticJudge:
+    """Evaluates semantic consistency, completeness, and contradictions
+
+    between specification definitions and their referencing design sections
+    using an LLM as a Judge.
+    """
     def __init__(self, config: Config):
         self.config = config
 
     def judge_subgraphs(self, subgraphs: list[dict], documents: list[ParsedDocument],
-                        backend: str | None = None, model: str | None = None,
-                        max_subgraphs: int = 10) -> list[JudgeResult]:
+                         backend: str | None = None, model: str | None = None,
+                         max_subgraphs: int = 10) -> list[JudgeResult]:
         results: list[JudgeResult] = []
         selected_backend = backend or self.config.llm_judge.default_backend
 
@@ -153,7 +158,7 @@ class LLMJudge:
                 item_label=item_label,
                 status="FAIL",
                 summary=f"Judge execution error: {e}",
-                issues=[{"severity": "ERROR", "location": "LLMJudge", "description": str(e)}]
+                issues=[{"severity": "ERROR", "location": "SemanticJudge", "description": str(e)}]
             )
 
     def _call_sakura(self, prompt: str, model: str | None) -> str:
@@ -208,7 +213,6 @@ class LLMJudge:
         return data.get("response", "")
 
     def _extract_json(self, text: str) -> dict:
-        # Match ```json ... ```
         match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
         if match:
             try:
@@ -216,7 +220,6 @@ class LLMJudge:
             except json.JSONDecodeError:
                 pass
         
-        # Match outermost { ... }
         match_obj = re.search(r"(\{.*\})", text, re.DOTALL)
         if match_obj:
             try:
@@ -224,7 +227,6 @@ class LLMJudge:
             except json.JSONDecodeError:
                 pass
 
-        # Try direct JSON parse
         try:
             return json.loads(text.strip())
         except json.JSONDecodeError:
@@ -261,3 +263,7 @@ class LLMJudge:
         elif doc:
             return doc.content[:3000]
         return f"(Section {sec_id} not found)"
+
+
+# Backward compatibility alias
+LLMJudge = SemanticJudge
