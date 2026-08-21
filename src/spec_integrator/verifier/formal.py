@@ -247,7 +247,7 @@ class FormalVerifier:
             return FormalModelResult(component=component, model_file=rel_path,
                                      status="ERROR", details=f"Contract evaluation failed: {e}")
 
-        audit = self._audit_structure(model)
+        audit = self._audit_structure(model, props)
         audit["backs"] = self._load_backs(module)
         prop_results = [self._audit_property(model, p, audit) for p in props]
 
@@ -338,7 +338,7 @@ class FormalVerifier:
     # ------------------------------------------------------------------ #
     # Structural audit
     # ------------------------------------------------------------------ #
-    def _audit_structure(self, model) -> dict:
+    def _audit_structure(self, model, props: list[dict] | None = None) -> dict:
         fv = self.config.formal_verification
         states = list(model.states())
         errors: list[str] = []
@@ -348,7 +348,25 @@ class FormalVerifier:
         except Exception:
             reachable = set(states)
 
-        unreachable = sorted(str(s) for s in set(states) - reachable)
+        unreachable = set(states) - reachable
+
+        # Allow unreachable states ONLY if they represent a declared safety violation
+        # of a property with expect: True (i.e. the protection mechanism intentionally
+        # leaves the bad state unreachable, proving safety by construction).
+        declared_violations: set[str] = set()
+        if props:
+            for p in props:
+                if p.get("expect", True):
+                    viol = p.get("violation")
+                    if viol is not None:
+                        try:
+                            mc = self._resolve_modelcheck(p, viol)
+                            if mc:
+                                declared_violations |= {str(x) for x in mc(model, viol)}
+                        except Exception:
+                            pass
+
+        unexplained = sorted(str(s) for s in (unreachable - declared_violations))
 
         max_branching = 0
         for s in reachable:
@@ -358,9 +376,9 @@ class FormalVerifier:
                 succ = set()
             max_branching = max(max_branching, len(succ))
 
-        if fv.check_reachability and unreachable:
+        if fv.check_reachability and unexplained:
             errors.append(
-                f"states unreachable from S0: {', '.join(unreachable)} "
+                f"states unreachable from S0: {', '.join(unexplained)} "
                 "(the transition relation does not match the drawn state machine)"
             )
 

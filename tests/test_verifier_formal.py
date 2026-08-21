@@ -303,3 +303,46 @@ def test_refuted_property_is_surfaced_against_its_backed_documents(tmp_path):
     assert len(refuted) == 1
     assert refuted[0].severity == "WARNING"
     assert "tier1_core/scheduler.md" in refuted[0].message
+
+
+def test_proof_model_with_unreachable_violation_passes(tmp_path):
+    """A proof model where the violation state is representable but unreachable by protection."""
+    proof = _HEADER + '''
+BACKS = ["tier1_core/scheduler.md"]
+
+def build_model():
+    S = ["s_idle", "s_a_lock", "s_a_crit", "s_b_wait", "s_b_crit", "s_both_crit"]
+    R = [
+        ("s_idle", "s_a_lock"), ("s_a_lock", "s_a_crit"), ("s_a_crit", "s_idle"),
+        ("s_idle", "s_b_wait"), ("s_b_wait", "s_b_crit"), ("s_b_crit", "s_idle"),
+        ("s_b_wait", "s_idle"),
+        ("s_both_crit", "s_idle"),
+    ]
+    L = {
+        "s_idle": {"idle"},
+        "s_a_lock": {"a_lock"},
+        "s_a_crit": {"a_crit"},
+        "s_b_wait": {"b_wait"},
+        "s_b_crit": {"b_crit"},
+        "s_both_crit": {"a_crit", "b_crit"},
+    }
+    return Kripke(S=S, S0={"s_idle"}, R=R, L=L)
+
+def properties():
+    bad = And(AtomicProposition("a_crit"), AtomicProposition("b_crit"))
+    return [{
+        "name": "mutual_exclusion_proof",
+        "kind": "safety",
+        "logic": "CTL",
+        "formula": AG(Not(bad)),
+        "violation": bad,
+        "expect": True,
+    }]
+'''
+    cfg, doc, docs_dir = _make_doc(tmp_path, proof)
+    issues, results = FormalVerifier(cfg).verify_documents([doc], docs_dir)
+
+    assert results[0].status == "PASS", results[0].details
+    assert results[0].properties[0].status == "PASS"
+    assert [i for i in issues if i.gate == "Formal"] == []
+
