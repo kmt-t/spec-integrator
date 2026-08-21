@@ -69,3 +69,32 @@ Direct link to [Loader](../tier2_runtime/loader.md).
     assert "TRACE-UNDEFINED-KEYWORD" in rule_codes
     assert "TRACE-UNREFERENCED-REQUIREMENT" in rule_codes
     assert "HIERARCHY-REVERSE-DEPENDENCY" in rule_codes
+
+
+def test_static_verifier_catches_invalid_mermaid(tmp_path):
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+
+    cfg = Config()
+    (docs_dir / "diagram_broken.md").write_text("""# Diagram Doc
+```mermaid
+graph TB
+    subgraph "Layer"
+        Node[Label (with parens unquoted)]
+    end
+    ExtraEnd
+    end
+```
+""", encoding="utf-8")
+
+    parser = MarkdownParser(cfg)
+    doc = parser.parse_file(docs_dir / "diagram_broken.md", docs_dir)
+    builder = DocGraphBuilder(cfg)
+    graph = builder.build([doc], docs_dir)
+
+    verifier = StaticVerifier(cfg)
+    issues = verifier.verify([doc], graph, docs_dir)
+
+    rule_codes = [i.rule_code for i in issues]
+    assert "FMT-INVALID-MERMAID" in rule_codes
+

@@ -82,6 +82,101 @@ class StaticVerifier:
                             message=f"Broken anchor: '#{link.target_anchor}' not found in '{target_file}'."
                         ))
 
+            # 3. Mermaid diagram syntax check
+            issues.extend(self._verify_mermaid_blocks(doc))
+
+        return issues
+
+    def _verify_mermaid_blocks(self, doc: ParsedDocument) -> list[VerificationIssue]:
+        issues: list[VerificationIssue] = []
+        lines = doc.content.splitlines()
+        in_mermaid = False
+        start_line = 0
+        buf = []
+
+        for idx, line in enumerate(lines, start=1):
+            if line.strip().startswith("```mermaid"):
+                in_mermaid = True
+                start_line = idx
+                buf = []
+            elif in_mermaid and line.strip().startswith("```"):
+                in_mermaid = False
+                issues.extend(self._check_mermaid_syntax(doc.file_path, start_line, buf))
+            elif in_mermaid:
+                buf.append((idx, line))
+
+        return issues
+
+    def _check_mermaid_syntax(self, file_path: str, start_line: int, lines_with_no: list[tuple[int, str]]) -> list[VerificationIssue]:
+        issues: list[VerificationIssue] = []
+        non_empty = [(lno, text.strip()) for lno, text in lines_with_no if text.strip() and not text.strip().startswith("%%")]
+        if not non_empty:
+            return [VerificationIssue(
+                gate="Format", severity="WARNING", file_path=file_path, line=start_line,
+                rule_code="FMT-EMPTY-MERMAID", message="Empty Mermaid diagram block."
+            )]
+
+        header_line = non_empty[0][1]
+        first_word = header_line.split()[0] if header_line.split() else ""
+
+        if first_word in ("graph", "flowchart"):
+            subgraph_stack: list[int] = []
+            for lno, text in non_empty[1:]:
+                if text.startswith("subgraph"):
+                    subgraph_stack.append(lno)
+                elif text in ("end", "end;") or text.startswith("end "):
+                    if not subgraph_stack:
+                        issues.append(VerificationIssue(
+                            gate="Format", severity="ERROR", file_path=file_path, line=lno,
+                            rule_code="FMT-INVALID-MERMAID", message="Unexpected 'end' without matching 'subgraph'."
+                        ))
+                    else:
+                        subgraph_stack.pop()
+
+                # Unquoted special characters in node label
+                for m in re.finditer(r'(\b[A-Za-z0-9_]+)\[([^"\]\n]*[(){}:,][^"\]\n]*)\]', text):
+                    node_id = m.group(1)
+                    inner = m.group(2)
+                    if not inner.startswith('"'):
+                        issues.append(VerificationIssue(
+                            gate="Format", severity="ERROR", file_path=file_path, line=lno,
+                            rule_code="FMT-INVALID-MERMAID",
+                            message=f"Unquoted special characters in node label '{node_id}[{inner}]'. Wrap label in double quotes: '{node_id}[\"{inner}\"]'."
+                        ))
+
+            if subgraph_stack:
+                issues.append(VerificationIssue(
+                    gate="Format", severity="ERROR", file_path=file_path, line=subgraph_stack[-1],
+                    rule_code="FMT-INVALID-MERMAID", message="Unclosed 'subgraph' (missing 'end')."
+                ))
+
+        elif first_word == "sequenceDiagram":
+            block_stack: list[tuple[str, int]] = []
+            for lno, text in non_empty[1:]:
+                fw = text.split()[0] if text.split() else ""
+                if fw in ("alt", "opt", "loop", "par", "critical", "rect", "group"):
+                    block_stack.append((fw, lno))
+                elif fw == "else":
+                    if not block_stack or block_stack[-1][0] not in ("alt", "critical", "par"):
+                        issues.append(VerificationIssue(
+                            gate="Format", severity="ERROR", file_path=file_path, line=lno,
+                            rule_code="FMT-INVALID-MERMAID", message="'else' without matching 'alt' block."
+                        ))
+                elif fw in ("end", "end;") or text.startswith("end "):
+                    if not block_stack:
+                        issues.append(VerificationIssue(
+                            gate="Format", severity="ERROR", file_path=file_path, line=lno,
+                            rule_code="FMT-INVALID-MERMAID", message="Unexpected 'end' in sequenceDiagram without matching block."
+                        ))
+                    else:
+                        block_stack.pop()
+
+            for blk, blk_line in block_stack:
+                issues.append(VerificationIssue(
+                    gate="Format", severity="ERROR", file_path=file_path, line=blk_line,
+                    rule_code="FMT-INVALID-MERMAID", message=f"Unclosed sequence block '{blk}' (missing 'end')."
+                ))
+
         return issues
 
     def _verify_traceability_gate(self, documents: list[ParsedDocument], graph: Graph) -> list[VerificationIssue]:
