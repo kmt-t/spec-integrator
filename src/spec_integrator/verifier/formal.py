@@ -150,33 +150,53 @@ class FormalVerifier:
 
         tagged_docs = [d for d in documents if formal_tag in d.all_tags]
 
-        for doc in tagged_docs:
-            cur = doc.full_path.parent
-            resolved_formal_dir = doc.full_path.parent / model_dir_name
-            while cur and cur != docs_root.parent and cur != docs_root:
-                cand_dir = cur / model_dir_name
-                if cand_dir.exists():
-                    files = [m for m in cand_dir.glob("*.py") if not m.name.startswith("_")]
-                    if files:
-                        resolved_formal_dir = cand_dir
-                        break
-                cur = cur.parent
-            dir_claimants.setdefault(str(resolved_formal_dir), []).append(doc)
+        # Pre-scan all formal model scripts across the repository to build BACKS index
+        all_model_files = sorted(docs_root.glob(f"**/{model_dir_name}/*.py"))
+        all_model_files = [m for m in all_model_files if not m.name.startswith("_")]
+        doc_to_backing_models: dict[str, list[Path]] = {}
+        for mf in all_model_files:
+            try:
+                mod, _ = self._load_module(mf)
+                backs = self._load_backs(mod)
+                for b in backs:
+                    doc_to_backing_models.setdefault(b, []).append(mf)
+            except Exception:
+                pass
 
         for doc in tagged_docs:
-            cur = doc.full_path.parent
+            if doc.file_path in doc_to_backing_models:
+                for mf in doc_to_backing_models[doc.file_path]:
+                    dir_claimants.setdefault(str(mf.parent), []).append(doc)
+            else:
+                cur = doc.full_path.parent
+                resolved_formal_dir = doc.full_path.parent / model_dir_name
+                while cur and cur != docs_root.parent and cur != docs_root:
+                    cand_dir = cur / model_dir_name
+                    if cand_dir.exists():
+                        files = [m for m in cand_dir.glob("*.py") if not m.name.startswith("_")]
+                        if files:
+                            resolved_formal_dir = cand_dir
+                            break
+                    cur = cur.parent
+                dir_claimants.setdefault(str(resolved_formal_dir), []).append(doc)
+
+        for doc in tagged_docs:
             model_files = []
-            formal_dir = doc.full_path.parent / model_dir_name
-            while cur and cur != docs_root.parent and cur != docs_root:
-                cand_dir = cur / model_dir_name
-                if cand_dir.exists():
-                    files = sorted(cand_dir.glob("*.py"))
-                    files = [m for m in files if not m.name.startswith("_")]
-                    if files:
-                        model_files = files
-                        formal_dir = cand_dir
-                        break
-                cur = cur.parent
+            if doc.file_path in doc_to_backing_models:
+                model_files = doc_to_backing_models[doc.file_path]
+            else:
+                cur = doc.full_path.parent
+                formal_dir = doc.full_path.parent / model_dir_name
+                while cur and cur != docs_root.parent and cur != docs_root:
+                    cand_dir = cur / model_dir_name
+                    if cand_dir.exists():
+                        files = sorted(cand_dir.glob("*.py"))
+                        files = [m for m in files if not m.name.startswith("_")]
+                        if files:
+                            model_files = files
+                            formal_dir = cand_dir
+                            break
+                    cur = cur.parent
 
             if not model_files:
                 rel_dir = self._rel(doc.full_path.parent / model_dir_name, docs_root)
@@ -187,7 +207,7 @@ class FormalVerifier:
                     line=1,
                     rule_code="FORMAL-MODEL-NOT-FOUND",
                     message=(f"Document declares '{formal_tag}' but no formal model script exists "
-                             f"in '{rel_dir}/' or its parent component directories. A verification claim without a model is not admissible.")
+                             f"in '{rel_dir}/' or references it via BACKS. A verification claim without a model is not admissible.")
                 ))
                 results.append(FormalModelResult(
                     component=doc.component,
