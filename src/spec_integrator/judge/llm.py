@@ -164,7 +164,7 @@ class LLMJudge:
         if not api_key:
             raise ValueError(f"Sakura API key environment variable '{api_key_env}' is not set.")
 
-        selected_model = model or (b_config.model if (b_config and b_config.model) else "gpt-oss-120b")
+        selected_model = model or (b_config.model if (b_config and b_config.model) else "preview/gemma-4-31B-it")
         endpoint = (b_config.endpoint if (b_config and b_config.endpoint) else "https://api.ai.sakura.ad.jp/v1/chat/completions")
 
         headers = {
