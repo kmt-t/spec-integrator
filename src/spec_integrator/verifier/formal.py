@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 import io
 import contextlib
 import importlib.util
@@ -11,114 +10,529 @@ from spec_integrator.parser import ParsedDocument
 from spec_integrator.verifier.static import VerificationIssue
 
 
+# Operator-kind classification used to reject "liveness" claims written with
+# purely universal-invariant operators.
+EVENTUALITY_MARKERS = ("AF", "EF", "F", "U", "AU", "EU", "R")
+
+
+@dataclass
+class PropertyResult:
+    name: str
+    kind: str
+    status: str          # "PASS", "FAIL", "VACUOUS", "INVALID"
+    details: str = ""
+
+
 @dataclass
 class FormalModelResult:
     component: str
     model_file: str
-    status: str  # "PASS", "FAIL", "ERROR", "NOT_FOUND"
+    status: str  # "PASS", "FAIL", "ERROR", "NOT_FOUND", "NO_CONTRACT", "VACUOUS"
     details: str = ""
     invariants: list[dict] = field(default_factory=list)
+    properties: list[PropertyResult] = field(default_factory=list)
+    backing_documents: list[str] = field(default_factory=list)
+    audit: dict = field(default_factory=dict)
+
+
+class ModelContractError(Exception):
+    """Raised when a formal model does not expose the auditable contract."""
+
+
+def _collect_atomic_propositions(formula) -> set[str]:
+    """Recursively collects atomic proposition names appearing in a formula."""
+    names: set[str] = set()
+    stack = [formula]
+    seen = 0
+    while stack and seen < 10000:
+        node = stack.pop()
+        seen += 1
+        if node is None:
+            continue
+        if isinstance(node, str):
+            names.add(node)
+            continue
+        try:
+            subs = node.subformulas()
+        except Exception:
+            subs = []
+        if subs:
+            stack.extend(list(subs))
+            continue
+        name = getattr(node, "name", None)
+        if isinstance(name, str):
+            names.add(name)
+    return names
+
+
+def _derive_violation(formula):
+    """For a safety property shaped AG(Not(phi)), returns phi (the state to be excluded)."""
+    try:
+        if type(formula).__name__ not in ("AG", "G"):
+            return None
+        inner = formula.subformulas()
+        if len(inner) != 1:
+            return None
+        negation = inner[0]
+        if type(negation).__name__ != "Not":
+            return None
+        neg_sub = negation.subformulas()
+        if len(neg_sub) != 1:
+            return None
+        return neg_sub[0]
+    except Exception:
+        return None
+
+
+def _has_eventuality(formula) -> bool:
+    stack = [formula]
+    seen = 0
+    while stack and seen < 10000:
+        node = stack.pop()
+        seen += 1
+        if node is None:
+            continue
+        if type(node).__name__ in EVENTUALITY_MARKERS:
+            return True
+        try:
+            stack.extend(list(node.subformulas()))
+        except Exception:
+            pass
+    return False
 
 
 class FormalVerifier:
     def __init__(self, config: Config):
         self.config = config
 
-    def verify_documents(self, documents: list[ParsedDocument], docs_root: Path) -> tuple[list[VerificationIssue], list[FormalModelResult]]:
+    # ------------------------------------------------------------------ #
+    # Entry point
+    # ------------------------------------------------------------------ #
+    def verify_documents(self, documents: list[ParsedDocument], docs_root: Path
+                         ) -> tuple[list[VerificationIssue], list[FormalModelResult]]:
         issues: list[VerificationIssue] = []
         results: list[FormalModelResult] = []
 
-        formal_tag = self.config.formal_verification.tag
-        model_dir_name = self.config.formal_verification.model_dir_name
+        fv = self.config.formal_verification
+        formal_tag = fv.tag
+        model_dir_name = fv.model_dir_name
 
-        # Find documents that demand formal verification
-        for doc in documents:
-            if formal_tag in doc.all_tags:
-                doc_dir = doc.full_path.parent
-                formal_dir = doc_dir / model_dir_name
+        # A model file is executed exactly once even when several documents share
+        # the same formal/ directory, so the report cannot inflate the model count.
+        ran_models: dict[str, FormalModelResult] = {}
+        # formal dir -> documents demanding verification from it
+        dir_claimants: dict[str, list[ParsedDocument]] = {}
 
-                # Look for formal models in formal/
-                model_files = list(formal_dir.glob("*.py")) if formal_dir.exists() else []
+        tagged_docs = [d for d in documents if formal_tag in d.all_tags]
 
-                if not model_files:
-                    issues.append(VerificationIssue(
-                        gate="Formal",
-                        severity="ERROR",
-                        file_path=doc.file_path,
-                        line=1,
-                        rule_code="FORMAL-MODEL-NOT-FOUND",
-                        message=f"Document specifies '{formal_tag}', but no formal model scripts found in '{formal_dir.relative_to(docs_root)}/'."
-                    ))
-                    results.append(FormalModelResult(
-                        component=doc.component,
-                        model_file=str(formal_dir.relative_to(docs_root)),
-                        status="NOT_FOUND",
-                        details="No formal model script (*.py) found."
-                    ))
+        for doc in tagged_docs:
+            formal_dir = doc.full_path.parent / model_dir_name
+            dir_claimants.setdefault(str(formal_dir), []).append(doc)
+
+        for doc in tagged_docs:
+            formal_dir = doc.full_path.parent / model_dir_name
+            model_files = sorted(formal_dir.glob("*.py")) if formal_dir.exists() else []
+            model_files = [m for m in model_files if not m.name.startswith("_")]
+
+            if not model_files:
+                rel_dir = self._rel(formal_dir, docs_root)
+                issues.append(VerificationIssue(
+                    gate="Formal",
+                    severity="ERROR",
+                    file_path=doc.file_path,
+                    line=1,
+                    rule_code="FORMAL-MODEL-NOT-FOUND",
+                    message=(f"Document declares '{formal_tag}' but no formal model script exists "
+                             f"in '{rel_dir}/'. A verification claim without a model is not admissible.")
+                ))
+                results.append(FormalModelResult(
+                    component=doc.component,
+                    model_file=rel_dir,
+                    status="NOT_FOUND",
+                    details="No formal model script (*.py) found.",
+                    backing_documents=[doc.file_path],
+                ))
+                continue
+
+            for model_file in model_files:
+                key = str(model_file.resolve())
+                if key in ran_models:
+                    res = ran_models[key]
+                    if doc.file_path not in res.backing_documents:
+                        res.backing_documents.append(doc.file_path)
                     continue
 
-                # Run each model script
-                for model_file in model_files:
-                    res = self._run_model_script(model_file, doc.component, docs_root)
-                    results.append(res)
-                    if res.status != "PASS":
-                        issues.append(VerificationIssue(
-                            gate="Formal",
-                            severity="ERROR",
-                            file_path=model_file.relative_to(docs_root).as_posix(),
-                            line=1,
-                            rule_code="FORMAL-VERIFICATION-FAILED",
-                            message=f"Formal verification failed in model '{model_file.name}': {res.details}"
-                        ))
+                res = self._audit_model(model_file, doc.component, docs_root)
+                res.backing_documents = [doc.file_path]
+                ran_models[key] = res
+                results.append(res)
+                issues.extend(self._issues_for(res, model_file, docs_root))
+
+        # Several documents lean on the same directory but no model states which
+        # claim it discharges -> the backing is ambiguous and cannot be audited.
+        issues.extend(self._verify_backing_attribution(dir_claimants, ran_models, docs_root))
 
         return issues, results
 
-    def _run_model_script(self, script_path: Path, component: str, docs_root: Path) -> FormalModelResult:
-        rel_path = script_path.relative_to(docs_root).as_posix()
+    # ------------------------------------------------------------------ #
+    # Model audit
+    # ------------------------------------------------------------------ #
+    def _audit_model(self, script_path: Path, component: str, docs_root: Path) -> FormalModelResult:
+        rel_path = self._rel(script_path, docs_root)
+        fv = self.config.formal_verification
+
         try:
-            # Dynamic import and execution of verify() function
-            spec = importlib.util.spec_from_file_location(f"formal_{script_path.stem}", str(script_path))
-            if spec is None or spec.loader is None:
-                return FormalModelResult(
-                    component=component,
-                    model_file=rel_path,
-                    status="ERROR",
-                    details=f"Could not load module spec from {script_path}"
-                )
-
-            module = importlib.util.module_from_spec(spec)
-            
-            # Capture stdout
-            stdout_buf = io.StringIO()
-            with contextlib.redirect_stdout(stdout_buf):
-                spec.loader.exec_module(module)
-                if hasattr(module, "verify"):
-                    ret = module.verify()
-                    is_pass = (ret == 0 or ret is None or (isinstance(ret, dict) and ret.get("status") == "PASS"))
-                else:
-                    is_pass = True
-
-            output = stdout_buf.getvalue().strip()
-
-            if is_pass:
-                return FormalModelResult(
-                    component=component,
-                    model_file=rel_path,
-                    status="PASS",
-                    details=output or "Model checking succeeded."
-                )
-            else:
-                return FormalModelResult(
-                    component=component,
-                    model_file=rel_path,
-                    status="FAIL",
-                    details=output or "Model checking failed (non-zero return code)."
-                )
-
+            module, output = self._load_module(script_path)
         except Exception as e:
+            return FormalModelResult(component=component, model_file=rel_path,
+                                     status="ERROR", details=f"Execution error: {e}")
+
+        # --- Legacy self-reported result (kept for the report text only) ---
+        legacy_output = output
+        legacy_pass = True
+        if hasattr(module, "verify"):
+            try:
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    ret = module.verify()
+                legacy_output = (buf.getvalue().strip() or legacy_output)
+                legacy_pass = (ret == 0 or ret is None
+                               or (isinstance(ret, dict) and ret.get("status") == "PASS"))
+            except Exception as e:
+                return FormalModelResult(component=component, model_file=rel_path,
+                                         status="ERROR", details=f"verify() raised: {e}")
+
+        if not fv.require_contract:
             return FormalModelResult(
-                component=component,
-                model_file=rel_path,
-                status="ERROR",
-                details=f"Execution error: {e}"
+                component=component, model_file=rel_path,
+                status="PASS" if legacy_pass else "FAIL",
+                details=legacy_output or "Model checking finished.",
             )
+
+        # --- Auditable contract ---
+        try:
+            model = self._build_model(module)
+            props = self._load_properties(module)
+        except ModelContractError as e:
+            return FormalModelResult(
+                component=component, model_file=rel_path, status="NO_CONTRACT",
+                details=str(e),
+            )
+        except Exception as e:
+            return FormalModelResult(component=component, model_file=rel_path,
+                                     status="ERROR", details=f"Contract evaluation failed: {e}")
+
+        audit = self._audit_structure(model)
+        audit["backs"] = self._load_backs(module)
+        prop_results = [self._audit_property(model, p, audit) for p in props]
+
+        failed = [p for p in prop_results if p.status != "PASS"]
+        if audit.get("errors"):
+            status = "FAIL"
+        elif failed:
+            status = "VACUOUS" if all(p.status == "VACUOUS" for p in failed) else "FAIL"
+        else:
+            status = "PASS"
+
+        detail_bits = [legacy_output] if legacy_output else []
+        detail_bits.append(
+            f"{len(prop_results)} propert(y/ies) audited; "
+            f"{len(model.states())} states, "
+            f"{audit.get('reachable_count', 0)} reachable, "
+            f"branching={audit.get('max_branching', 0)}"
+        )
+
+        return FormalModelResult(
+            component=component, model_file=rel_path, status=status,
+            details=" | ".join(b for b in detail_bits if b),
+            properties=prop_results,
+            audit=audit,
+        )
+
+    def _load_module(self, script_path: Path):
+        spec = importlib.util.spec_from_file_location(f"formal_{script_path.stem}", str(script_path))
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Could not load module spec from {script_path}")
+        module = importlib.util.module_from_spec(spec)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            spec.loader.exec_module(module)
+        return module, buf.getvalue().strip()
+
+    def _build_model(self, module):
+        builder = getattr(module, "build_model", None)
+        if builder is None:
+            candidates = [getattr(module, n) for n in dir(module)
+                          if n.startswith("build_") and callable(getattr(module, n))]
+            if len(candidates) == 1:
+                builder = candidates[0]
+        if builder is None or not callable(builder):
+            raise ModelContractError(
+                "Model does not expose 'build_model()'. The auditor cannot inspect the state "
+                "space, so the model's claim is unverifiable. Define "
+                "'def build_model() -> Kripke'."
+            )
+        model = builder()
+        if not hasattr(model, "states") or not hasattr(model, "next"):
+            raise ModelContractError("build_model() must return a pyModelChecking Kripke structure.")
+        return model
+
+    def _load_properties(self, module) -> list[dict]:
+        props = getattr(module, "properties", None)
+        if callable(props):
+            props = props()
+        if props is None:
+            props = getattr(module, "PROPERTIES", None)
+        if not props:
+            raise ModelContractError(
+                "Model does not expose 'properties()'. Each checked property must declare "
+                "{'name', 'kind', 'formula', and (for safety) 'violation'} so that the auditor can "
+                "prove the property is falsifiable. A property that cannot fail is not a proof."
+            )
+        if not isinstance(props, (list, tuple)):
+            raise ModelContractError("properties() must return a list of property descriptors.")
+        return list(props)
+
+    @staticmethod
+    def _load_backs(module) -> list[str]:
+        """Documents whose verification claim this model discharges."""
+        backs = getattr(module, "backs", None)
+        if callable(backs):
+            try:
+                backs = backs()
+            except Exception:
+                backs = None
+        if backs is None:
+            backs = getattr(module, "BACKS", None)
+        if not backs:
+            return []
+        if isinstance(backs, str):
+            backs = [backs]
+        return [str(b).replace("\\", "/").lstrip("./") for b in backs]
+
+    # ------------------------------------------------------------------ #
+    # Structural audit
+    # ------------------------------------------------------------------ #
+    def _audit_structure(self, model) -> dict:
+        fv = self.config.formal_verification
+        states = list(model.states())
+        errors: list[str] = []
+
+        try:
+            reachable = set(model.get_reachable_set_from(set(model.S0)))
+        except Exception:
+            reachable = set(states)
+
+        unreachable = sorted(str(s) for s in set(states) - reachable)
+
+        max_branching = 0
+        for s in reachable:
+            try:
+                succ = set(model.next(s)) - {s}
+            except Exception:
+                succ = set()
+            max_branching = max(max_branching, len(succ))
+
+        if fv.check_reachability and unreachable:
+            errors.append(
+                f"states unreachable from S0: {', '.join(unreachable)} "
+                "(the transition relation does not match the drawn state machine)"
+            )
+
+        if len(states) < fv.min_states:
+            errors.append(
+                f"the model has only {len(states)} state(s) (minimum {fv.min_states}); "
+                "it is too coarse to represent the behaviour it claims to verify"
+            )
+
+        if fv.check_nondeterminism and max_branching < 2:
+            errors.append(
+                "every reachable state has at most one distinct successor, so the model is a single "
+                "deterministic path: it cannot exhibit interleaving, races, deadlock or starvation, "
+                "and any concurrency claim proved over it is vacuous"
+            )
+
+        return {
+            "state_count": len(states),
+            "reachable_count": len(reachable),
+            "unreachable": unreachable,
+            "max_branching": max_branching,
+            "errors": errors,
+        }
+
+    # ------------------------------------------------------------------ #
+    # Per-property audit
+    # ------------------------------------------------------------------ #
+    def _audit_property(self, model, prop: dict, audit: dict) -> PropertyResult:
+        name = str(prop.get("name", "<unnamed>"))
+        kind = str(prop.get("kind", "safety")).lower()
+        formula = prop.get("formula")
+        expect = bool(prop.get("expect", True))
+
+        if formula is None:
+            return PropertyResult(name, kind, "INVALID", "property descriptor has no 'formula'")
+
+        modelcheck = self._resolve_modelcheck(prop, formula)
+        if modelcheck is None:
+            return PropertyResult(name, kind, "INVALID",
+                                  "cannot resolve a model checker for this formula; "
+                                  "declare 'logic': 'CTL' or 'LTL' in the descriptor")
+
+        # 1. Every atomic proposition must actually occur in the labelling.
+        label_universe: set[str] = set()
+        for s in model.states():
+            label_universe |= {str(x) for x in model.labels(s)}
+        used = _collect_atomic_propositions(formula)
+        orphan = sorted(a for a in used if a not in label_universe)
+        if orphan:
+            return PropertyResult(
+                name, kind, "INVALID",
+                f"atomic proposition(s) {', '.join(orphan)} never appear in any state label; "
+                "the property refers to a condition the model cannot express"
+            )
+
+        # 2. Kind / operator consistency.
+        if kind in ("liveness", "response", "deadlock_freedom") and not _has_eventuality(formula):
+            return PropertyResult(
+                name, kind, "INVALID",
+                f"declared as '{kind}' but the formula contains no eventuality operator "
+                "(AF/EF/F/U); an invariant cannot express a liveness claim"
+            )
+
+        # 3. Falsifiability: the violating condition must be representable.
+        if self.config.formal_verification.check_vacuity:
+            violation = prop.get("violation")
+            if violation is None:
+                violation = _derive_violation(formula)
+            if violation is None:
+                if kind in ("safety", "deadlock_freedom", "mutual_exclusion"):
+                    return PropertyResult(
+                        name, kind, "INVALID",
+                        "no 'violation' formula declared and none derivable from the property shape. "
+                        "State the condition that would falsify this property so vacuity can be ruled out"
+                    )
+            else:
+                try:
+                    sat_violation = modelcheck(model, violation)
+                except Exception as e:
+                    return PropertyResult(name, kind, "INVALID",
+                                          f"violation formula could not be checked: {e}")
+                if not set(sat_violation):
+                    return PropertyResult(
+                        name, kind, "VACUOUS",
+                        f"no state in the model can satisfy the violating condition '{violation}'. "
+                        "The property holds by construction of the state space, not because the "
+                        "design prevents the violation — this is not a proof"
+                    )
+
+        # 4. Actually check the property.
+        try:
+            sat = set(modelcheck(model, formula))
+        except Exception as e:
+            return PropertyResult(name, kind, "INVALID", f"model checking raised: {e}")
+
+        holds = set(model.S0).issubset(sat)
+        if holds == expect:
+            return PropertyResult(name, kind, "PASS",
+                                  f"{'holds' if holds else 'refuted as expected'} at all initial states")
+        return PropertyResult(
+            name, kind, "FAIL",
+            f"expected the property to {'hold' if expect else 'be refuted'}, but it "
+            f"{'holds' if holds else 'does not hold'} at the initial states"
+        )
+
+    @staticmethod
+    def _resolve_modelcheck(prop: dict, formula):
+        checker = prop.get("modelcheck")
+        if callable(checker):
+            return checker
+        logic = str(prop.get("logic", "")).upper()
+        try:
+            if logic == "LTL":
+                from pyModelChecking.LTL import modelcheck as mc
+                return mc
+            if logic == "CTL":
+                from pyModelChecking.CTL import modelcheck as mc
+                return mc
+            module_name = type(formula).__module__ or ""
+            if ".LTL" in module_name:
+                from pyModelChecking.LTL import modelcheck as mc
+                return mc
+            from pyModelChecking.CTL import modelcheck as mc
+            return mc
+        except Exception:
+            return None
+
+    # ------------------------------------------------------------------ #
+    # Issue construction
+    # ------------------------------------------------------------------ #
+    def _issues_for(self, res: FormalModelResult, model_file: Path,
+                    docs_root: Path) -> list[VerificationIssue]:
+        issues: list[VerificationIssue] = []
+        loc = self._rel(model_file, docs_root)
+
+        def add(code: str, msg: str):
+            issues.append(VerificationIssue(
+                gate="Formal", severity="ERROR", file_path=loc, line=1,
+                rule_code=code, message=msg))
+
+        if res.status == "NO_CONTRACT":
+            add("FORMAL-MODEL-NO-CONTRACT",
+                f"Model '{model_file.name}' is not auditable: {res.details}")
+            return issues
+
+        if res.status == "ERROR":
+            add("FORMAL-MODEL-ERROR", f"Model '{model_file.name}' failed to run: {res.details}")
+            return issues
+
+        for err in res.audit.get("errors", []):
+            add("FORMAL-MODEL-UNSOUND", f"Model '{model_file.name}': {err}")
+
+        for p in res.properties:
+            if p.status == "VACUOUS":
+                add("FORMAL-PROPERTY-VACUOUS",
+                    f"Property '{p.name}' in '{model_file.name}' is vacuously true: {p.details}")
+            elif p.status == "INVALID":
+                add("FORMAL-PROPERTY-INVALID",
+                    f"Property '{p.name}' in '{model_file.name}' is not admissible: {p.details}")
+            elif p.status == "FAIL":
+                add("FORMAL-VERIFICATION-FAILED",
+                    f"Property '{p.name}' in '{model_file.name}' failed: {p.details}")
+
+        return issues
+
+    def _verify_backing_attribution(self, dir_claimants: dict[str, list[ParsedDocument]],
+                                    ran_models: dict[str, FormalModelResult],
+                                    docs_root: Path) -> list[VerificationIssue]:
+        """Two documents sharing one formal/ dir must each name the model that discharges them."""
+        issues: list[VerificationIssue] = []
+        for dir_path, docs in dir_claimants.items():
+            if len(docs) < 2:
+                continue
+            declared: set[str] = set()
+            for key, res in ran_models.items():
+                if not key.startswith(str(Path(dir_path).resolve())):
+                    continue
+                declared |= set(res.audit.get("backs", []) or [])
+            for doc in docs:
+                if any(d == doc.file_path or d.endswith("/" + doc.file_path)
+                       or doc.file_path.endswith("/" + d) for d in declared):
+                    continue
+                issues.append(VerificationIssue(
+                    gate="Formal", severity="ERROR", file_path=doc.file_path, line=1,
+                    rule_code="FORMAL-BACKING-AMBIGUOUS",
+                    message=(
+                        f"{len(docs)} documents declare '{self.config.formal_verification.tag}' against the "
+                        f"same '{Path(dir_path).name}/' directory, but no model declares that it discharges "
+                        f"'{doc.file_path}'. Add 'BACKS = [\"{doc.file_path}\"]' to the model that proves it, "
+                        "otherwise one model is being counted as proof for several unrelated claims."
+                    )
+                ))
+        return issues
+
+    @staticmethod
+    def _rel(path: Path, docs_root: Path) -> str:
+        try:
+            return path.relative_to(docs_root).as_posix()
+        except ValueError:
+            return path.as_posix()

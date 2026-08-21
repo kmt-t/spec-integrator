@@ -53,6 +53,47 @@ class FormalVerificationConfig:
     model_dir_name: str = "formal"
     tag: str = "{VERIFY_FORMAL}"
     timeout_seconds: int = 30
+    # --- Anti-vacuity audit (a model that cannot fail is not a proof) ---
+    require_contract: bool = True     # model must expose build_model() + properties()
+    check_vacuity: bool = True        # safety property whose violation state is unrepresentable => NG
+    check_reachability: bool = True   # states unreachable from S0 => NG
+    check_nondeterminism: bool = True # single-path model cannot exhibit interleaving => NG
+    min_states: int = 4               # models smaller than this cannot back a concurrency claim
+
+
+@dataclass
+class EvidenceConfig:
+    """Evidence Gate: forbids asserting a verification that was never performed."""
+    enabled: bool = True
+    claim_patterns: list[str] = field(default_factory=lambda: [
+        "検証済み", "検証されている", "検証を実施", "検証済である",
+        "証明完了", "証明済み", "証明した", "数学的証明",
+        "実施済み", "立証",
+        "formally verified", "has been verified", "is verified",
+        "proven", "proved", "mathematically proven",
+    ])
+    measurement_patterns: list[str] = field(default_factory=lambda: [
+        "測定環境", "実測値", "実測", "計測結果", "ベンチマーク結果",
+        "measured on", "benchmark result", "measurement environment",
+    ])
+    artifact_extensions: list[str] = field(default_factory=lambda: [
+        "py", "md", "wit", "tla", "json", "cfg",
+    ])
+    # Unsourced bare metrics (percentages / cycle counts) — noisy, so WARNING by default.
+    metric_severity: str = "WARNING"
+    ignore_artifact_refs: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ObligationConfig:
+    """Obligation Gate: verification demanded by the risk assessment must not be skipped."""
+    enabled: bool = True
+    risk_report: str = "reports/doc_risk_report.json"
+    judge_report: str = "reports/doc_judge_report.json"
+    require_assessment: bool = True   # no risk assessment at all => NG (this is the "サボり" case)
+    require_judge: bool = True        # {VERIFY_LLM} tagged but never judged => NG
+    risk_threshold: int = 4           # risk_score >= threshold demands the recommended verification
+    stale_is_error: bool = True       # doc changed since it was assessed => NG
 
 
 @dataclass
@@ -92,6 +133,8 @@ class Config:
     formal_verification: FormalVerificationConfig = field(default_factory=FormalVerificationConfig)
     wit_verification: WITVerificationConfig = field(default_factory=WITVerificationConfig)
     llm_judge: LLMJudgeConfig = field(default_factory=LLMJudgeConfig)
+    evidence: EvidenceConfig = field(default_factory=EvidenceConfig)
+    obligation: ObligationConfig = field(default_factory=ObligationConfig)
     config_dir: Path = field(default_factory=Path.cwd)
 
     def is_excluded(self, file_path: str | Path, docs_root: Path | None = None) -> bool:
@@ -169,10 +212,41 @@ class Config:
 
         # Formal
         fv_data = data.get("formal_verification", {})
+        fv_defaults = FormalVerificationConfig()
         formal_verification = FormalVerificationConfig(
             model_dir_name=fv_data.get("model_dir_name", "formal"),
             tag=fv_data.get("tag", "{VERIFY_FORMAL}"),
-            timeout_seconds=fv_data.get("timeout_seconds", 30)
+            timeout_seconds=fv_data.get("timeout_seconds", 30),
+            require_contract=bool(fv_data.get("require_contract", fv_defaults.require_contract)),
+            check_vacuity=bool(fv_data.get("check_vacuity", fv_defaults.check_vacuity)),
+            check_reachability=bool(fv_data.get("check_reachability", fv_defaults.check_reachability)),
+            check_nondeterminism=bool(fv_data.get("check_nondeterminism", fv_defaults.check_nondeterminism)),
+            min_states=int(fv_data.get("min_states", fv_defaults.min_states)),
+        )
+
+        # Evidence Gate
+        ev_data = data.get("evidence", {})
+        ev_defaults = EvidenceConfig()
+        evidence = EvidenceConfig(
+            enabled=bool(ev_data.get("enabled", ev_defaults.enabled)),
+            claim_patterns=list(ev_data.get("claim_patterns", ev_defaults.claim_patterns)),
+            measurement_patterns=list(ev_data.get("measurement_patterns", ev_defaults.measurement_patterns)),
+            artifact_extensions=list(ev_data.get("artifact_extensions", ev_defaults.artifact_extensions)),
+            metric_severity=str(ev_data.get("metric_severity", ev_defaults.metric_severity)).upper(),
+            ignore_artifact_refs=list(ev_data.get("ignore_artifact_refs", ev_defaults.ignore_artifact_refs)),
+        )
+
+        # Obligation Gate
+        ob_data = data.get("obligation", {})
+        ob_defaults = ObligationConfig()
+        obligation = ObligationConfig(
+            enabled=bool(ob_data.get("enabled", ob_defaults.enabled)),
+            risk_report=str(ob_data.get("risk_report", ob_defaults.risk_report)),
+            judge_report=str(ob_data.get("judge_report", ob_defaults.judge_report)),
+            require_assessment=bool(ob_data.get("require_assessment", ob_defaults.require_assessment)),
+            require_judge=bool(ob_data.get("require_judge", ob_defaults.require_judge)),
+            risk_threshold=int(ob_data.get("risk_threshold", ob_defaults.risk_threshold)),
+            stale_is_error=bool(ob_data.get("stale_is_error", ob_defaults.stale_is_error)),
         )
 
         # WIT
@@ -206,8 +280,17 @@ class Config:
             formal_verification=formal_verification,
             wit_verification=wit_verification,
             llm_judge=llm_judge,
+            evidence=evidence,
+            obligation=obligation,
             config_dir=config_dir
         )
+
+    def resolve_path(self, rel_or_abs: str | Path) -> Path:
+        """Resolves a path declared in the config relative to the config file's directory."""
+        p = Path(rel_or_abs)
+        if p.is_absolute():
+            return p
+        return (self.config_dir / p).resolve()
 
     def get_tier_for_path(self, rel_path: str) -> int | str | None:
         """Determines the tier of a given file path based on configured regex patterns."""

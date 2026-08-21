@@ -2,6 +2,7 @@ import sys
 import argparse
 import json
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Ensure UTF-8 output on Windows consoles
@@ -18,6 +19,8 @@ from spec_integrator.graph import DocGraphBuilder
 from spec_integrator.verifier.static import StaticVerifier
 from spec_integrator.verifier.formal import FormalVerifier
 from spec_integrator.verifier.wit import WITVerifier
+from spec_integrator.verifier.evidence import EvidenceVerifier
+from spec_integrator.verifier.obligation import ObligationVerifier
 from spec_integrator.judge import SemanticJudge, RiskAssessor
 from spec_integrator.reporter import Reporter
 
@@ -76,6 +79,14 @@ formal_verification:
   model_dir_name: "formal"
   tag: "{VERIFY_FORMAL}"
   timeout_seconds: 30
+  # A model that cannot fail is not a proof. Each model must expose
+  # build_model() and properties(); safety properties must declare the
+  # violating condition so vacuity can be ruled out.
+  require_contract: true
+  check_vacuity: true
+  check_reachability: true
+  check_nondeterminism: true
+  min_states: 4
 
 llm_judge:
   tag: "{VERIFY_LLM}"
@@ -87,6 +98,22 @@ llm_judge:
     ollama:
       endpoint: "http://localhost:11434"
       model: "llama3"
+
+# Evidence Gate: a document may not assert a verification it cannot substantiate.
+evidence:
+  enabled: true
+  metric_severity: "WARNING"   # raise to ERROR to forbid unsourced figures outright
+  ignore_artifact_refs: []
+
+# Obligation Gate: verification demanded by `assess` may not be silently skipped.
+obligation:
+  enabled: true
+  risk_report: "reports/doc_risk_report.json"
+  judge_report: "reports/doc_judge_report.json"
+  require_assessment: true     # `check` without a prior `assess` is not a pass
+  require_judge: true
+  risk_threshold: 4
+  stale_is_error: true
 """
     target.write_text(template, encoding="utf-8")
     print(f"✔ Created '{target}'.")
@@ -177,11 +204,28 @@ def cmd_check(args):
     issues.extend(wit_issues)
     print(f"WIT verification finished: {len(wit_results)} file(s) evaluated.", flush=True)
 
-    # 4. Generate Report
+    # 4. Evidence Verification (claims must be substantiated)
+    print("Running Evidence Verifier (unbacked claims & dangling artifacts)...", flush=True)
+    evidence_verifier = EvidenceVerifier(config)
+    evidence_issues = evidence_verifier.verify(documents, docs_root, formal_results, wit_results)
+    issues.extend(evidence_issues)
+    print(f"Evidence verification finished. Found {len(evidence_issues)} issue(s).", flush=True)
+
+    # 5. Obligation Verification (risk assessment must not be ignored)
+    print("Running Obligation Verifier (skipped verification detection)...", flush=True)
+    obligation_verifier = ObligationVerifier(config)
+    obligation_issues, obligation_summary = obligation_verifier.verify(documents)
+    issues.extend(obligation_issues)
+    print(f"Obligation verification finished: "
+          f"{obligation_summary.discharged}/{obligation_summary.demanded} obligation(s) discharged.",
+          flush=True)
+
+    # 6. Generate Report
     print("Generating Markdown Report & Graph JSON...", flush=True)
     report_path = Path(args.report).resolve()
     reporter = Reporter(config)
-    reporter.generate_markdown_report(documents, graph, issues, formal_results, wit_results, report_path)
+    reporter.generate_markdown_report(documents, graph, issues, formal_results, wit_results,
+                                      report_path, obligation_summary=obligation_summary)
     print(f"✔ Markdown Report generated: {report_path}", flush=True)
 
     if args.graph_json:
@@ -205,7 +249,9 @@ def cmd_check(args):
             print(f"  [{err.gate}] {err.file_path}:{err.line} - {err.message} ({err.rule_code})")
         sys.exit(1)
     else:
-        print("✅ ALL QUALITY GATES PASSED.")
+        print(f"✅ ALL QUALITY GATES PASSED "
+              f"(verification obligations discharged: "
+              f"{obligation_summary.discharged}/{obligation_summary.demanded}).")
         sys.exit(0)
 
 
@@ -282,14 +328,22 @@ def cmd_assess(args):
 
     db.close()
 
+    # Record which document revision each obligation was derived from, so that
+    # `check` can detect an assessment that no longer matches the specification.
+    doc_hashes = {d.file_path: d.content_hash for d in documents}
+
     if args.out:
         out_p = Path(args.out).resolve()
         out_p.parent.mkdir(parents=True, exist_ok=True)
         with open(out_p, "w", encoding="utf-8") as f:
             json.dump({
+                "generated_at": datetime.now(timezone.utc).isoformat(),
                 "total_evaluated": report.total_evaluated,
                 "formal_candidates_count": report.formal_candidates_count,
                 "llm_candidates_count": report.llm_candidates_count,
+                "sections_scanned": sum(len(d.sections) for d in documents),
+                "max_sections": args.max_sections,
+                "doc_hashes": doc_hashes,
                 "assessments": [asdict(a) for a in report.assessments]
             }, f, indent=2, ensure_ascii=False)
         print(f"✔ Risk assessment JSON saved to {out_p}")
@@ -303,6 +357,16 @@ def cmd_assess(args):
     print(f"\nAssessment finished. Evaluated {report.total_evaluated} sections.")
     print(f"  - Formal verification (pyModelChecking) candidates: {report.formal_candidates_count}")
     print(f"  - LLM Judge candidates: {report.llm_candidates_count}")
+
+    # An assessment that only covered part of the corpus silently under-reports
+    # the obligations, which is exactly how required verification gets skipped.
+    total_sections = sum(len(d.sections) for d in documents)
+    if args.strict and report.total_evaluated < total_sections:
+        print(f"\n❌ Partial assessment: {report.total_evaluated}/{total_sections} sections evaluated.")
+        print("   Obligations for the unevaluated sections are unknown, so the result is not a "
+              "clean bill of health. Raise --max-sections, or pass --no-strict to accept it.")
+        sys.exit(1)
+
     sys.exit(0)
 
 
@@ -349,6 +413,10 @@ def main():
     p_assess.add_argument("--max-sections", type=int, default=15, help="Max sections to assess")
     p_assess.add_argument("-o", "--out", default="doc_risk_report.json", help="Output JSON path")
     p_assess.add_argument("-r", "--report", default="doc_risk_report.md", help="Output Markdown report path")
+    p_assess.add_argument("--strict", dest="strict", action="store_true", default=True,
+                          help="Fail when the assessment does not cover every section (default)")
+    p_assess.add_argument("--no-strict", dest="strict", action="store_false",
+                          help="Allow a partial assessment to exit successfully")
     p_assess.set_defaults(func=cmd_assess)
 
     args = parser.parse_args()

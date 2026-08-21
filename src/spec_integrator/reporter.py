@@ -18,15 +18,19 @@ class Reporter:
                                  issues: list[VerificationIssue],
                                  formal_results: list[FormalModelResult],
                                  wit_results: list[WITFileResult],
-                                 out_path: Path) -> str:
+                                 out_path: Path,
+                                 obligation_summary=None) -> str:
         lines = []
 
         total_docs = len(documents)
         total_sections = sum(len(d.sections) for d in documents)
         total_keywords = len([n for n in graph.nodes.values() if n.type == "item"])
-        total_models = len(formal_results)
+        # Count *distinct* model scripts. A single model shared by several documents
+        # must never be reported as several proofs.
+        distinct_models = {r.model_file for r in formal_results}
+        passing_models = {r.model_file for r in formal_results if r.status == "PASS"}
         total_wits = len(wit_results)
-        
+
         errors = [i for i in issues if i.severity == "ERROR"]
         warnings = [i for i in issues if i.severity == "WARNING"]
         is_passed = (len(errors) == 0)
@@ -43,13 +47,18 @@ class Reporter:
         lines.append(f"| Total Documents | {total_docs} |")
         lines.append(f"| Total Sections | {total_sections} |")
         lines.append(f"| Total Keywords / Entities | {total_keywords} |")
-        lines.append(f"| Formal Verification Models | {total_models} |")
+        lines.append(f"| Formal Models (distinct scripts) | {len(distinct_models)} |")
+        lines.append(f"| Formal Models Passing Audit | {len(passing_models)} |")
         lines.append(f"| WIT Interface Files | {total_wits} |")
+        if obligation_summary is not None:
+            lines.append(f"| Verification Obligations Demanded | {obligation_summary.demanded} |")
+            lines.append(f"| Verification Obligations Discharged | {obligation_summary.discharged} |")
         lines.append(f"| Errors | **{len(errors)}** |")
         lines.append(f"| Warnings | {len(warnings)} |\n")
 
         # 3. Gate Status Table
-        gate_names = ["Format", "Traceability", "Hierarchy", "Formal", "WIT"]
+        gate_names = ["Format", "Traceability", "Hierarchy", "Formal", "WIT",
+                      "Evidence", "Obligation"]
         lines.append("### Quality Gate Status\n")
         lines.append("| Gate | Status | Issues |")
         lines.append("| :--- | :--- | :--- |")
@@ -74,12 +83,45 @@ class Reporter:
         # 5. Formal Verification Details
         if formal_results:
             lines.append("## 3. Formal Verification Results (pyModelChecking)\n")
-            lines.append("| Component | Model Script | Status | Details |")
-            lines.append("| :--- | :--- | :--- | :--- |")
+            lines.append("| Component | Model Script | Backs | Status | Details |")
+            lines.append("| :--- | :--- | :--- | :--- | :--- |")
             for r in formal_results:
                 st = "🟢 PASS" if r.status == "PASS" else f"🔴 {r.status}"
-                lines.append(f"| `{r.component}` | `{r.model_file}` | {st} | {r.details} |")
+                backs = "<br>".join(f"`{b}`" for b in r.backing_documents) or "*(none)*"
+                lines.append(f"| `{r.component}` | `{r.model_file}` | {backs} | {st} | {r.details} |")
             lines.append("")
+
+            audited = [r for r in formal_results if r.properties]
+            if audited:
+                lines.append("### 3.1 Property-level Audit\n")
+                lines.append("| Model | Property | Kind | Result | Detail |")
+                lines.append("| :--- | :--- | :--- | :--- | :--- |")
+                for r in audited:
+                    for p in r.properties:
+                        icon = {"PASS": "🟢", "VACUOUS": "🟠", "FAIL": "🔴"}.get(p.status, "🔴")
+                        lines.append(f"| `{r.model_file}` | {p.name} | {p.kind} | "
+                                     f"{icon} {p.status} | {p.details} |")
+                lines.append("")
+
+        # 5b. Verification Obligations
+        if obligation_summary is not None:
+            lines.append("## 3.5 Verification Obligations (from Risk Assessment)\n")
+            pct = int(round(obligation_summary.coverage * 100))
+            lines.append(f"- Demanded: **{obligation_summary.demanded}** / "
+                         f"Discharged: **{obligation_summary.discharged}** ({pct}%)")
+            if obligation_summary.stale_documents:
+                lines.append(f"- ⚠️ Stale assessments: {len(obligation_summary.stale_documents)} document(s)")
+            if obligation_summary.unassessed_documents:
+                lines.append(f"- ⚠️ Never assessed: {len(obligation_summary.unassessed_documents)} document(s)")
+            lines.append("")
+            if obligation_summary.skipped:
+                lines.append("| File | Section | Risk | Missing Verification |")
+                lines.append("| :--- | :--- | :---: | :--- |")
+                for s in obligation_summary.skipped:
+                    tags = ", ".join(f"`{t}`" for t in s["missing_tags"])
+                    lines.append(f"| `{s['file_path']}` | {s['heading']} | "
+                                 f"{s['risk_score']}/5 | {tags} |")
+                lines.append("")
 
         # 6. WIT Interface Verification Details
         if wit_results:
