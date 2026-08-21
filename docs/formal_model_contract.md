@@ -66,7 +66,7 @@ Formal Gate はこれを機械的に拒否する。
 
 ```python
 from pyModelChecking import Kripke
-from pyModelChecking.CTL import AG, EF, Not, And, AtomicProposition
+from pyModelChecking.CTL import AG, Not, And, AtomicProposition
 
 BACKS = ["components/tier1_core/os_scheduler.md"]
 
@@ -116,6 +116,8 @@ def properties():
 `deadlock` ラベルを持つ状態に自己ループを張り、`violation` にその命題を指定すること。
 
 ```python
+from pyModelChecking.CTL import AG, AF, Imply, AtomicProposition
+
 ("s_deadlock", "s_deadlock"),
 ...
 "s_deadlock": {"deadlock"},
