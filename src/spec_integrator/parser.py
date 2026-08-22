@@ -163,19 +163,26 @@ class MarkdownParser:
         extracted_links = self._extract_links_from_tokens(sec_tokens)
 
         # Line mapping for links and keywords
+        in_code_block = False
         for line_offset, line in enumerate(lines):
             curr_line_num = line_start + line_offset
+            stripped = line.strip()
 
-            # Keywords and tags extraction
-            for m in self.KEYWORD_REGEX.finditer(line):
-                kw_val = m.group(1)
-                full_kw = f"{{{kw_val}}}"
-                if full_kw.startswith("{VERIFY_"):
-                    tags.append(full_kw)
-                elif any(kw_val.startswith(p) for p in self.TEMPLATE_PREFIXES) or kw_val == "concept":
-                    continue
-                else:
-                    keywords.append(kw_val)
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+                continue
+
+            # Keywords and tags extraction (only outside code blocks)
+            if not in_code_block:
+                for m in self.KEYWORD_REGEX.finditer(line):
+                    kw_val = m.group(1)
+                    full_kw = f"{{{kw_val}}}"
+                    if full_kw.startswith("{VERIFY_"):
+                        tags.append(full_kw)
+                    elif any(kw_val.startswith(p) for p in self.TEMPLATE_PREFIXES) or kw_val == "concept":
+                        continue
+                    else:
+                        keywords.append(kw_val)
 
             # Match AST-extracted links with their line number in section
             for link_text, link_url in extracted_links:

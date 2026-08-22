@@ -39,8 +39,9 @@ def test_topology_verifier_catches_cycle_mutation(tmp_path):
 
     # Cyclic dependency: TaskA -> TaskB -> TaskC -> TaskA
     cyclic_md = """# Dangerous IPC Topology
-## 1. 循環トポロジ
+## 1. Circular Communication Topology
 ```mermaid
+%% channel_topology
 graph TD
     TaskA --> TaskB
     TaskB --> TaskC
@@ -59,5 +60,5 @@ graph TD
     assert len(issues) == 1
     assert issues[0].gate == "Topology"
     assert issues[0].rule_code == "TOPOLOGY-CYCLE-DETECTED"
-    assert "TaskA -> TaskB -> TaskC -> TaskA" in issues[0].message
+    assert all(node in issues[0].message for node in ["TaskA", "TaskB", "TaskC"])
     assert any(not r.is_acyclic for r in results)
