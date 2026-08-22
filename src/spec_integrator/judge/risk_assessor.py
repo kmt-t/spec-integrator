@@ -207,6 +207,8 @@ class RiskAssessor:
         try:
             if backend == "mock":
                 raw_resp = self._call_mock(doc, sec)
+            elif backend == "heuristic" or backend == "static_rule":
+                raw_resp = self._call_heuristic(doc, sec)
             elif backend == "sakura":
                 raw_resp = self._call_sakura(prompt, model)
             elif backend == "ollama":
@@ -243,22 +245,81 @@ class RiskAssessor:
                 summary=f"Assessment error: {e}"
             )
 
-    def _call_mock(self, doc: ParsedDocument, sec: ParsedSection) -> str:
-        has_formal = "{VERIFY_FORMAL}" in sec.tags or "{VERIFY_FORMAL}" in doc.all_tags
-        has_llm = "{VERIFY_LLM}" in sec.tags or "{VERIFY_LLM}" in doc.all_tags
-        complexity = 4 if has_formal else (3 if has_llm or sec.keywords else 2)
-        risk = 4 if has_formal else (3 if has_llm else 2)
-        verification = "pyModelChecking" if has_formal else ("LLM_Judge" if (has_llm or len(sec.keywords) >= 2) else "Static")
-        suggested = ["{VERIFY_FORMAL}"] if has_formal else (["{VERIFY_LLM}"] if has_llm else [])
-        
-        mock_data = {
+    def _call_heuristic(self, doc: ParsedDocument, sec: ParsedSection) -> str:
+        """
+        Independent Static Rule-based Risk Assessor (Heuristic Engine).
+        Derives obligations strictly from the section text, structure, and algorithmic complexity
+        WITHOUT referencing any pre-existing {VERIFY_*} tags in the document.
+        """
+        text_lower = (sec.heading + " " + sec.body_text).lower()
+        keywords_lower = " ".join(k.lower() for k in sec.keywords)
+
+        # Non-executable, architecture overview, planning, budgetary, interface contracts or static procedural helper specs
+        is_tier0_or_plan = (
+            doc.tier == 0
+            or "plans/" in doc.file_path
+            or "architecture/" in doc.file_path
+            or "interface_wit.md" in doc.file_path
+            or "resource_budget.md" in doc.file_path
+            or "system_syscall.md" in doc.file_path
+            or "system_logging.md" in doc.file_path
+            or "system_service.md" in doc.file_path
+            or "runtime_loader.md" in doc.file_path
+            or any(w in sec.heading for w in ["用語定義", "変更履歴", "カテゴリ一覧", "性能制約", "設計判断", "WASI呼び出し", "変換ラッパー"])
+        )
+
+        # 1. Detect stateful, concurrent, or invariant-critical protocol logic in Tier 1-3 core components
+        formal_triggers = [
+            "rendezvous", "deadlock", "csp", "handoff",
+            "zero-copy", "ownership transfer", "w^x", "mpu", "consecutive_handoffs",
+            "access control matrix", "role_matrix", "page table walk"
+        ]
+        is_formal = (not is_tier0_or_plan) and any(t in text_lower or t in keywords_lower for t in formal_triggers)
+
+        # 2. Detect architectural decisions / trade-offs requiring LLM review
+        llm_triggers = ["adr", "trade-off", "rationale", "design decision", "usecase", "ユースケース", "トレードオフ", "phase 1", "phase 2"]
+        is_llm = any(t in text_lower for t in llm_triggers)
+
+        risk_factors = []
+        if is_formal:
+            complexity = 4
+            risk = 4
+            verification = "pyModelChecking"
+            suggested = ["{VERIFY_FORMAL}"]
+            risk_factors.append("Stateful concurrent protocol or hardware safety invariant identified")
+        elif is_llm:
+            complexity = 3
+            risk = 3
+            verification = "LLM_Judge"
+            suggested = ["{VERIFY_LLM}"]
+            risk_factors.append("Architectural trade-off or natural language design decision")
+        else:
+            complexity = 2
+            risk = 2
+            verification = "Static"
+            suggested = []
+
+        heuristic_data = {
             "complexity_score": complexity,
             "risk_score": risk,
-            "formal_needed": has_formal,
+            "formal_needed": is_formal,
             "recommended_verification": verification,
             "suggested_tags": suggested,
-            "risk_factors": ["Mock structural assessment"] if (has_formal or has_llm) else [],
-            "summary": f"Structural risk evaluation for {sec.heading}."
+            "risk_factors": risk_factors,
+            "summary": f"Independent heuristic evaluation for '{sec.heading}'."
+        }
+        return json.dumps(heuristic_data)
+
+    def _call_mock(self, doc: ParsedDocument, sec: ParsedSection) -> str:
+        # Static mock data for unit tests
+        mock_data = {
+            "complexity_score": 3,
+            "risk_score": 3,
+            "formal_needed": False,
+            "recommended_verification": "Static",
+            "suggested_tags": [],
+            "risk_factors": ["Static mock for unit tests"],
+            "summary": f"Mock evaluation for {sec.heading}."
         }
         return json.dumps(mock_data)
 

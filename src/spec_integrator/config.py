@@ -119,6 +119,8 @@ class ObligationConfig:
     stale_is_error: bool = True       # doc changed since it was assessed => NG
     # A discharge rate over a partial assessment overstates coverage => NG
     require_full_coverage: bool = True
+    # Backends whose verdict is derived from the artifact under test, not independent of it
+    forbidden_backends: list[str] = field(default_factory=lambda: ["mock"])
 
 
 @dataclass
@@ -277,6 +279,8 @@ class Config:
             stale_is_error=bool(ob_data.get("stale_is_error", ob_defaults.stale_is_error)),
             require_full_coverage=bool(ob_data.get(
                 "require_full_coverage", ob_defaults.require_full_coverage)),
+            forbidden_backends=list(ob_data.get(
+                "forbidden_backends", ob_defaults.forbidden_backends)),
         )
 
         # WIT

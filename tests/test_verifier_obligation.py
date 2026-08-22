@@ -188,3 +188,49 @@ def test_full_assessment_is_accepted(tmp_path):
 
     issues, _ = ObligationVerifier(cfg).verify([doc])
     assert [i for i in issues if i.rule_code == "OBLIG-ASSESSMENT-PARTIAL"] == []
+
+
+def test_mock_generated_assessment_is_rejected(tmp_path):
+    """A mock derives obligations from existing tags, so 100% discharge is a tautology."""
+    cfg, doc = _setup(tmp_path, DOC_BODY)
+    out = tmp_path / "reports" / "doc_risk_report.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({
+        "backend": "mock",
+        "total_evaluated": len(doc.sections),
+        "assessments": [],
+        "doc_hashes": {doc.file_path: doc.content_hash},
+    }), encoding="utf-8")
+
+    issues, _ = ObligationVerifier(cfg).verify([doc])
+    assert any(i.rule_code == "OBLIG-ASSESSMENT-NOT-INDEPENDENT" for i in issues)
+
+
+def test_real_backend_assessment_is_accepted(tmp_path):
+    cfg, doc = _setup(tmp_path, DOC_BODY)
+    out = tmp_path / "reports" / "doc_risk_report.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({
+        "backend": "sakura",
+        "total_evaluated": len(doc.sections),
+        "assessments": [],
+        "doc_hashes": {doc.file_path: doc.content_hash},
+    }), encoding="utf-8")
+
+    issues, _ = ObligationVerifier(cfg).verify([doc])
+    assert [i for i in issues if i.rule_code == "OBLIG-ASSESSMENT-NOT-INDEPENDENT"] == []
+
+
+def test_assessment_without_recorded_backend_is_rejected(tmp_path):
+    """Independence cannot be established for an assessment of unknown provenance."""
+    cfg, doc = _setup(tmp_path, DOC_BODY)
+    out = tmp_path / "reports" / "doc_risk_report.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({
+        "total_evaluated": len(doc.sections),
+        "assessments": [],
+        "doc_hashes": {doc.file_path: doc.content_hash},
+    }), encoding="utf-8")
+
+    issues, _ = ObligationVerifier(cfg).verify([doc])
+    assert any(i.rule_code == "OBLIG-ASSESSMENT-PROVENANCE-UNKNOWN" for i in issues)

@@ -150,14 +150,67 @@ class TopologyVerifier:
         return edges, nodes
 
     def _extract_role_matrix_edges(self, doc: ParsedDocument) -> tuple[list[tuple[str, str]], set[str]]:
-        edges: list[tuple[str, str]] = [
-            ("ClientApp", "IPCRouter"),
-            ("IPCRouter", "CoreOSService"),
-            ("IPCRouter", "PlatformHAL"),
-            ("IPCRouter", "DebuggerService"),
-            ("CoreOSService", "PlatformHAL"),
-        ]
-        nodes: set[str] = {src for src, _ in edges} | {dst for _, dst in edges}
+        """
+        Dynamically extracts directed communication dependency edges from the Role Matrix
+        defined either in Markdown tables (FB_CONF_ROUTER_ROLE_MATRIX) or embedded Python concepts.
+        """
+        edges: list[tuple[str, str]] = []
+        nodes: set[str] = set()
+
+        # 1. Parse Markdown Table format:
+        # | Sender \ Target | CORE_SERVICE | PLATFORM_HAL | DEBUGGER |
+        # | **CLIENT_APP** | ALLOW | ALLOW | DENY |
+        lines = doc.content.splitlines()
+        in_matrix_table = False
+        target_roles: list[str] = []
+
+        for line in lines:
+            line_str = line.strip()
+            if "role_matrix" in line_str.lower() or "role-based access control" in line_str.lower() or "fb_conf_router_role_matrix" in line_str.lower() or "ロール間通信許可マトリクス" in line_str:
+                in_matrix_table = True
+                continue
+
+            if in_matrix_table:
+                if line_str.startswith("|") and ("target" in line_str.lower() or "送信先" in line_str or "receiver" in line_str.lower()):
+                    # Header row
+                    cols = [c.strip() for c in line_str.split("|")[1:-1]]
+                    if len(cols) > 1:
+                        target_roles = [re.sub(r'[*`]', '', c).strip() for c in cols[1:]]
+                    continue
+                elif line_str.startswith("|---") or line_str.startswith("|:--"):
+                    continue
+                elif line_str.startswith("|") and target_roles:
+                    cols = [c.strip() for c in line_str.split("|")[1:-1]]
+                    if len(cols) >= 1 + len(target_roles):
+                        sender_role = re.sub(r'[*`]', '', cols[0]).strip()
+                        for idx, target_role in enumerate(target_roles):
+                            cell_val = cols[idx + 1].strip().upper()
+                            if any(allow_kw in cell_val for allow_kw in ["ALLOW", "許可", "TRUE", "YES", "1"]) and cell_val != "DENY":
+                                if sender_role != target_role:
+                                    edges.append((sender_role, target_role))
+                                    nodes.add(sender_role)
+                                    nodes.add(target_role)
+                elif not line_str.startswith("|") and line_str != "":
+                    # End of table
+                    in_matrix_table = False
+                    target_roles = []
+
+        # 2. Parse Python Dictionary format:
+        # ("CLIENT_APP", "CORE_SERVICE"): True
+        py_matrix_pattern = re.compile(
+            r'\(\s*["\']([A-Za-z0-9_]+)["\']\s*,\s*["\']([A-Za-z0-9_]+)["\']\s*\)\s*:\s*(True|False|1|0)'
+        )
+        for match in py_matrix_pattern.finditer(doc.content):
+            src = match.group(1).strip()
+            dst = match.group(2).strip()
+            allowed = match.group(3).strip() in ["True", "1"]
+            if allowed and src != dst:
+                edge = (src, dst)
+                if edge not in edges:
+                    edges.append(edge)
+                nodes.add(src)
+                nodes.add(dst)
+
         return edges, nodes
 
     def _detect_cycles(self, nodes: set[str] | list[str], edges: list[tuple[str, str]]) -> tuple[bool, list[list[str]]]:

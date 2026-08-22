@@ -78,6 +78,30 @@ class ObligationVerifier:
         # the ones the assessment happened to look at. "13/13 discharged" is not a
         # clean bill of health when the obligations were derived from 15 of 663
         # sections — the other 648 have unknown obligations, not zero.
+        # A mock assessor infers "what must be verified" from the tags the document
+        # already carries. The Obligation Gate then checks those same tags, so the
+        # discharge rate is 1.0 by construction, whatever the specification says.
+        backend = str(payload.get("backend", "") or "").lower()
+        if not backend:
+            issues.append(VerificationIssue(
+                gate="Obligation", severity="ERROR",
+                file_path=cfg.risk_report, line=1,
+                rule_code="OBLIG-ASSESSMENT-PROVENANCE-UNKNOWN",
+                message=("The risk assessment records no backend, so its independence from the "
+                         "documents it judges cannot be established. Re-run 'assess' with a "
+                         "tool version that stamps the engine.")
+            ))
+        elif backend in cfg.forbidden_backends:
+            issues.append(VerificationIssue(
+                gate="Obligation", severity="ERROR",
+                file_path=cfg.risk_report, line=1,
+                rule_code="OBLIG-ASSESSMENT-NOT-INDEPENDENT",
+                message=(f"The risk assessment was produced by the '{backend}' backend, which "
+                         "derives each obligation from the tags the document already carries. "
+                         "The discharge rate is then true by construction and says nothing about "
+                         "the specification. Re-run 'assess' against a real backend.")
+            ))
+
         summary.sections_total = sum(len(d.sections) for d in documents)
         summary.sections_assessed = int(payload.get("total_evaluated", 0) or 0)
         if cfg.require_full_coverage and summary.sections_assessed < summary.sections_total:

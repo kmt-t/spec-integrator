@@ -43,6 +43,7 @@ def _write_clean_assessment(tmp_path, docs_dir):
     out.parent.mkdir(parents=True, exist_ok=True)
     # A complete assessment covers every section; a partial one is not a clean bill.
     out.write_text(json.dumps({
+        "backend": "sakura",
         "total_evaluated": sections, "assessments": [], "doc_hashes": hashes
     }), encoding="utf-8")
 

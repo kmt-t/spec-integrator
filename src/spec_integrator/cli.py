@@ -389,6 +389,10 @@ def cmd_assess(args):
         with open(out_p, "w", encoding="utf-8") as f:
             json.dump({
                 "generated_at": datetime.now(timezone.utc).isoformat(),
+                # Which engine produced these obligations. A mock backend derives the
+                # verdict from the document itself, so obligations it generates cannot
+                # be evidence about the document.
+                "backend": args.backend or config.llm_judge.default_backend,
                 "total_evaluated": report.total_evaluated,
                 "formal_candidates_count": report.formal_candidates_count,
                 "llm_candidates_count": report.llm_candidates_count,
@@ -470,7 +474,7 @@ def main():
     # assess
     p_assess = subparsers.add_parser("assess", help="Assess section complexity, design risk & formal candidates via LLM")
     p_assess.add_argument("-c", "--config", default="spec-integrator.yaml", help="Path to configuration file")
-    p_assess.add_argument("--backend", choices=["sakura", "ollama", "mock"], help="LLM backend")
+    p_assess.add_argument("--backend", choices=["sakura", "ollama", "heuristic", "static_rule", "mock"], help="Risk assessor backend")
     p_assess.add_argument("--model", help="LLM model name override")
     p_assess.add_argument("--max-sections", type=int, default=15, help="Max sections to assess (0 for unlimited)")
     p_assess.add_argument("-a", "--all", "--exhaustive", dest="exhaustive", action="store_true",
