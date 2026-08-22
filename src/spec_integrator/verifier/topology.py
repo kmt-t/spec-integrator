@@ -87,29 +87,29 @@ class TopologyVerifier:
     def _extract_topology_graphs(self, doc: ParsedDocument) -> list[dict]:
         graphs: list[dict] = []
 
-        # 1. Inspect Mermaid flowcharts that explicitly depict cross-task/cross-service messaging topologies
+        # 1. Inspect Mermaid graphs/flowcharts (Fail-closed: all flowcharts are checked by default)
         mermaid_blocks = re.finditer(r'```mermaid\s*\n(.*?)```', doc.content, re.DOTALL)
         for mb in mermaid_blocks:
             content = mb.group(1)
             line_no = doc.content[:mb.start()].count('\n') + 1
-
-            # Skip state machine diagrams (SMD) / lifecycle transitions (e.g. Ready -> Running -> Ready)
-            if "statediagram" in content.lower() or "smd" in content.lower():
-                continue
-
-            # Skip internal algorithmic state loops / pipeline stages
             lower_content = content.lower()
-            if any(term in lower_content for term in ["lookup", "accheck", "route_msg", "statemachine", "lifecycle"]):
+
+            # Skip non-flowchart diagram types (FSM, sequence diagrams, class diagrams, etc.)
+            non_comment_lines = [ln.strip() for ln in content.strip().splitlines() if ln.strip() and not ln.strip().startswith("%%")]
+            first_cmd = non_comment_lines[0].lower() if non_comment_lines else ""
+            if any(first_cmd.startswith(t) for t in ["statediagram", "sequencediagram", "classdiagram", "erdiagram", "gitgraph"]):
                 continue
 
-            if any(
-                keyword in lower_content
-                for keyword in ["topology", "channel_topology", "ipc_matrix", "service_dependency"]
-            ):
+            # Explicit opt-out for internal control flows, algorithm pipelines, or local state loops
+            if "%% not-a-topology" in lower_content or "%% not_a_topology" in lower_content or "%% not-topology" in lower_content:
+                continue
+
+            # Check all graph / flowchart blocks
+            if first_cmd.startswith("graph") or first_cmd.startswith("flowchart"):
                 edges, nodes = self._parse_mermaid_edges(content)
                 if edges:
                     graphs.append({
-                        "name": f"Messaging Topology (line {line_no})",
+                        "name": f"Mermaid Flowchart Topology (line {line_no})",
                         "nodes": nodes,
                         "edges": edges,
                         "line": line_no,

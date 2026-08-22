@@ -49,7 +49,7 @@ class EvidenceVerifier:
     def _check_artifact_refs(self, doc: ParsedDocument, docs_root: Path) -> list[VerificationIssue]:
         issues: list[VerificationIssue] = []
         exts = "|".join(re.escape(e) for e in self.config.evidence.artifact_extensions)
-        ref_re = re.compile(rf"(?<![\w/*<])([\w][\w./-]*\.(?:{exts}))\b")
+        ref_re = re.compile(rf"(?<![\w/*<])((?:\.\./)*[\w][\w./-]*\.(?:{exts}))\b")
         ignore = set(self.config.evidence.ignore_artifact_refs)
 
         repo_root = self.config.config_dir

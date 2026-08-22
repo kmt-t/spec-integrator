@@ -123,3 +123,32 @@ def test_topology_verifier_catches_role_matrix_cycle_mutation(tmp_path):
     assert issues[0].rule_code == "TOPOLOGY-CYCLE-DETECTED"
     assert any(not r.is_acyclic for r in results)
 
+
+def test_topology_verifier_honors_explicit_opt_out(tmp_path):
+    """Verifies that diagrams with explicit opt-out annotations (%% not-a-topology) are skipped."""
+    config = Config()
+    verifier = TopologyVerifier(config)
+
+    # Cyclic control loop with explicit opt-out
+    opt_out_md = """# Algorithm Loop
+## 1. Internal Pipeline Loop
+```mermaid
+%% not-a-topology: Internal execution loop within single coroutine
+graph TD
+    StepA --> StepB
+    StepB --> StepC
+    StepC --> StepA
+```
+"""
+    file_path = tmp_path / "components" / "tier2_runtime" / "loop.md"
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text(opt_out_md, encoding="utf-8")
+
+    parser = MarkdownParser(config)
+    doc = parser.parse_file(file_path, tmp_path)
+
+    issues, results = verifier.verify_documents([doc], tmp_path)
+    assert len(issues) == 0
+    assert len(results) == 0
+
+
