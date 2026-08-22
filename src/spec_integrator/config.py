@@ -152,6 +152,45 @@ class ProjectConfig:
 
 
 @dataclass
+class WaiverRule:
+    """Explicitly justified waiver for a section or document from verification obligations."""
+    section_pattern: str = ""
+    heading_pattern: str = ""
+    rationale: str = ""
+    authorized_at: str = ""
+
+    def matches(self, file_path: str, heading: str) -> bool:
+        if self.section_pattern and not regex_match(self.section_pattern, file_path):
+            return False
+        if self.heading_pattern and not re.search(self.heading_pattern, heading):
+            return False
+        return True
+
+
+@dataclass
+class HeuristicConfig:
+    """Configuration-driven keyword triggers and scope rules for independent risk assessment."""
+    formal_triggers: list[str] = field(default_factory=lambda: [
+        "rendezvous", "deadlock", "csp", "handoff",
+        "zero-copy", "ownership transfer", "w^x", "mpu", "consecutive_handoffs",
+        "access control matrix", "role_matrix", "page table walk"
+    ])
+    llm_triggers: list[str] = field(default_factory=lambda: [
+        "adr", "trade-off", "rationale", "design decision", "usecase", "ユースケース", "トレードオフ", "phase 1", "phase 2"
+    ])
+    non_formal_tiers: list[int | str] = field(default_factory=lambda: [0, "meta"])
+    non_formal_path_patterns: list[str] = field(default_factory=lambda: [
+        r"plans/.*", r"architecture/.*", r"resource_budget\.md"
+    ])
+    waivers: list[WaiverRule] = field(default_factory=list)
+
+
+@dataclass
+class RiskAssessmentConfig:
+    heuristic: HeuristicConfig = field(default_factory=HeuristicConfig)
+
+
+@dataclass
 class Config:
     version: str = "1.0"
     project: ProjectConfig = field(default_factory=ProjectConfig)
@@ -163,6 +202,7 @@ class Config:
     evidence: EvidenceConfig = field(default_factory=EvidenceConfig)
     obligation: ObligationConfig = field(default_factory=ObligationConfig)
     consistency: ConsistencyConfig = field(default_factory=ConsistencyConfig)
+    risk_assessment: RiskAssessmentConfig = field(default_factory=RiskAssessmentConfig)
     config_dir: Path = field(default_factory=Path.cwd)
 
     def is_excluded(self, file_path: str | Path, docs_root: Path | None = None) -> bool:
@@ -327,6 +367,29 @@ class Config:
             invariants=invariants,
         )
 
+        # Risk Assessment (Heuristic Engine & Waivers)
+        ra_data = data.get("risk_assessment", {})
+        h_data = ra_data.get("heuristic", {})
+        h_defaults = HeuristicConfig()
+
+        waivers = []
+        for w in h_data.get("waivers", []):
+            waivers.append(WaiverRule(
+                section_pattern=w.get("section_pattern", ""),
+                heading_pattern=w.get("heading_pattern", ""),
+                rationale=w.get("rationale", ""),
+                authorized_at=w.get("authorized_at", "")
+            ))
+
+        heuristic_config = HeuristicConfig(
+            formal_triggers=list(h_data.get("formal_triggers", h_defaults.formal_triggers)),
+            llm_triggers=list(h_data.get("llm_triggers", h_defaults.llm_triggers)),
+            non_formal_tiers=list(h_data.get("non_formal_tiers", h_defaults.non_formal_tiers)),
+            non_formal_path_patterns=list(h_data.get("non_formal_path_patterns", h_defaults.non_formal_path_patterns)),
+            waivers=waivers if "waivers" in h_data else h_defaults.waivers
+        )
+        risk_assessment = RiskAssessmentConfig(heuristic=heuristic_config)
+
         return cls(
             version=str(data.get("version", "1.0")),
             project=project,
@@ -338,6 +401,7 @@ class Config:
             evidence=evidence,
             obligation=obligation,
             consistency=consistency,
+            risk_assessment=risk_assessment,
             config_dir=config_dir
         )
 
