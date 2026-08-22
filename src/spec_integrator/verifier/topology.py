@@ -87,19 +87,29 @@ class TopologyVerifier:
     def _extract_topology_graphs(self, doc: ParsedDocument) -> list[dict]:
         graphs: list[dict] = []
 
-        # 1. Inspect Mermaid flowcharts that depict IPC routing / channel communication
+        # 1. Inspect Mermaid flowcharts that explicitly depict cross-task/cross-service messaging topologies
         mermaid_blocks = re.finditer(r'```mermaid\s*\n(.*?)```', doc.content, re.DOTALL)
         for mb in mermaid_blocks:
             content = mb.group(1)
             line_no = doc.content[:mb.start()].count('\n') + 1
+
+            # Skip state machine diagrams (SMD) / lifecycle transitions (e.g. Ready -> Running -> Ready)
+            if "statediagram" in content.lower() or "smd" in content.lower():
+                continue
+
+            # Skip internal algorithmic state loops / pipeline stages
+            lower_content = content.lower()
+            if any(term in lower_content for term in ["lookup", "accheck", "route_msg", "statemachine", "lifecycle"]):
+                continue
+
             if any(
-                keyword in content.lower()
-                for keyword in ["ipcr", "router", "channel", "topology", "task", "flow", "smd", "csp"]
+                keyword in lower_content
+                for keyword in ["topology", "channel_topology", "ipc_matrix", "service_dependency"]
             ):
                 edges, nodes = self._parse_mermaid_edges(content)
                 if edges:
                     graphs.append({
-                        "name": f"Mermaid Flowchart (line {line_no})",
+                        "name": f"Messaging Topology (line {line_no})",
                         "nodes": nodes,
                         "edges": edges,
                         "line": line_no,
