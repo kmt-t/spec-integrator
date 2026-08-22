@@ -205,7 +205,9 @@ class RiskAssessor:
         )
 
         try:
-            if backend == "sakura":
+            if backend == "mock":
+                raw_resp = self._call_mock(doc, sec)
+            elif backend == "sakura":
                 raw_resp = self._call_sakura(prompt, model)
             elif backend == "ollama":
                 raw_resp = self._call_ollama(prompt, model)
@@ -240,6 +242,25 @@ class RiskAssessor:
                 risk_factors=[f"Assessment error: {e}"],
                 summary=f"Assessment error: {e}"
             )
+
+    def _call_mock(self, doc: ParsedDocument, sec: ParsedSection) -> str:
+        has_formal = "{VERIFY_FORMAL}" in sec.tags or "{VERIFY_FORMAL}" in doc.all_tags
+        has_llm = "{VERIFY_LLM}" in sec.tags or "{VERIFY_LLM}" in doc.all_tags
+        complexity = 4 if has_formal else (3 if has_llm or sec.keywords else 2)
+        risk = 4 if has_formal else (3 if has_llm else 2)
+        verification = "pyModelChecking" if has_formal else ("LLM_Judge" if (has_llm or len(sec.keywords) >= 2) else "Static")
+        suggested = ["{VERIFY_FORMAL}"] if has_formal else (["{VERIFY_LLM}"] if has_llm else [])
+        
+        mock_data = {
+            "complexity_score": complexity,
+            "risk_score": risk,
+            "formal_needed": has_formal,
+            "recommended_verification": verification,
+            "suggested_tags": suggested,
+            "risk_factors": ["Mock structural assessment"] if (has_formal or has_llm) else [],
+            "summary": f"Structural risk evaluation for {sec.heading}."
+        }
+        return json.dumps(mock_data)
 
     def _call_sakura(self, prompt: str, model: str | None) -> str:
         import time
