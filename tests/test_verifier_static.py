@@ -82,8 +82,17 @@ graph TB
     subgraph "Layer"
         Node[Label (with parens unquoted)]
     end
-    ExtraEnd
     end
+```
+```mermaid
+sequenceDiagram
+    opt Incomplete
+        Alice->>Bob: Hello
+```
+```mermaid
+stateDiagram-v2
+    state Active {
+        s1 --> s2
 ```
 """, encoding="utf-8")
 
@@ -96,5 +105,9 @@ graph TB
     issues = verifier.verify([doc], graph, docs_dir)
 
     rule_codes = [i.rule_code for i in issues]
-    assert "FMT-INVALID-MERMAID" in rule_codes
+    assert "FMT-MERMAID-UNQUOTED-LABEL" in rule_codes
+    assert "FMT-MERMAID-UNEXPECTED-END" in rule_codes
+    assert "FMT-MERMAID-UNCLOSED-BLOCK" in rule_codes
+    assert "FMT-MERMAID-UNCLOSED-STATE" in rule_codes
+
 
