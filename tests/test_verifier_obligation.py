@@ -81,6 +81,30 @@ Round-robin scheduling.
     assert summary.discharged == 1
 
 
+def test_llm_recommendation_is_demanded_even_at_risk_3(tmp_path):
+    """The heuristic backend hardcodes risk=3 for its LLM_Judge branch (vs.
+    risk=4 for formal), so gating solely on `risk >= risk_threshold` (4)
+    meant an LLM_Judge recommendation could never actually be demanded --
+    every one of them silently bypassed this check, regardless of whether
+    {VERIFY_LLM} was ever added. The recommendation itself must count."""
+    cfg, doc = _setup(tmp_path, DOC_BODY)
+    _write_risk_report(tmp_path, [{
+        "file_path": doc.file_path,
+        "heading": "4.1 アルゴリズム",
+        "risk_score": 3,
+        "complexity_score": 3,
+        "formal_needed": False,
+        "recommended_verification": "llm_judge",
+        "suggested_tags": ["{VERIFY_LLM}"],
+    }], doc_hashes={doc.file_path: doc.content_hash})
+
+    issues, summary = ObligationVerifier(cfg).verify([doc])
+    skipped = [i for i in issues if i.rule_code == "OBLIG-VERIFICATION-SKIPPED"]
+    assert len(skipped) == 1
+    assert summary.demanded == 1
+    assert summary.discharged == 0
+
+
 def test_low_risk_section_creates_no_obligation(tmp_path):
     cfg, doc = _setup(tmp_path, DOC_BODY)
     _write_risk_report(tmp_path, [{

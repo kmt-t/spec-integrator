@@ -151,7 +151,13 @@ class ObligationVerifier:
             if mapped:
                 demanded_tags.add(mapped)
 
-            is_demanded = formal_needed or risk >= cfg.risk_threshold
+            # A recommendation IS a demand, independent of the numeric risk
+            # score: `_call_heuristic` hardcodes risk=3 for its LLM_Judge
+            # branch (vs. risk=4 for formal), so gating solely on
+            # `risk >= cfg.risk_threshold` (4) meant every LLM_Judge
+            # recommendation was silently never "demanded" -- the check
+            # below never ran for a single one of them.
+            is_demanded = formal_needed or recommended in ("llm_judge", "llm") or risk >= cfg.risk_threshold
             if not is_demanded or not demanded_tags:
                 continue
 
