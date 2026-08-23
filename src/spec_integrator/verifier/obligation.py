@@ -217,8 +217,16 @@ class ObligationVerifier:
 
         entries = payload if isinstance(payload, list) else payload.get("results", [])
         judged_blob = json.dumps(entries, ensure_ascii=False)
-        failed = {str(e.get("subgraph") or e.get("item") or e.get("target") or "")
-                  for e in entries if isinstance(e, dict) and e.get("status") == "FAIL"}
+        # Real `judge` output is keyword-centric: {"item_label": "{Keyword}",
+        # "status": ...}, not the {"subgraph"|"item"|"target": ...} shape this
+        # used to look for. That mismatch meant `failed` was always empty in
+        # practice, so a FAIL verdict from a real judge run could never
+        # surface here -- this is the first time this path has run against
+        # real (rather than hand-shaped test) judge output.
+        failed_keywords = {
+            e.get("item_label", "").strip("{}")
+            for e in entries if isinstance(e, dict) and e.get("status") == "FAIL"
+        }
 
         issues: list[VerificationIssue] = []
         for doc in tagged:
@@ -231,13 +239,15 @@ class ObligationVerifier:
                     message=(f"Document declares '{llm_tag}' but does not appear in the judge report. "
                              "Raise --max-subgraphs so the audit actually covers it.")
                 ))
-        for f in sorted(x for x in failed if x):
-            issues.append(VerificationIssue(
-                gate="Obligation", severity="ERROR",
-                file_path=f, line=1,
-                rule_code="OBLIG-JUDGE-FAILED",
-                message="LLM semantic audit reported FAIL for this item in the stored judge report."
-            ))
+                continue
+            for kw in sorted(failed_keywords & set(doc.all_keywords)):
+                issues.append(VerificationIssue(
+                    gate="Obligation", severity="ERROR",
+                    file_path=doc.file_path, line=1,
+                    rule_code="OBLIG-JUDGE-FAILED",
+                    message=(f"LLM semantic audit reported FAIL for '{{{kw}}}', which this document "
+                             "cites, in the stored judge report.")
+                ))
         return issues
 
     @staticmethod

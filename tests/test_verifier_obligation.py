@@ -161,18 +161,46 @@ Text.
 
 
 def test_stored_judge_failure_is_surfaced(tmp_path):
+    """Real `judge` output is keyword-centric ({"item_label": "{Kw}", "status":
+    ...}), not the {"subgraph"|"item"|"target": ...} shape this check used to
+    look for -- against real output that mismatch meant `failed` was always
+    empty, so no FAIL verdict could ever surface here."""
     cfg, doc = _setup(tmp_path, """# Scheduler {VERIFY_LLM}
 ## 4.1 アルゴリズム
-Text.
+Text about {LowOverheadSwitch}.
 """)
     _write_risk_report(tmp_path, [], doc_hashes={doc.file_path: doc.content_hash})
     judge = tmp_path / "reports" / "doc_judge_report.json"
     judge.write_text(json.dumps([
-        {"subgraph": doc.file_path, "status": "FAIL"}
+        {"item_id": "item:LowOverheadSwitch", "item_label": "{LowOverheadSwitch}",
+         "status": "FAIL", "summary": "does not implement the mechanism", "issues": []},
+        {"subgraph": doc.file_path, "status": "PASS"},  # marks the doc as covered
     ]), encoding="utf-8")
 
     issues, _ = ObligationVerifier(cfg).verify([doc])
-    assert any(i.rule_code == "OBLIG-JUDGE-FAILED" for i in issues)
+    failed = [i for i in issues if i.rule_code == "OBLIG-JUDGE-FAILED"]
+    assert len(failed) == 1
+    assert "LowOverheadSwitch" in failed[0].message
+
+
+def test_stored_judge_failure_for_an_unrelated_keyword_is_not_surfaced(tmp_path):
+    """A FAIL verdict for a keyword this document never cites must not be
+    attributed to it -- the keyword-to-document link has to be real, not
+    'any FAIL anywhere in the report'."""
+    cfg, doc = _setup(tmp_path, """# Scheduler {VERIFY_LLM}
+## 4.1 アルゴリズム
+Text about {LowOverheadSwitch}.
+""")
+    _write_risk_report(tmp_path, [], doc_hashes={doc.file_path: doc.content_hash})
+    judge = tmp_path / "reports" / "doc_judge_report.json"
+    judge.write_text(json.dumps([
+        {"item_id": "item:SomeOtherKeyword", "item_label": "{SomeOtherKeyword}",
+         "status": "FAIL", "summary": "unrelated failure", "issues": []},
+        {"subgraph": doc.file_path, "status": "PASS"},
+    ]), encoding="utf-8")
+
+    issues, _ = ObligationVerifier(cfg).verify([doc])
+    assert [i for i in issues if i.rule_code == "OBLIG-JUDGE-FAILED"] == []
 
 
 def test_gate_can_be_disabled(tmp_path):
