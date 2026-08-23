@@ -118,13 +118,26 @@ class StaticVerifier:
 
         diagram_code = "\n".join(text for _, text in lines_with_no)
 
-        # Delegate parsing and validation directly to the mermaidx library
+        # Delegate parsing and validation directly to the mermaidx library.
+        # A missing/broken mermaidx must fail the gate, not silently skip
+        # every diagram: a diagram we cannot parse is a diagram we cannot
+        # vouch for, which is exactly the "sabotaged verification" failure
+        # mode this pipeline exists to catch.
         try:
             import mermaidx
+        except ImportError as e:
+            issues.append(VerificationIssue(
+                gate="Format", severity="ERROR", file_path=file_path, line=start_line,
+                rule_code="FMT-MERMAID-VALIDATOR-UNAVAILABLE",
+                message=f"mermaidx is not importable, so this Mermaid block cannot be "
+                        f"validated: {e}. Install mermaidx (see pyproject.toml) rather "
+                        f"than letting diagram syntax go unchecked."
+            ))
+            return issues
+
+        try:
             diag = mermaidx.Diagram(diagram_code)
             _ = diag.svg()
-        except ImportError:
-            pass
         except Exception as e:
             err_msg = str(e).strip()
             err_line = start_line

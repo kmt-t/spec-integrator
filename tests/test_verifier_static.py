@@ -1,3 +1,4 @@
+import sys
 import pytest
 from pathlib import Path
 from spec_integrator.config import Config, TierConfig, KeywordRule
@@ -97,6 +98,41 @@ graph TB
 
     rule_codes = [i.rule_code for i in issues]
     assert "FMT-INVALID-MERMAID" in rule_codes
+
+
+def test_static_verifier_fails_closed_when_mermaidx_is_unavailable(tmp_path, monkeypatch):
+    """A missing mermaidx must not silently wave every diagram through --
+    that would turn 'we validate Mermaid' into a claim nobody is checking.
+    """
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+
+    cfg = Config()
+    (docs_dir / "diagram_broken.md").write_text("""# Diagram Doc
+```mermaid
+graph TB
+    subgraph "Layer"
+        Node[Label (with parens unquoted)]
+    end
+    ExtraEnd
+    end
+```
+""", encoding="utf-8")
+
+    parser = MarkdownParser(cfg)
+    doc = parser.parse_file(docs_dir / "diagram_broken.md", docs_dir)
+    builder = DocGraphBuilder(cfg)
+    graph = builder.build([doc], docs_dir)
+
+    monkeypatch.setitem(sys.modules, "mermaidx", None)  # forces ImportError on `import mermaidx`
+
+    verifier = StaticVerifier(cfg)
+    issues = verifier.verify([doc], graph, docs_dir)
+
+    rule_codes = [i.rule_code for i in issues]
+    assert "FMT-MERMAID-VALIDATOR-UNAVAILABLE" in rule_codes
+    unavailable = [i for i in issues if i.rule_code == "FMT-MERMAID-VALIDATOR-UNAVAILABLE"][0]
+    assert unavailable.severity == "ERROR", "an unvalidatable diagram must fail the gate, not warn and pass"
 
 
 
