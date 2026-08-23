@@ -116,19 +116,9 @@ class StaticVerifier:
                 rule_code="FMT-EMPTY-MERMAID", message="Empty Mermaid diagram block."
             )]
 
-        header_line = non_empty[0][1]
-        first_word = header_line.split()[0] if header_line.split() else ""
-
-        # 1. Structural and Syntax Validation (Pure Python AST/Rules)
-        if first_word in ("graph", "flowchart"):
-            issues.extend(self._validate_mermaid_flowchart(file_path, start_line, lines_with_no))
-        elif first_word == "sequenceDiagram":
-            issues.extend(self._validate_mermaid_sequence(file_path, start_line, lines_with_no))
-        elif first_word in ("stateDiagram", "stateDiagram-v2"):
-            issues.extend(self._validate_mermaid_state(file_path, start_line, lines_with_no))
-
-        # 2. Engine render verification (if mermaidx is available)
         diagram_code = "\n".join(text for _, text in lines_with_no)
+
+        # Delegate parsing and validation directly to the mermaidx library
         try:
             import mermaidx
             diag = mermaidx.Diagram(diagram_code)
@@ -149,118 +139,7 @@ class StaticVerifier:
                 file_path=file_path,
                 line=err_line,
                 rule_code="FMT-INVALID-MERMAID",
-                message=f"Mermaid syntax error (mermaidx engine): {first_err_line}"
-            ))
-
-        return issues
-
-    def _validate_mermaid_flowchart(self, file_path: str, start_line: int, lines_with_no: list[tuple[int, str]]) -> list[VerificationIssue]:
-        issues = []
-        subgraph_stack: list[int] = []
-
-        for line_no, line in lines_with_no:
-            s = line.strip()
-            if not s or s.startswith("%%"):
-                continue
-
-            if s.startswith("subgraph"):
-                subgraph_stack.append(line_no)
-            elif s == "end" or s.startswith("end ") or s.startswith("end;"):
-                if not subgraph_stack:
-                    issues.append(VerificationIssue(
-                        gate="Format", severity="ERROR", file_path=file_path, line=line_no,
-                        rule_code="FMT-MERMAID-UNEXPECTED-END", message="Unexpected 'end' without matching 'subgraph'."
-                    ))
-                else:
-                    subgraph_stack.pop()
-
-            # Check for unquoted bracket node labels containing parentheses, braces, colons, or commas
-            # e.g., Node[Label (with parens)] -> invalid unless Node["Label (with parens)"]
-            for m in re.finditer(r'(\b[A-Za-z0-9_]+)\[([^"\]\n]*[(){}:,][^"\]\n]*)\]', s):
-                node_id = m.group(1)
-                inner = m.group(2)
-                if not inner.startswith('"'):
-                    issues.append(VerificationIssue(
-                        gate="Format", severity="ERROR", file_path=file_path, line=line_no,
-                        rule_code="FMT-MERMAID-UNQUOTED-LABEL",
-                        message=f"Unquoted special characters in node label '{node_id}[{inner}]'. Wrap label in double quotes: '{node_id}[\"{inner}\"]'."
-                    ))
-
-            # Check for broken bracket nesting like A[Text [nested] more]
-            if re.search(r'\[[^"\]\n]*\[[^"\]\n]*\]', s):
-                issues.append(VerificationIssue(
-                    gate="Format", severity="ERROR", file_path=file_path, line=line_no,
-                    rule_code="FMT-MERMAID-NESTED-BRACKETS", message=f"Malformed or nested brackets in node definition: '{s}'."
-                ))
-
-        if subgraph_stack:
-            issues.append(VerificationIssue(
-                gate="Format", severity="ERROR", file_path=file_path, line=subgraph_stack[-1],
-                rule_code="FMT-MERMAID-UNCLOSED-SUBGRAPH", message="Unclosed 'subgraph' (missing matching 'end')."
-            ))
-
-        return issues
-
-    def _validate_mermaid_sequence(self, file_path: str, start_line: int, lines_with_no: list[tuple[int, str]]) -> list[VerificationIssue]:
-        issues = []
-        block_stack: list[tuple[str, int]] = []
-
-        for line_no, line in lines_with_no:
-            s = line.strip()
-            if not s or s.startswith("%%") or s == "sequenceDiagram":
-                continue
-
-            first = s.split()[0] if s.split() else ""
-            if first in ("alt", "opt", "loop", "par", "critical", "rect", "group"):
-                block_stack.append((first, line_no))
-            elif first == "else":
-                if not block_stack or block_stack[-1][0] not in ("alt", "critical", "par"):
-                    issues.append(VerificationIssue(
-                        gate="Format", severity="ERROR", file_path=file_path, line=line_no,
-                        rule_code="FMT-MERMAID-UNMATCHED-ELSE", message="'else' without matching 'alt' or 'critical' block."
-                    ))
-            elif first == "end" or s == "end" or s.startswith("end;"):
-                if not block_stack:
-                    issues.append(VerificationIssue(
-                        gate="Format", severity="ERROR", file_path=file_path, line=line_no,
-                        rule_code="FMT-MERMAID-UNEXPECTED-END", message="Unexpected 'end' without matching sequence block (opt/alt/loop/rect/par)."
-                    ))
-                else:
-                    block_stack.pop()
-
-        for blk, blk_line in block_stack:
-            issues.append(VerificationIssue(
-                gate="Format", severity="ERROR", file_path=file_path, line=blk_line,
-                rule_code="FMT-MERMAID-UNCLOSED-BLOCK", message=f"Unclosed sequence block '{blk}' (missing matching 'end')."
-            ))
-
-        return issues
-
-    def _validate_mermaid_state(self, file_path: str, start_line: int, lines_with_no: list[tuple[int, str]]) -> list[VerificationIssue]:
-        issues = []
-        state_stack: list[int] = []
-
-        for line_no, line in lines_with_no:
-            s = line.strip()
-            if not s or s.startswith("%%") or s in ("stateDiagram", "stateDiagram-v2"):
-                continue
-
-            # Composite state: 'state StateName {'
-            if s.startswith("state ") and s.endswith("{"):
-                state_stack.append(line_no)
-            elif s == "}":
-                if not state_stack:
-                    issues.append(VerificationIssue(
-                        gate="Format", severity="ERROR", file_path=file_path, line=line_no,
-                        rule_code="FMT-MERMAID-UNEXPECTED-BRACE", message="Unexpected '}' without matching composite state definition."
-                    ))
-                else:
-                    state_stack.pop()
-
-        if state_stack:
-            issues.append(VerificationIssue(
-                gate="Format", severity="ERROR", file_path=file_path, line=state_stack[-1],
-                rule_code="FMT-MERMAID-UNCLOSED-STATE", message="Unclosed composite state definition (missing matching '}')."
+                message=f"Mermaid syntax error (mermaidx): {first_err_line}"
             ))
 
         return issues
