@@ -170,18 +170,16 @@ class WaiverRule:
 @dataclass
 class HeuristicConfig:
     """Configuration-driven keyword triggers and scope rules for independent risk assessment."""
-    formal_triggers: list[str] = field(default_factory=lambda: [
-        "rendezvous", "deadlock", "csp", "handoff",
-        "zero-copy", "ownership transfer", "w^x", "mpu", "consecutive_handoffs",
-        "access control matrix", "role_matrix", "page table walk"
-    ])
-    llm_triggers: list[str] = field(default_factory=lambda: [
-        "adr", "trade-off", "rationale", "design decision", "usecase", "ユースケース", "トレードオフ", "phase 1", "phase 2"
-    ])
+    # No hardcoded word lists here: `formal_triggers` / `llm_triggers` /
+    # `non_formal_path_patterns` are project-specific vocabulary, not tool
+    # behavior, so spec-integrator.yaml is their one and only source. A
+    # second copy baked into this dataclass would drift from the YAML the
+    # moment either one is edited without the other (as `llm_triggers` and
+    # `non_formal_path_patterns` already had, silently, until this fix).
+    formal_triggers: list[str] = field(default_factory=list)
+    llm_triggers: list[str] = field(default_factory=list)
     non_formal_tiers: list[int | str] = field(default_factory=lambda: [0, "meta"])
-    non_formal_path_patterns: list[str] = field(default_factory=lambda: [
-        r"plans/.*", r"architecture/.*", r"resource_budget\.md"
-    ])
+    non_formal_path_patterns: list[str] = field(default_factory=list)
     waivers: list[WaiverRule] = field(default_factory=list)
 
 

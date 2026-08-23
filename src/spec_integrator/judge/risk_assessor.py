@@ -119,6 +119,29 @@ class RiskAssessmentReport:
         return "\n".join(lines)
 
 
+_LATIN_TERM_RE = re.compile(r"^[a-z0-9][a-z0-9 _\-\^]*$")
+
+
+def _keyword_matches(term: str, text_lower: str) -> bool:
+    """True if `term` occurs in `text_lower` as a real word, not merely as a
+    substring of some unrelated longer token.
+
+    A plain `term in text` check lets a short trigger like "csp" fire inside
+    any word that happens to contain those three letters -- including a
+    section's OWN `{CSPCommunication}` keyword tag citation, which says
+    nothing about whether the prose actually discusses CSP semantics.
+    Latin/ASCII terms get a real `\\b`-style boundary check. CJK terms have
+    no whitespace word boundaries to anchor on without a real tokenizer, so
+    they fall back to substring matching -- this only tightens the terms
+    that can be tightened correctly.
+    """
+    t = term.lower()
+    if _LATIN_TERM_RE.match(t):
+        pattern = r"(?<![\w])" + re.escape(t).replace(r"\ ", r"\s+") + r"(?![\w])"
+        return re.search(pattern, text_lower) is not None
+    return t in text_lower
+
+
 class RiskAssessor:
     def __init__(self, config: Config):
         self.config = config
@@ -268,10 +291,11 @@ class RiskAssessor:
         # 3. Detect formal triggers configured in spec-integrator.yaml
         is_formal = False
         if not is_scope_excluded and not is_waived:
-            is_formal = any(t.lower() in text_lower or t.lower() in keywords_lower for t in h_cfg.formal_triggers)
+            is_formal = any(_keyword_matches(t, text_lower) or _keyword_matches(t, keywords_lower)
+                            for t in h_cfg.formal_triggers)
 
         # 4. Detect LLM triggers configured in spec-integrator.yaml
-        is_llm = any(t.lower() in text_lower for t in h_cfg.llm_triggers)
+        is_llm = any(_keyword_matches(t, text_lower) for t in h_cfg.llm_triggers)
 
         risk_factors = []
         if is_formal:
