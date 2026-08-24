@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from spec_integrator.config import Config, RiskAssessmentConfig, HeuristicConfig
+from spec_integrator.config import Config, RiskAssessmentConfig, HeuristicConfig, WaiverRule
 from spec_integrator.parser import ParsedDocument, ParsedSection
 from spec_integrator.judge.risk_assessor import (
     RiskAssessor, SectionRiskAssessment, RiskAssessmentReport, _keyword_matches,
@@ -117,3 +117,49 @@ def test_call_heuristic_does_not_flag_formal_from_a_bare_tag_citation():
     verdict = json.loads(assessor._call_heuristic(doc, sec))
     assert verdict["recommended_verification"] != "pyModelChecking", \
         "citing {CSPCommunication} as a tag must not alone trigger formal verification"
+
+
+def test_waived_section_is_not_flagged_as_an_llm_candidate_either():
+    """A section explicitly waived from verification must be exempt from
+    BOTH formal_triggers and llm_triggers -- the waiver check originally
+    only guarded the formal branch, so a waived section carrying an
+    llm_trigger word (e.g. "rationale") was still recommended for
+    LLM_Judge despite the waiver saying it needs no verification at all."""
+    cfg = Config()
+    cfg.risk_assessment = RiskAssessmentConfig(
+        heuristic=HeuristicConfig(
+            formal_triggers=[],
+            llm_triggers=["rationale"],
+            waivers=[WaiverRule(
+                section_pattern=r"components/tier1_core/os_coos\.md",
+                heading_pattern=r"^概要$",
+                rationale="declarative table, no design tradeoff to audit",
+                authorized_at="2026-08-24",
+            )],
+        )
+    )
+    assessor = RiskAssessor(cfg)
+
+    doc = ParsedDocument(
+        file_path="components/tier1_core/os_coos.md",
+        full_path=Path("components/tier1_core/os_coos.md"),
+        tier=1,
+        component="os_coos",
+        content="",
+        content_hash="deadbeef",
+    )
+    sec = ParsedSection(
+        section_id="sec:os_coos.md#概要",
+        file_path=doc.file_path,
+        heading="概要",
+        level=2,
+        line_start=1,
+        line_end=5,
+        body_text="The rationale for this table is purely declarative.",
+        keywords=[],
+    )
+
+    import json
+    verdict = json.loads(assessor._call_heuristic(doc, sec))
+    assert verdict["recommended_verification"] == "Static", \
+        "a waived section must not be recommended for LLM_Judge just because it contains a trigger word"
