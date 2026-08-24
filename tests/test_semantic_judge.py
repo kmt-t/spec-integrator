@@ -146,3 +146,112 @@ def test_persistent_failure_exhausts_retries_and_reports_it(monkeypatch):
     assert calls["n"] == 3, "must attempt exactly 3 times, not loop forever or give up early"
     assert res.status == "FAIL"
     assert "3 attempts" in res.summary
+
+
+def _two_keyword_fixture():
+    """Two independent requirement/design pairs sharing one document set,
+    so a section-level change filter can be exercised without a real corpus."""
+    documents = [
+        ParsedDocument(
+            file_path="requires/requirement_list.md", full_path=None, tier=0,
+            component="requires", content_hash="req-h",
+            content="# Requirements\n## A\nDefines A.\n## B\nDefines B.",
+            sections=[
+                ParsedSection(section_id="sec:requires/requirement_list.md#A",
+                              file_path="requires/requirement_list.md", heading="A",
+                              level=2, line_start=2, line_end=3,
+                              body_text="Defines A.", keywords=["A"]),
+                ParsedSection(section_id="sec:requires/requirement_list.md#B",
+                              file_path="requires/requirement_list.md", heading="B",
+                              level=2, line_start=4, line_end=5,
+                              body_text="Defines B.", keywords=["B"]),
+            ],
+            all_keywords=["A", "B"],
+        ),
+        ParsedDocument(
+            file_path="components/design.md", full_path=None, tier=1,
+            component="design", content_hash="design-h",
+            content="# Design\n## UseA\nUses {A}.\n## UseB\nUses {B}.",
+            sections=[
+                ParsedSection(section_id="sec:components/design.md#UseA",
+                              file_path="components/design.md", heading="UseA",
+                              level=2, line_start=2, line_end=3,
+                              body_text="Uses {A}.", keywords=["A"]),
+                ParsedSection(section_id="sec:components/design.md#UseB",
+                              file_path="components/design.md", heading="UseB",
+                              level=2, line_start=4, line_end=5,
+                              body_text="Uses {B}.", keywords=["B"]),
+            ],
+            all_keywords=["A", "B"],
+        ),
+    ]
+    subgraphs = [
+        {"item_id": "req:A", "item_label": "A",
+         "defined_in": ["sec:requires/requirement_list.md#A"],
+         "referenced_in": ["sec:components/design.md#UseA"]},
+        {"item_id": "req:B", "item_label": "B",
+         "defined_in": ["sec:requires/requirement_list.md#B"],
+         "referenced_in": ["sec:components/design.md#UseB"]},
+    ]
+    return subgraphs, documents
+
+
+def test_changed_sections_scopes_to_touched_subgraphs_only():
+    """Only the keyword whose definition or reference section is in the
+    changed set should be audited -- the point of --changed-only is to avoid
+    re-running the untouched half of the corpus."""
+    config = Config()
+    judge = SemanticJudge(config)
+    subgraphs, documents = _two_keyword_fixture()
+
+    # Only B's referencing section changed; A's pair is untouched.
+    report = judge.judge_subgraphs(
+        subgraphs, documents, backend="mock", exhaustive=True,
+        changed_sections={"sec:components/design.md#UseB"},
+    )
+
+    assert report.total_evaluated == 1
+    assert report.results[0].item_label == "B"
+
+
+def test_changed_sections_none_audits_everything():
+    """Passing no filter (the default) must not change existing behaviour --
+    changed_sections=None means 'no scoping', not 'scope to nothing'."""
+    config = Config()
+    judge = SemanticJudge(config)
+    subgraphs, documents = _two_keyword_fixture()
+
+    report = judge.judge_subgraphs(subgraphs, documents, backend="mock", exhaustive=True)
+
+    assert report.total_evaluated == 2
+
+
+def test_changed_sections_empty_set_audits_nothing():
+    """An empty (but non-None) changed set means nothing changed -- distinct
+    from None, which must not be conflated with 'nothing selected'."""
+    config = Config()
+    judge = SemanticJudge(config)
+    subgraphs, documents = _two_keyword_fixture()
+
+    report = judge.judge_subgraphs(
+        subgraphs, documents, backend="mock", exhaustive=True, changed_sections=set(),
+    )
+
+    assert report.total_evaluated == 0
+
+
+def test_changed_definition_side_also_selects_the_subgraph():
+    """The filter must not silently assume only the reference side moves --
+    a keyword's own definition changing must select it too, since which side
+    changed is exactly the distinction --changed-only exists to not require."""
+    config = Config()
+    judge = SemanticJudge(config)
+    subgraphs, documents = _two_keyword_fixture()
+
+    report = judge.judge_subgraphs(
+        subgraphs, documents, backend="mock", exhaustive=True,
+        changed_sections={"sec:requires/requirement_list.md#A"},
+    )
+
+    assert report.total_evaluated == 1
+    assert report.results[0].item_label == "A"

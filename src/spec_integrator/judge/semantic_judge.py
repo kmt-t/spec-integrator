@@ -161,7 +161,8 @@ class SemanticJudge:
                          backend: str | None = None, model: str | None = None,
                          max_subgraphs: int = 10,
                          exhaustive: bool = False,
-                         min_references: int = 1) -> JudgeReport:
+                         min_references: int = 1,
+                         changed_sections: set[str] | None = None) -> JudgeReport:
         report = JudgeReport()
         selected_backend = backend or self.config.llm_judge.default_backend
 
@@ -188,6 +189,20 @@ class SemanticJudge:
                 target_subgraphs = tagged_subgraphs
             else:
                 target_subgraphs = [sg for sg in subgraphs if len(sg.get("referenced_in", [])) >= min_references]
+
+        # A definition and its referencing sections are audited together as one
+        # subgraph regardless of which side actually moved -- there is no need
+        # to work out whether it was the definition or a reference that changed
+        # (or classify the edit as significant) before deciding to re-check.
+        # Whether the change matters is exactly the question the LLM answers;
+        # a section that changed in a way that doesn't matter just comes back
+        # PASS. This also covers definitions with no {VERIFY_LLM} tag of their
+        # own, since selection here is driven by what changed, not by tags.
+        if changed_sections is not None:
+            target_subgraphs = [
+                sg for sg in target_subgraphs
+                if (set(sg.get("defined_in", [])) | set(sg.get("referenced_in", []))) & changed_sections
+            ]
 
         # Apply max_subgraphs limit if > 0
         if max_subgraphs > 0:

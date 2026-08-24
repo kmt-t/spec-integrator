@@ -325,14 +325,40 @@ def cmd_judge(args):
     subgraphs = graph.extract_item_subgraphs()
     judge = SemanticJudge(config)
 
+    changed_sections = None
+    if args.changed_only:
+        from spec_integrator.verifier.consistency import ConsistencyVerifier
+        cv = ConsistencyVerifier(config)
+        if args.baseline:
+            lock_path = Path(args.baseline)
+            baseline_label = str(lock_path)
+        else:
+            lock_path = config.resolve_path(config.consistency.lockfile)
+            baseline_label = str(lock_path)
+        baseline = cv._load_lock(lock_path)
+        if baseline is None:
+            print(f"❌ --changed-only requires a consistency baseline. "
+                  f"Run 'spec-integrator sync' first to create {lock_path}, "
+                  f"or pass --baseline pointing at one.")
+            db.close()
+            sys.exit(2)
+        old_secs = baseline.get("sections", {})
+        current = cv.build_baseline(documents)
+        new_secs = current["sections"]
+        # A section with no prior hash is new; either way it differs from
+        # whatever the baseline recorded (or didn't).
+        changed_sections = {sid for sid, h in new_secs.items() if old_secs.get(sid) != h}
+        print(f"  ({len(changed_sections)} section(s) changed vs. {baseline_label})")
+
     print(f"Running LLM as a Judge on candidate subgraphs (backend: {args.backend or config.llm_judge.default_backend})...")
     report = judge.judge_subgraphs(
         subgraphs, documents,
         backend=args.backend,
         model=args.model,
         max_subgraphs=args.max_subgraphs,
-        exhaustive=args.exhaustive,
+        exhaustive=args.exhaustive or args.changed_only,
         min_references=args.min_references,
+        changed_sections=changed_sections,
     )
 
     db.close()
@@ -474,6 +500,18 @@ def main():
                          help="Exhaustive audit: check all requirement subgraphs regardless of {VERIFY_LLM} tag")
     p_judge.add_argument("--min-references", type=int, default=1,
                          help="Minimum referencing sections required to include a subgraph (default: 1, 0 for all)")
+    p_judge.add_argument("--changed-only", action="store_true",
+                         help="Only audit subgraphs touching a section that changed since the last "
+                              "'spec-integrator sync' (per spec-consistency.lock). Cheap enough to run "
+                              "on every edit; catches drift regardless of which side of a definition/"
+                              "reference pair moved, and regardless of {VERIFY_LLM} tagging.")
+    p_judge.add_argument("--baseline", metavar="LOCKFILE",
+                         help="Lockfile to diff against for --changed-only, instead of the live "
+                              "spec-consistency.lock. In CI the working-tree lockfile has already "
+                              "absorbed this PR's own edits (authors run 'sync' before committing), so "
+                              "comparing against it finds nothing changed. Pass a checkout of the base "
+                              "branch's lockfile here instead, e.g. "
+                              "'git show origin/main:spec-consistency.lock > /tmp/base.lock'.")
     p_judge.add_argument("-o", "--out", default="judge_report.json", help="Output JSON path")
     p_judge.add_argument("-r", "--report", default="reports/doc_judge_report.md", help="Markdown report output path")
     p_judge.set_defaults(func=cmd_judge)
