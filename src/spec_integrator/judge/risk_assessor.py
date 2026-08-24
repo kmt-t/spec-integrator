@@ -295,7 +295,9 @@ class RiskAssessor:
                             for t in h_cfg.formal_triggers)
 
         # 4. Detect LLM triggers configured in spec-integrator.yaml
-        is_llm = any(_keyword_matches(t, text_lower) for t in h_cfg.llm_triggers)
+        is_llm = False
+        if not is_waived:
+            is_llm = any(_keyword_matches(t, text_lower) for t in h_cfg.llm_triggers)
 
         risk_factors = []
         if is_formal:
