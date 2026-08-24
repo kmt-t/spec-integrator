@@ -75,6 +75,10 @@ class JudgeResult:
     status: str  # "PASS", "WARN", "FAIL", "SKIPPED"
     summary: str
     issues: list[dict] = field(default_factory=list)
+    # Documents this verdict was formed over. Recorded explicitly because a
+    # clean document contributes no issue text, so its path would otherwise
+    # never appear in the report and would read as never audited.
+    covered_files: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -213,9 +217,21 @@ class SemanticJudge:
         report.total_evaluated = len(report.results)
         return report
 
+    @staticmethod
+    def _covered_files(sg: dict) -> list[str]:
+        """File paths the subgraph draws its sections from."""
+        files: set[str] = set()
+        for sec_id in list(sg.get("defined_in", [])) + list(sg.get("referenced_in", [])):
+            path = str(sec_id)
+            if path.startswith("sec:"):
+                path = path[4:]
+            files.add(path.split("#", 1)[0])
+        return sorted(files)
+
     def _evaluate_single_subgraph(self, sg: dict, documents: list[ParsedDocument],
                                   backend: str, model: str | None) -> JudgeResult:
         item_label = sg["item_label"]
+        covered = self._covered_files(sg)
         
         def_texts = []
         for sec_id in sg["defined_in"]:
@@ -240,7 +256,8 @@ class SemanticJudge:
                     item_label=item_label,
                     status="PASS",
                     summary="Mock evaluation passed.",
-                    issues=[]
+                    issues=[],
+                    covered_files=covered,
                 )
             elif backend == "sakura":
                 raw_resp = self._call_sakura(prompt, model)
@@ -252,7 +269,8 @@ class SemanticJudge:
                     item_label=item_label,
                     status="SKIPPED",
                     summary=f"Unknown backend '{backend}'.",
-                    issues=[]
+                    issues=[],
+                    covered_files=covered,
                 )
 
             # Parse JSON from response
@@ -281,7 +299,8 @@ class SemanticJudge:
                 item_label=item_label,
                 status=status,
                 summary=parsed.get("summary", ""),
-                issues=issues
+                issues=issues,
+                covered_files=covered,
             )
         except Exception as e:
             return JudgeResult(
@@ -289,7 +308,8 @@ class SemanticJudge:
                 item_label=item_label,
                 status="FAIL",
                 summary=f"Judge error: {e}",
-                issues=[{"severity": "ERROR", "location": item_label, "description": str(e)}]
+                issues=[{"severity": "ERROR", "location": item_label, "description": str(e)}],
+                covered_files=covered,
             )
 
     def _retrieve_section_content(self, sec_id: str, documents: list[ParsedDocument]) -> str:

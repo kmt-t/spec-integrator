@@ -153,7 +153,8 @@ Text.
     _write_risk_report(tmp_path, [], doc_hashes={doc.file_path: doc.content_hash})
     judge = tmp_path / "reports" / "doc_judge_report.json"
     judge.write_text(json.dumps({
-        "results": [{"subgraph": doc.file_path, "status": "PASS"}],
+        "results": [{"subgraph": doc.file_path, "status": "PASS",
+                     "covered_files": [doc.file_path]}],
         "doc_hashes": {doc.file_path: doc.content_hash},
     }), encoding="utf-8")
 
@@ -175,8 +176,8 @@ Text about {LowOverheadSwitch}.
     judge.write_text(json.dumps({
         "results": [
             {"item_id": "item:LowOverheadSwitch", "item_label": "{LowOverheadSwitch}",
-             "status": "FAIL", "summary": "does not implement the mechanism", "issues": []},
-            {"subgraph": doc.file_path, "status": "PASS"},  # marks the doc as covered
+             "status": "FAIL", "summary": "does not implement the mechanism", "issues": [],
+             "covered_files": [doc.file_path]},
         ],
         "doc_hashes": {doc.file_path: doc.content_hash},
     }), encoding="utf-8")
@@ -200,8 +201,8 @@ Text about {LowOverheadSwitch}.
     judge.write_text(json.dumps({
         "results": [
             {"item_id": "item:SomeOtherKeyword", "item_label": "{SomeOtherKeyword}",
-             "status": "FAIL", "summary": "unrelated failure", "issues": []},
-            {"subgraph": doc.file_path, "status": "PASS"},
+             "status": "FAIL", "summary": "unrelated failure", "issues": [],
+             "covered_files": [doc.file_path]},
         ],
         "doc_hashes": {doc.file_path: doc.content_hash},
     }), encoding="utf-8")
@@ -337,3 +338,59 @@ Text.
     issues, _ = ObligationVerifier(cfg).verify([doc])
     assert [i for i in issues if i.rule_code == "OBLIG-JUDGE-UNANCHORED"], \
         "an unanchored verdict must be rejected, not silently accepted"
+
+
+def test_a_cleanly_passing_document_counts_as_audited(tmp_path):
+    """Coverage used to be inferred by finding the document's path somewhere in
+    the report text, which only happens when an issue's `location` names it. A
+    document that passed with no issues contributed no such text and was
+    reported as never audited -- indistinguishable from a real gap."""
+    cfg, doc = _setup(tmp_path, """# Scheduler {VERIFY_LLM}
+## 4.1 アルゴリズム
+Text.
+""")
+    _write_risk_report(tmp_path, [], doc_hashes={doc.file_path: doc.content_hash})
+    judge = tmp_path / "reports" / "doc_judge_report.json"
+    judge.write_text(json.dumps({
+        # A clean verdict: no issues, and nothing naming the file except the
+        # explicit coverage record.
+        "results": [{
+            "item_id": "item:LowOverheadSwitch",
+            "item_label": "{LowOverheadSwitch}",
+            "status": "PASS",
+            "summary": "Consistent.",
+            "issues": [],
+            "covered_files": [doc.file_path],
+        }],
+        "doc_hashes": {doc.file_path: doc.content_hash},
+    }), encoding="utf-8")
+
+    issues, _ = ObligationVerifier(cfg).verify([doc])
+    assert [i for i in issues if i.rule_code == "OBLIG-JUDGE-SKIPPED"] == [], \
+        "a document the judge actually covered must not be reported as skipped"
+
+
+def test_a_document_merely_named_in_someone_elses_issue_is_not_audited(tmp_path):
+    """Substring matching over-counted as well as under-counted: a document named
+    inside an unrelated keyword's issue prose read as covered. Coverage has to
+    come from what the judge was actually given, not from who got mentioned."""
+    cfg, doc = _setup(tmp_path, """# Scheduler {VERIFY_LLM}
+## 4.1 アルゴリズム
+Text.
+""")
+    _write_risk_report(tmp_path, [], doc_hashes={doc.file_path: doc.content_hash})
+    judge = tmp_path / "reports" / "doc_judge_report.json"
+    judge.write_text(json.dumps({
+        "results": [{
+            "item_id": "item:Other", "item_label": "{Other}", "status": "WARN",
+            "summary": "Unrelated finding.",
+            # The document is named here, but was never part of this subgraph.
+            "issues": [{"severity": "WARNING", "location": "components/tier1_interface/ipc_router.md",
+                        "description": f"contrast with {doc.file_path} which does it differently"}],
+            "covered_files": ["components/tier1_interface/ipc_router.md"],
+        }],
+        "doc_hashes": {doc.file_path: doc.content_hash},
+    }), encoding="utf-8")
+
+    issues, _ = ObligationVerifier(cfg).verify([doc])
+    assert [i for i in issues if i.rule_code == "OBLIG-JUDGE-SKIPPED"],         "being mentioned in another keyword's finding is not being audited"

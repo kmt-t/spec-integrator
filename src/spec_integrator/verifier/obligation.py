@@ -216,7 +216,6 @@ class ObligationVerifier:
             )]
 
         entries = payload if isinstance(payload, list) else payload.get("results", [])
-        judged_blob = json.dumps(entries, ensure_ascii=False)
 
         issues: list[VerificationIssue] = []
 
@@ -259,8 +258,18 @@ class ObligationVerifier:
             for e in entries if isinstance(e, dict) and e.get("status") == "FAIL"
         }
 
+        # Coverage used to be inferred by looking for the document's path anywhere
+        # in the report text. That was wrong in both directions: a document that
+        # passed cleanly contributed no issue text and read as never audited, while
+        # a document merely named inside some other keyword's issue prose read as
+        # audited. Verdicts now record the files they were actually formed over.
+        covered: set[str] = set()
+        for e in entries:
+            if isinstance(e, dict):
+                covered.update(e.get("covered_files", []) or [])
+
         for doc in tagged:
-            if doc.file_path not in judged_blob:
+            if doc.file_path not in covered:
                 summary.judge_missing.append(doc.file_path)
                 issues.append(VerificationIssue(
                     gate="Obligation", severity="ERROR",
