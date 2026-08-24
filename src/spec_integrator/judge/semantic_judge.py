@@ -249,68 +249,78 @@ class SemanticJudge:
             referencing_texts="\n\n".join(ref_texts) if ref_texts else "(No referencing sections)"
         )
 
-        try:
-            if backend == "mock":
-                return JudgeResult(
-                    item_id=sg["item_id"],
-                    item_label=item_label,
-                    status="PASS",
-                    summary="Mock evaluation passed.",
-                    issues=[],
-                    covered_files=covered,
-                )
-            elif backend == "sakura":
-                raw_resp = self._call_sakura(prompt, model)
-            elif backend == "ollama":
-                raw_resp = self._call_ollama(prompt, model)
-            else:
-                return JudgeResult(
-                    item_id=sg["item_id"],
-                    item_label=item_label,
-                    status="SKIPPED",
-                    summary=f"Unknown backend '{backend}'.",
-                    issues=[],
-                    covered_files=covered,
-                )
-
-            # Parse JSON from response
-            parsed = self._extract_json(raw_resp)
-            issues = parsed.get("issues", []) or []
-
-            # A verdict the model did not state is not a pass. Defaulting a missing
-            # status to PASS makes a truncated or off-format response indistinguishable
-            # from a clean audit — the gate would fail open.
-            status = parsed.get("status")
-            if not status:
-                status = "FAIL"
-                issues = list(issues) + [{
-                    "severity": "ERROR", "location": item_label,
-                    "description": "Judge response contained no 'status' field; "
-                                   "verdict cannot be established."
-                }]
-            # An audit that lists blocking issues has not passed, whatever it says.
-            elif status == "PASS" and any(
-                    str(i.get("severity", "")).upper() == "ERROR"
-                    for i in issues if isinstance(i, dict)):
-                status = "FAIL"
-
+        if backend == "mock":
             return JudgeResult(
                 item_id=sg["item_id"],
                 item_label=item_label,
-                status=status,
-                summary=parsed.get("summary", ""),
-                issues=issues,
+                status="PASS",
+                summary="Mock evaluation passed.",
+                issues=[],
                 covered_files=covered,
             )
-        except Exception as e:
+        if backend not in ("sakura", "ollama"):
+            return JudgeResult(
+                item_id=sg["item_id"],
+                item_label=item_label,
+                status="SKIPPED",
+                summary=f"Unknown backend '{backend}'.",
+                issues=[],
+                covered_files=covered,
+            )
+
+        # _call_sakura already retries transport-level failures (non-200, timeout,
+        # connection errors) internally. What it cannot catch is a 200 response
+        # whose body is empty or not the JSON shape we asked for -- an LLM backend
+        # under load returns those too, and unlike a transport error they surface
+        # here as a parse failure, one call too late for that retry loop. Without
+        # a second layer here, a single flaky response turns "no contradiction"
+        # into "cannot verify", indistinguishable from a real content problem.
+        import time
+        last_err: Exception | None = None
+        parsed: dict | None = None
+        for attempt in range(3):
+            try:
+                if backend == "sakura":
+                    raw_resp = self._call_sakura(prompt, model)
+                else:
+                    raw_resp = self._call_ollama(prompt, model)
+                candidate = self._extract_json(raw_resp)
+                if not candidate.get("status"):
+                    raise ValueError("response JSON has no 'status' field")
+                parsed = candidate
+                break
+            except Exception as e:
+                last_err = e
+                if attempt < 2:
+                    time.sleep(2)
+
+        if parsed is None:
             return JudgeResult(
                 item_id=sg["item_id"],
                 item_label=item_label,
                 status="FAIL",
-                summary=f"Judge error: {e}",
-                issues=[{"severity": "ERROR", "location": item_label, "description": str(e)}],
+                summary=f"Judge error after 3 attempts: {last_err}",
+                issues=[{"severity": "ERROR", "location": item_label,
+                        "description": f"No usable verdict after 3 attempts: {last_err}"}],
                 covered_files=covered,
             )
+
+        issues = parsed.get("issues", []) or []
+        status = parsed["status"]
+        # An audit that lists blocking issues has not passed, whatever it says.
+        if status == "PASS" and any(
+                str(i.get("severity", "")).upper() == "ERROR"
+                for i in issues if isinstance(i, dict)):
+            status = "FAIL"
+
+        return JudgeResult(
+            item_id=sg["item_id"],
+            item_label=item_label,
+            status=status,
+            summary=parsed.get("summary", ""),
+            issues=issues,
+            covered_files=covered,
+        )
 
     def _retrieve_section_content(self, sec_id: str, documents: list[ParsedDocument]) -> str:
         doc, sec = self._find_doc_and_sec(sec_id, documents)

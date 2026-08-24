@@ -96,3 +96,53 @@ def test_pass_with_error_issues_is_downgraded():
 def test_clean_pass_is_preserved():
     res = _judge_with('{"status": "PASS", "summary": "ok", "issues": []}')
     assert res.status == "PASS"
+
+
+def test_transient_empty_response_is_retried_and_recovers(monkeypatch):
+    """_call_sakura already retries transport failures (non-200, timeout). What
+    it cannot catch is a 200 response whose body is empty or malformed -- that
+    surfaces one layer up, as a JSON parse failure here. A single flaky response
+    from a backend under load must not turn a real audit into 'cannot verify'."""
+    from spec_integrator.judge.semantic_judge import SemanticJudge
+    from spec_integrator.config import Config
+
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    judge = SemanticJudge(Config())
+    calls = {"n": 0}
+
+    def flaky(prompt, model):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ""  # empty body: json.loads("") -> "Expecting value" parse error
+        return '{"status": "PASS", "summary": "ok on retry", "issues": []}'
+
+    judge._call_sakura = flaky
+    sg = {"item_id": "item:{K}", "item_label": "{K}", "defined_in": [], "referenced_in": []}
+    res = judge._evaluate_single_subgraph(sg, [], backend="sakura", model=None)
+
+    assert calls["n"] == 2, "must retry after the empty response rather than giving up immediately"
+    assert res.status == "PASS"
+    assert res.summary == "ok on retry"
+
+
+def test_persistent_failure_exhausts_retries_and_reports_it(monkeypatch):
+    """After genuinely repeated failures the gate must still fail closed -- and
+    say how many attempts it made, not just repeat the last raw parse error."""
+    from spec_integrator.judge.semantic_judge import SemanticJudge
+    from spec_integrator.config import Config
+
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    judge = SemanticJudge(Config())
+    calls = {"n": 0}
+
+    def always_empty(prompt, model):
+        calls["n"] += 1
+        return ""
+
+    judge._call_sakura = always_empty
+    sg = {"item_id": "item:{K}", "item_label": "{K}", "defined_in": [], "referenced_in": []}
+    res = judge._evaluate_single_subgraph(sg, [], backend="sakura", model=None)
+
+    assert calls["n"] == 3, "must attempt exactly 3 times, not loop forever or give up early"
+    assert res.status == "FAIL"
+    assert "3 attempts" in res.summary
