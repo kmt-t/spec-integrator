@@ -26,9 +26,29 @@ Target Keyword/Requirement ID: {item_label}
 {referencing_texts}
 
 === EVALUATION CRITERIA ===
-1. Consistency: Are there any contradictions, mismatched parameters, conflicting assumptions, or outdated invariants between the definition and referencing designs?
-2. Completeness: Do referencing sections fulfill or follow the rules specified in the definition?
-3. Clarity: Are there any ambiguous or unspecified requirements left unresolved?
+1. Vertical consistency: Are there contradictions, mismatched parameters, conflicting
+   assumptions, or outdated invariants between the DEFINITION and each referencing design?
+2. Horizontal consistency: Compare the referencing sections AGAINST EACH OTHER, pairwise.
+   Two sections may each be compatible with the definition while contradicting one another,
+   because the definition is usually more abstract than either. This is the most common way
+   a specification rots: one document is updated and its counterpart is not. Report a
+   contradiction here even when every section conforms to the definition. Look specifically
+   for the same mechanism being described with different register assignments, different
+   buffer or bank counts, different state names, different call signatures, different
+   ordering guarantees, or one section claiming an operation is free while another describes
+   work it performs.
+3. Numeric agreement: Check the actual arithmetic. Where sections state sizes, counts,
+   budgets or totals, verify that component values sum to the stated totals and that the
+   same named quantity holds the same value everywhere. Do not treat a number as correct
+   merely because the definition also states it — if a total does not equal the sum of its
+   parts, that is an ERROR, and if two sections give different values for one quantity, say
+   which sections disagree.
+4. Completeness: Do referencing sections fulfill or follow the rules specified in the definition?
+5. Clarity: Are there any ambiguous or unspecified requirements left unresolved?
+
+Judge what the text actually says, not what it evidently intends. Restating a section's
+claim back as confirmation is not an audit. If the sections agree, say so briefly; do not
+manufacture issues. Cite the specific section names on both sides of any contradiction.
 
 === OUTPUT FORMAT ===
 Respond ONLY with a valid JSON object in English in the following format:
@@ -275,10 +295,25 @@ class SemanticJudge:
     def _retrieve_section_content(self, sec_id: str, documents: list[ParsedDocument]) -> str:
         doc, sec = self._find_doc_and_sec(sec_id, documents)
         if sec:
-            return sec.body_text[:2500]
+            return self._budgeted(sec.body_text)
         elif doc:
-            return doc.raw_content[:2500]
+            return self._budgeted(doc.raw_content)
         return ""
+
+    def _budgeted(self, text: str) -> str:
+        """Applies the per-section character budget, marking any cut explicitly.
+
+        Silent truncation lets the judge report 'no contradiction found' about
+        text it was never shown, which reads identically to a real pass.
+        """
+        limit = self.config.llm_judge.section_char_budget
+        if limit <= 0 or len(text) <= limit:
+            return text
+        omitted = len(text) - limit
+        return (text[:limit] +
+                f"\n\n[TRUNCATED: {omitted} further characters of this section were not shown. "
+                "Do not conclude that this section is consistent with the others on the basis "
+                "of the portion above; report the truncation as a limitation instead.]")
 
     def _find_doc_and_sec(self, sec_id: str, documents: list[ParsedDocument]
                           ) -> tuple[ParsedDocument | None, any]:

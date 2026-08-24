@@ -152,9 +152,10 @@ Text.
 """)
     _write_risk_report(tmp_path, [], doc_hashes={doc.file_path: doc.content_hash})
     judge = tmp_path / "reports" / "doc_judge_report.json"
-    judge.write_text(json.dumps([
-        {"subgraph": doc.file_path, "status": "PASS"}
-    ]), encoding="utf-8")
+    judge.write_text(json.dumps({
+        "results": [{"subgraph": doc.file_path, "status": "PASS"}],
+        "doc_hashes": {doc.file_path: doc.content_hash},
+    }), encoding="utf-8")
 
     issues, _ = ObligationVerifier(cfg).verify([doc])
     assert [i for i in issues if i.rule_code.startswith("OBLIG-JUDGE")] == []
@@ -171,11 +172,14 @@ Text about {LowOverheadSwitch}.
 """)
     _write_risk_report(tmp_path, [], doc_hashes={doc.file_path: doc.content_hash})
     judge = tmp_path / "reports" / "doc_judge_report.json"
-    judge.write_text(json.dumps([
-        {"item_id": "item:LowOverheadSwitch", "item_label": "{LowOverheadSwitch}",
-         "status": "FAIL", "summary": "does not implement the mechanism", "issues": []},
-        {"subgraph": doc.file_path, "status": "PASS"},  # marks the doc as covered
-    ]), encoding="utf-8")
+    judge.write_text(json.dumps({
+        "results": [
+            {"item_id": "item:LowOverheadSwitch", "item_label": "{LowOverheadSwitch}",
+             "status": "FAIL", "summary": "does not implement the mechanism", "issues": []},
+            {"subgraph": doc.file_path, "status": "PASS"},  # marks the doc as covered
+        ],
+        "doc_hashes": {doc.file_path: doc.content_hash},
+    }), encoding="utf-8")
 
     issues, _ = ObligationVerifier(cfg).verify([doc])
     failed = [i for i in issues if i.rule_code == "OBLIG-JUDGE-FAILED"]
@@ -193,11 +197,14 @@ Text about {LowOverheadSwitch}.
 """)
     _write_risk_report(tmp_path, [], doc_hashes={doc.file_path: doc.content_hash})
     judge = tmp_path / "reports" / "doc_judge_report.json"
-    judge.write_text(json.dumps([
-        {"item_id": "item:SomeOtherKeyword", "item_label": "{SomeOtherKeyword}",
-         "status": "FAIL", "summary": "unrelated failure", "issues": []},
-        {"subgraph": doc.file_path, "status": "PASS"},
-    ]), encoding="utf-8")
+    judge.write_text(json.dumps({
+        "results": [
+            {"item_id": "item:SomeOtherKeyword", "item_label": "{SomeOtherKeyword}",
+             "status": "FAIL", "summary": "unrelated failure", "issues": []},
+            {"subgraph": doc.file_path, "status": "PASS"},
+        ],
+        "doc_hashes": {doc.file_path: doc.content_hash},
+    }), encoding="utf-8")
 
     issues, _ = ObligationVerifier(cfg).verify([doc])
     assert [i for i in issues if i.rule_code == "OBLIG-JUDGE-FAILED"] == []
@@ -286,3 +293,47 @@ def test_assessment_without_recorded_backend_is_rejected(tmp_path):
 
     issues, _ = ObligationVerifier(cfg).verify([doc])
     assert any(i.rule_code == "OBLIG-ASSESSMENT-PROVENANCE-UNKNOWN" for i in issues)
+
+
+def test_judge_verdict_on_an_edited_document_is_rejected_as_stale(tmp_path):
+    """The judge report is evidence about a specific text. Once the document
+    moves on, the stored verdict describes something that no longer exists.
+
+    This is not hypothetical: the fireball judge report passed
+    '{ContextPointerRegister}' with a summary asserting the context pointer
+    lived in R7, four commits after R7 had been removed from the specification.
+    Nothing detected it, because the report carried no hashes at all."""
+    cfg, doc = _setup(tmp_path, """# Scheduler {VERIFY_LLM}
+## 4.1 アルゴリズム
+Text about {LowOverheadSwitch}.
+""")
+    _write_risk_report(tmp_path, [], doc_hashes={doc.file_path: doc.content_hash})
+    judge = tmp_path / "reports" / "doc_judge_report.json"
+    judge.write_text(json.dumps({
+        "results": [{"subgraph": doc.file_path, "status": "PASS"}],
+        # Verdict formed against an earlier revision of this document.
+        "doc_hashes": {doc.file_path: "hash-of-the-version-that-was-audited"},
+    }), encoding="utf-8")
+
+    issues, _ = ObligationVerifier(cfg).verify([doc])
+    stale = [i for i in issues if i.rule_code == "OBLIG-JUDGE-STALE"]
+    assert len(stale) == 1, "a verdict formed against different text must not discharge the obligation"
+    assert doc.file_path == stale[0].file_path
+
+
+def test_judge_report_without_hashes_cannot_discharge_an_obligation(tmp_path):
+    """A bare-list judge report (the pre-anchoring format) gives no way to tell
+    which specification version it audited, so it must not count as evidence."""
+    cfg, doc = _setup(tmp_path, """# Scheduler {VERIFY_LLM}
+## 4.1 アルゴリズム
+Text.
+""")
+    _write_risk_report(tmp_path, [], doc_hashes={doc.file_path: doc.content_hash})
+    judge = tmp_path / "reports" / "doc_judge_report.json"
+    judge.write_text(json.dumps([
+        {"subgraph": doc.file_path, "status": "PASS"}
+    ]), encoding="utf-8")
+
+    issues, _ = ObligationVerifier(cfg).verify([doc])
+    assert [i for i in issues if i.rule_code == "OBLIG-JUDGE-UNANCHORED"], \
+        "an unanchored verdict must be rejected, not silently accepted"

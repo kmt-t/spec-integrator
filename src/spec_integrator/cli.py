@@ -342,7 +342,14 @@ def cmd_judge(args):
         out_p.parent.mkdir(parents=True, exist_ok=True)
         with open(out_p, "w", encoding="utf-8") as f:
             import json
-            json.dump([asdict(r) for r in report.results], f, indent=2, ensure_ascii=False)
+            # Record the content hash of every document this verdict was formed
+            # against. Without it a committed judge report keeps reading as a
+            # current audit no matter how far the specification moves on, and a
+            # stale opinion is indistinguishable from a fresh pass.
+            json.dump({
+                "results": [asdict(r) for r in report.results],
+                "doc_hashes": {d.file_path: d.content_hash for d in documents},
+            }, f, indent=2, ensure_ascii=False)
         print(f"✔ Judge report JSON saved to {out_p}")
 
     if args.report:

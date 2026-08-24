@@ -141,6 +141,10 @@ class LLMJudgeConfig:
     tag: str = "{VERIFY_LLM}"
     default_backend: str = "sakura"
     backends: dict[str, LLMBackendConfig] = field(default_factory=dict)
+    # Characters of each section handed to the judge. Truncation is reported to
+    # the model rather than applied silently: a verdict of "no contradiction"
+    # drawn from text the judge never saw is worse than no verdict at all.
+    section_char_budget: int = 8000
 
 
 @dataclass

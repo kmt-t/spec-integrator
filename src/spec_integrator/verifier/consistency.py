@@ -93,7 +93,48 @@ class ConsistencyVerifier:
         issues.extend(self._check_stale_values(scanned, summary))
         issues.extend(self._check_symbol_drift(scanned, summary))
         issues.extend(self._check_cochange(documents, summary))
+        issues.extend(self._check_duplicate_definitions(documents))
         return issues, summary
+
+    # ------------------------------------------------------------------ #
+    # Duplicate definitions: one keyword, one defining row
+    # ------------------------------------------------------------------ #
+    def _check_duplicate_definitions(self, documents: list[ParsedDocument]
+                                     ) -> list[VerificationIssue]:
+        """A keyword defined twice has two authorities that drift apart silently.
+
+        Every other consistency check compares a definition against its uses, so
+        it is blind to a definition that was written twice: whichever row an editor
+        happens to update becomes 'the' definition, and the stale twin keeps
+        satisfying the traceability gate. Detected on the definition rows of a
+        requirements table, which is where definitions actually live.
+        """
+        issues: list[VerificationIssue] = []
+        for doc in documents:
+            rows: dict[str, list[int]] = {}
+            for line_no, line in enumerate(doc.content.splitlines(), start=1):
+                m = re.match(r"^\s*\|\s*`?\{([A-Za-z0-9_\-]+)\}`?\s*\|", line)
+                if not m:
+                    continue
+                kw = m.group(1)
+                if not self.config.is_keyword_definition(kw, doc.file_path):
+                    continue
+                rows.setdefault(kw, []).append(line_no)
+
+            for kw, lines in sorted(rows.items()):
+                if len(lines) < 2:
+                    continue
+                where = ", ".join(str(n) for n in lines)
+                issues.append(VerificationIssue(
+                    gate="Consistency", severity="ERROR",
+                    file_path=doc.file_path, line=lines[1],
+                    rule_code="CONSIST-DUPLICATE-DEFINITION",
+                    message=(f"'{{{kw}}}' is defined on more than one row of this table "
+                             f"(lines {where}). One keyword must have one definition: with two, "
+                             "an edit reaches whichever row the author happened to find and the "
+                             "other silently keeps the old wording. Merge them into one row.")
+                ))
+        return issues
 
     # ------------------------------------------------------------------ #
     # Target collection: docs plus any extra roots (headers, sources)

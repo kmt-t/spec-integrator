@@ -217,6 +217,37 @@ class ObligationVerifier:
 
         entries = payload if isinstance(payload, list) else payload.get("results", [])
         judged_blob = json.dumps(entries, ensure_ascii=False)
+
+        issues: list[VerificationIssue] = []
+
+        # --- Staleness: the verdict must describe the documents as they are now ---
+        # A judge report carries no hashes if it was produced before this check
+        # existed; treat that as stale too, because a verdict whose subject cannot
+        # be identified is not evidence about the current specification.
+        judge_hashes = payload.get("doc_hashes", {}) if isinstance(payload, dict) else {}
+        if not judge_hashes:
+            return issues + [VerificationIssue(
+                gate="Obligation", severity="ERROR",
+                file_path=cfg.judge_report, line=1,
+                rule_code="OBLIG-JUDGE-UNANCHORED",
+                message=("The LLM judge report records no document hashes, so there is no way to "
+                         "tell which version of the specification it audited. A verdict that "
+                         "cannot be tied to a document state cannot discharge an obligation — "
+                         "re-run 'spec-integrator judge' to produce an anchored report.")
+            )]
+
+        for doc in tagged:
+            recorded = judge_hashes.get(doc.file_path)
+            if recorded is not None and recorded != doc.content_hash:
+                issues.append(VerificationIssue(
+                    gate="Obligation", severity="ERROR",
+                    file_path=doc.file_path, line=1,
+                    rule_code="OBLIG-JUDGE-STALE",
+                    message=(f"Document declares '{llm_tag}' but has changed since the LLM judge "
+                             "audited it. The stored verdict describes an earlier version of this "
+                             "text — re-run 'spec-integrator judge'.")
+                ))
+
         # Real `judge` output is keyword-centric: {"item_label": "{Keyword}",
         # "status": ...}, not the {"subgraph"|"item"|"target": ...} shape this
         # used to look for. That mismatch meant `failed` was always empty in
@@ -228,7 +259,6 @@ class ObligationVerifier:
             for e in entries if isinstance(e, dict) and e.get("status") == "FAIL"
         }
 
-        issues: list[VerificationIssue] = []
         for doc in tagged:
             if doc.file_path not in judged_blob:
                 summary.judge_missing.append(doc.file_path)

@@ -228,3 +228,67 @@ def test_gate_can_be_disabled(tmp_path):
     cfg.consistency.enabled = False
     issues, _ = ConsistencyVerifier(cfg).verify(docs, docs_root)
     assert issues == []
+
+
+# --------------------------------------------------------------------------- #
+# Duplicate definitions
+# --------------------------------------------------------------------------- #
+def test_duplicate_keyword_definition_is_reported(tmp_path):
+    """A keyword defined on two rows has two authorities. Whichever row an editor
+    updates becomes 'the' definition and the twin keeps the old wording while
+    still satisfying the traceability gate -- this is how {HAL_Interface} sat
+    duplicated in fireball's requirement_list.md through every prior gate run."""
+    cfg, parsed, docs_dir = _docs(tmp_path, {
+        "requires/requirement_list.md": (
+            "# Requirements\n"
+            "## 3.1 機能要求\n"
+            "| キーワード | 内容 | 優先度 |\n"
+            "| :--- | :--- | :--- |\n"
+            "| `{HAL_Interface}` | 物理デバイス操作を抽象化する。 | 高 |\n"
+            "| `{OtherThing}` | 別の要求。 | 中 |\n"
+            "| `{HAL_Interface}` | 物理デバイス操作を抽象化する。 | 高 |\n"
+        ),
+    })
+
+    issues, _ = ConsistencyVerifier(cfg).verify(parsed, docs_dir)
+    dups = [i for i in issues if i.rule_code == "CONSIST-DUPLICATE-DEFINITION"]
+    assert len(dups) == 1, "the duplicated definition must be reported exactly once"
+    assert "HAL_Interface" in dups[0].message
+    assert "OtherThing" not in dups[0].message
+
+
+def test_a_keyword_defined_once_is_not_reported(tmp_path):
+    """Citing a keyword inside another row, or in prose, is an ordinary reference
+    and must not be mistaken for a second definition."""
+    cfg, parsed, docs_dir = _docs(tmp_path, {
+        "requires/requirement_list.md": (
+            "# Requirements\n"
+            "## 3.1 機能要求\n"
+            "| キーワード | 内容 | 優先度 |\n"
+            "| :--- | :--- | :--- |\n"
+            "| `{HAL_Interface}` | 物理デバイス操作を抽象化する。 | 高 |\n"
+            "| `{OtherThing}` | `{HAL_Interface}` を利用する別の要求。 | 中 |\n"
+            "\n本文中で `{HAL_Interface}` に言及する。\n"
+        ),
+    })
+
+    issues, _ = ConsistencyVerifier(cfg).verify(parsed, docs_dir)
+    assert [i for i in issues if i.rule_code == "CONSIST-DUPLICATE-DEFINITION"] == []
+
+
+def test_a_duplicate_outside_a_definition_file_is_not_reported(tmp_path):
+    """Design documents restate keywords in tables all the time; only the
+    definition source can hold a duplicate *definition*."""
+    cfg, parsed, docs_dir = _docs(tmp_path, {
+        "components/os.md": (
+            "# Design\n"
+            "## 1. 概要\n"
+            "| キーワード | 内容 |\n"
+            "| :--- | :--- |\n"
+            "| `{HAL_Interface}` | ここでの説明。 |\n"
+            "| `{HAL_Interface}` | 別の観点からの説明。 |\n"
+        ),
+    })
+
+    issues, _ = ConsistencyVerifier(cfg).verify(parsed, docs_dir)
+    assert [i for i in issues if i.rule_code == "CONSIST-DUPLICATE-DEFINITION"] == []
