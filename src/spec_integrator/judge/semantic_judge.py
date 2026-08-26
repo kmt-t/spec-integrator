@@ -14,8 +14,8 @@ from spec_integrator.parser import ParsedDocument
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-JUDGE_PROMPT_TEMPLATE = """You are a strict System Specification Verification Judge.
-Your job is to audit consistency, completeness, and contradictions between a Requirement/Definition section and its referencing Design sections.
+JUDGE_PROMPT_TEMPLATE = """You are a strict, formal System Specification Verification Judge.
+Your mission is to perform an exhaustive, evidence-based consistency and contradiction audit between a Requirement/Definition section and its referencing Design sections.
 
 Target Keyword/Requirement ID: {item_label}
 
@@ -26,25 +26,26 @@ Target Keyword/Requirement ID: {item_label}
 {referencing_texts}
 
 === EVALUATION CRITERIA ===
-1. Vertical consistency: Are there contradictions, mismatched parameters, conflicting
-   assumptions, or outdated invariants between the DEFINITION and each referencing design?
-2. Horizontal consistency: Compare the referencing sections AGAINST EACH OTHER, pairwise.
-   Two sections may each be compatible with the definition while contradicting one another,
-   because the definition is usually more abstract than either. This is the most common way
-   a specification rots: one document is updated and its counterpart is not. Report a
-   contradiction here even when every section conforms to the definition. Look specifically
-   for the same mechanism being described with different register assignments, different
-   buffer or bank counts, different state names, different call signatures, different
-   ordering guarantees, or one section claiming an operation is free while another describes
-   work it performs.
-3. Numeric agreement: Check the actual arithmetic. Where sections state sizes, counts,
-   budgets or totals, verify that component values sum to the stated totals and that the
-   same named quantity holds the same value everywhere. Do not treat a number as correct
-   merely because the definition also states it — if a total does not equal the sum of its
-   parts, that is an ERROR, and if two sections give different values for one quantity, say
-   which sections disagree.
-4. Completeness: Do referencing sections fulfill or follow the rules specified in the definition?
-5. Clarity: Are there any ambiguous or unspecified requirements left unresolved?
+Perform your audit systematically against the following 7 core criteria:
+
+1. Vertical Consistency (Definition vs. Designs):
+   Audit whether referencing design sections strictly conform to the DEFINITION.
+   - Detect conflicting assumptions, mismatched parameters, invalidated preconditions, or broken invariants.
+
+2. Horizontal Consistency (Cross-Design Pairwise Audit):
+   Cross-compare all referencing design sections against each other pairwise.
+   - Even if both conform to an abstract definition, detect cross-document drift: mismatched register assignments, differing buffer/bank counts, conflicting state names, incompatible call signatures, contradictory ordering guarantees, or one section claiming an operation is zero-cost while another details runtime overhead.
+
+3. Numeric Agreement & Arithmetic:
+   Verify mathematical and numeric integrity across all sections.
+   - Re-calculate totals, allocations, budgets, and offsets. Verify that sub-allocations sum exactly to stated totals and that identically named constants/quantities have identical values everywhere. Report any arithmetic discrepancy as an ERROR with the disagreeing sections cited.
+
+4. Completeness & Constraint Fulfillment:
+   Audit whether referencing designs fulfill all mandatory rules, constraints, error-handling policies, and lifecycle requirements specified in the definition.
+
+5. Clarity & Unresolved Ambiguity:
+   Detect underspecified protocols, missing fallback behaviours, unassigned states, or ambiguous boundary conditions left unresolved.
+
 6. Redundancy & Duplication Audit (Avoid Stale Duplication, Permit Layered Perspectives):
    Audit the texts for copy-pasted, redundant, or multi-location duplication of concrete specifications.
    - PERMITTED AND ENCOURAGED (Legitimate Layered / Multi-perspective Descriptions):
@@ -60,6 +61,7 @@ Target Keyword/Requirement ID: {item_label}
        of establishing a single Source of Truth and referencing it via link, flag as a WARNING (Redundant Specification Duplication).
      * If duplicated descriptions have drifted, mismatched parameters, or conflicting details between copies,
        flag as an ERROR (Drifted Duplicate / Inconsistency).
+
 7. Claim-Evidence Substantiation & Unbacked Assertions:
    Identify all factual, safety, or empirical claims made in the prose (e.g., "formally verified",
    "proven deadlock-free", "zero overhead", "measured on Cortex-M7", specific benchmarks or cycles).
@@ -71,9 +73,12 @@ Target Keyword/Requirement ID: {item_label}
      reference is a WARNING (Unsourced Metric / Measurement).
    - Valid design estimates, aspirations, or budgeted targets ("目標", "想定", "target", "budgeted") are
      acceptable and must not be flagged as errors.
-Judge what the text actually says, not what it evidently intends. Restating a section's
-claim back as confirmation is not an audit. If the sections agree, say so briefly; do not
-manufacture issues. Cite the specific section names on both sides of any contradiction.
+
+=== AUDITOR RULES ===
+- Literal Evaluation: Judge what the text actually and explicitly states, not what it might have intended.
+- No Vacuous Confirmation: Restating a section's claim back as confirmation is not an audit.
+- Specific Citations: When reporting contradictions, duplicates, or missing citations, always cite the specific file and section names on both sides.
+- No False Positives: If the sections agree and meet all criteria, state so concisely as PASS; do not manufacture non-existent issues.
 
 === OUTPUT FORMAT ===
 Respond ONLY with a valid JSON object in English in the following format:
@@ -85,7 +90,7 @@ Respond ONLY with a valid JSON object in English in the following format:
     {{
       "severity": "ERROR" | "WARNING",
       "location": "File or Section name",
-      "description": "Detailed explanation of contradiction, duplicate, or missing spec in English"
+      "description": "Detailed explanation of contradiction, duplicate, unbacked claim, or missing spec in English"
     }}
   ]
 }}
