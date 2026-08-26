@@ -57,3 +57,35 @@ See `reports/doc_report.md` for latest results.
     cfg.evidence.ignore_artifact_refs = ["reports/doc_report.md"]
     issues = EvidenceVerifier(cfg).verify([doc], docs_dir)
     assert issues == []
+
+
+def test_verify_benchmark_tag_without_script_is_rejected(tmp_path):
+    cfg, doc, docs_dir = _parse(tmp_path, "components/tier3_jit/jit_compiler.md", """# JIT Compiler {VERIFY_BENCHMARK}
+## Claim
+Compilation is fast enough that optimization is unnecessary.
+""")
+    issues = EvidenceVerifier(cfg).verify([doc], docs_dir)
+    codes = [i.rule_code for i in issues]
+    assert "EVID-BENCHMARK-MISSING" in codes
+
+
+def test_verify_benchmark_tag_with_script_is_accepted(tmp_path):
+    cfg, doc, docs_dir = _parse(tmp_path, "components/tier3_jit/jit_compiler.md", """# JIT Compiler {VERIFY_BENCHMARK}
+## Claim
+Compilation is fast enough that optimization is unnecessary.
+""")
+    bench_dir = docs_dir / "components" / "tier3_jit" / "benchmarks"
+    bench_dir.mkdir(parents=True)
+    (bench_dir / "compile_cost_bench.py").write_text("# real benchmark\n", encoding="utf-8")
+
+    issues = EvidenceVerifier(cfg).verify([doc], docs_dir)
+    assert [i for i in issues if i.rule_code == "EVID-BENCHMARK-MISSING"] == []
+
+
+def test_no_verify_benchmark_tag_is_not_checked(tmp_path):
+    cfg, doc, docs_dir = _parse(tmp_path, "components/tier3_jit/jit_compiler.md", """# JIT Compiler
+## Claim
+Compilation is fast enough that optimization is unnecessary.
+""")
+    issues = EvidenceVerifier(cfg).verify([doc], docs_dir)
+    assert [i for i in issues if i.rule_code == "EVID-BENCHMARK-MISSING"] == []

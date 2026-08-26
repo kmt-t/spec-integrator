@@ -33,8 +33,34 @@ class EvidenceVerifier:
         issues: list[VerificationIssue] = []
         for doc in documents:
             issues.extend(self._check_artifact_refs(doc, docs_root))
+            issues.extend(self._check_benchmark_backing(doc, docs_root))
 
         return issues
+
+    # ------------------------------------------------------------------ #
+    # 0. A document tagged {VERIFY_BENCHMARK} must have a real benchmark
+    #    script backing it, not just the tag. Deliberately mechanical (file
+    #    existence, not an LLM judgment) so this runs on every `check`, not
+    #    only when `judge` happens to be invoked -- unlike the claim check
+    #    that now lives entirely inside the LLM judge prompt, this one does
+    #    not go silent on a plain `run_all_tests.ps1` with no -llm flag.
+    # ------------------------------------------------------------------ #
+    def _check_benchmark_backing(self, doc: ParsedDocument, docs_root: Path) -> list[VerificationIssue]:
+        cfg = self.config.benchmark_verification
+        if cfg.tag not in doc.all_tags:
+            return []
+        bench_dir = docs_root / Path(doc.file_path).parent / cfg.benchmark_dir_name
+        if bench_dir.is_dir() and any(bench_dir.glob("*.py")):
+            return []
+        return [VerificationIssue(
+            gate="Evidence", severity="ERROR",
+            file_path=doc.file_path, line=1,
+            rule_code="EVID-BENCHMARK-MISSING",
+            message=(f"Document declares '{cfg.tag}' but no benchmark script exists under "
+                     f"'{Path(doc.file_path).parent}/{cfg.benchmark_dir_name}/'. An empirical "
+                     "claim (a requirement whose verification method is Benchmark) needs a "
+                     "real, runnable measurement, not just the tag.")
+        )]
 
     # ------------------------------------------------------------------ #
     # 1. Referenced artifacts must exist

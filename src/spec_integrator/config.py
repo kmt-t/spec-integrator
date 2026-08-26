@@ -119,6 +119,16 @@ class WITVerificationConfig:
 
 
 @dataclass
+class BenchmarkVerificationConfig:
+    """Benchmark Gate: an empirical claim (a keyword whose requirement_list.md
+    verification method is "ベンチマーク"/Benchmark) must be backed by a real,
+    executable measurement script under this component's benchmark_dir_name/,
+    not just asserted in prose."""
+    benchmark_dir_name: str = "benchmarks"
+    tag: str = "{VERIFY_BENCHMARK}"
+
+
+@dataclass
 class LLMBackendConfig:
     api_key_env: str = "SAKURA_API_KEY"
     endpoint: str = "http://localhost:11434"
@@ -189,6 +199,7 @@ class Config:
     keywords: dict[str, KeywordRule] = field(default_factory=dict)
     formal_verification: FormalVerificationConfig = field(default_factory=FormalVerificationConfig)
     wit_verification: WITVerificationConfig = field(default_factory=WITVerificationConfig)
+    benchmark_verification: BenchmarkVerificationConfig = field(default_factory=BenchmarkVerificationConfig)
     llm_judge: LLMJudgeConfig = field(default_factory=LLMJudgeConfig)
     evidence: EvidenceConfig = field(default_factory=EvidenceConfig)
     obligation: ObligationConfig = field(default_factory=ObligationConfig)
@@ -319,6 +330,13 @@ class Config:
             tag=wit_data.get("tag", "{VERIFY_WIT}")
         )
 
+        # Benchmark
+        bm_data = data.get("benchmark_verification", {})
+        benchmark_verification = BenchmarkVerificationConfig(
+            benchmark_dir_name=bm_data.get("benchmark_dir_name", "benchmarks"),
+            tag=bm_data.get("tag", "{VERIFY_BENCHMARK}")
+        )
+
         # LLM
         llm_data = data.get("llm_judge", {})
         backends = {}
@@ -386,6 +404,7 @@ class Config:
             keywords=keywords,
             formal_verification=formal_verification,
             wit_verification=wit_verification,
+            benchmark_verification=benchmark_verification,
             llm_judge=llm_judge,
             evidence=evidence,
             obligation=obligation,
