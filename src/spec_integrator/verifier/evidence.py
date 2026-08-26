@@ -25,21 +25,14 @@ class EvidenceVerifier:
         self.config = config
 
     def verify(self, documents: list[ParsedDocument], docs_root: Path,
-               formal_results: list[FormalModelResult],
+               formal_results: list[FormalModelResult] | None = None,
                wit_results: list | None = None) -> list[VerificationIssue]:
         if not self.config.evidence.enabled:
             return []
 
         issues: list[VerificationIssue] = []
-        passing_models = {
-            r.model_file for r in formal_results if r.status == "PASS"
-        }
-        wit_ok = any(getattr(w, "status", "") == "PASS" for w in (wit_results or []))
-
         for doc in documents:
             issues.extend(self._check_artifact_refs(doc, docs_root))
-            issues.extend(self._check_claims(doc, passing_models, wit_ok))
-            issues.extend(self._check_measurements(doc))
 
         return issues
 
@@ -105,102 +98,6 @@ class EvidenceVerifier:
             except OSError:
                 pass
         return False
-
-    # ------------------------------------------------------------------ #
-    # 2. "Verified" / "proven" claims must be backed
-    # ------------------------------------------------------------------ #
-    def _check_claims(self, doc: ParsedDocument, passing_models: set[str],
-                      wit_ok: bool) -> list[VerificationIssue]:
-        issues: list[VerificationIssue] = []
-        patterns = self.config.evidence.claim_patterns
-        formal_tag = self.config.formal_verification.tag
-        llm_tag = self.config.llm_judge.tag
-        wit_tag = self.config.wit_verification.tag
-
-        has_formal = formal_tag in doc.all_tags
-        has_llm = llm_tag in doc.all_tags
-        has_wit = wit_tag in doc.all_tags
-
-        # Does any passing model live under this document's directory?
-        doc_dir = Path(doc.file_path).parent.as_posix()
-        backed_by_model = any(
-            m.replace("\\", "/").startswith(doc_dir if doc_dir != "." else "")
-            for m in passing_models
-        )
-
-        for sec in doc.sections:
-            for line_no, line, in_code in self._iter_section_lines(sec):
-                if in_code:
-                    continue
-                hit = next((p for p in patterns if p.lower() in line.lower()), None)
-                if hit is None:
-                    continue
-
-                if has_formal and backed_by_model:
-                    continue
-                if has_wit and wit_ok:
-                    continue
-                if has_llm:
-                    # The Obligation Gate separately proves the judge actually ran.
-                    continue
-
-                if not (has_formal or has_llm or has_wit):
-                    reason = (f"the document carries no verification tag "
-                              f"({formal_tag} / {llm_tag} / {wit_tag}), so nothing in the pipeline "
-                              "ever checks this claim")
-                else:
-                    reason = ("no formal model under this component passed in this run, "
-                              "so the claim is unsubstantiated")
-
-                issues.append(VerificationIssue(
-                    gate="Evidence", severity="ERROR",
-                    file_path=doc.file_path, line=line_no,
-                    rule_code="EVID-UNBACKED-CLAIM",
-                    message=(f"Verification claim '{hit}' is asserted but {reason}. "
-                             "Either produce the evidence or state the item as unverified.")
-                ))
-        return issues
-
-    # ------------------------------------------------------------------ #
-    # 3. Measurements that were never taken
-    # ------------------------------------------------------------------ #
-    def _check_measurements(self, doc: ParsedDocument) -> list[VerificationIssue]:
-        issues: list[VerificationIssue] = []
-        meas_patterns = self.config.evidence.measurement_patterns
-        metric_sev = self.config.evidence.metric_severity
-
-        for sec in doc.sections:
-            for line_no, line, in_code in self._iter_section_lines(sec):
-                if in_code:
-                    continue
-                hit = next((p for p in meas_patterns if p.lower() in line.lower()), None)
-                if hit is not None:
-                    issues.append(VerificationIssue(
-                        gate="Evidence", severity="ERROR",
-                        file_path=doc.file_path, line=line_no,
-                        rule_code="EVID-UNSOURCED-MEASUREMENT",
-                        message=(f"'{hit}' asserts that a measurement was performed, but no "
-                                 "measurement artifact is linked. Link the raw result or mark the "
-                                 "figure as an estimate.")
-                    ))
-                    continue
-
-                if metric_sev in ("ERROR", "WARNING") and METRIC_RE.search(line):
-                    if self._looks_like_target(line):
-                        continue
-                    issues.append(VerificationIssue(
-                        gate="Evidence", severity=metric_sev,
-                        file_path=doc.file_path, line=line_no,
-                        rule_code="EVID-UNSOURCED-METRIC",
-                        message=("Quantitative performance figure stated without a source. "
-                                 "Mark it as a target/estimate or link the measurement.")
-                    ))
-        return issues
-
-    @staticmethod
-    def _looks_like_target(line: str) -> bool:
-        markers = ("目標", "上限", "以内", "予算", "target", "budget", "≤", "<=", "想定", "見積")
-        return any(m in line for m in markers)
 
     # ------------------------------------------------------------------ #
     # Helpers

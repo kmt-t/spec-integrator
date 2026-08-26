@@ -66,26 +66,13 @@ class FormalVerificationConfig:
 
 @dataclass
 class EvidenceConfig:
-    """Evidence Gate: forbids asserting a verification that was never performed."""
+    """Evidence Gate: ensures referenced verification artifacts exist."""
     enabled: bool = True
-    claim_patterns: list[str] = field(default_factory=lambda: [
-        "検証済み", "検証されている", "検証を実施", "検証済である",
-        "証明完了", "証明済み", "証明した", "数学的証明",
-        "実施済み", "立証",
-        "formally verified", "has been verified", "is verified",
-        "proven", "proved", "mathematically proven",
-    ])
-    measurement_patterns: list[str] = field(default_factory=lambda: [
-        "測定環境", "実測値", "実測", "計測結果", "ベンチマーク結果",
-        "measured on", "benchmark result", "measurement environment",
-    ])
     artifact_extensions: list[str] = field(default_factory=lambda: [
-        "py", "md", "wit", "tla", "json", "cfg",
+        "py", "md", "wit", "tla", "json", "cfg", "yaml", "yml",
     ])
-    # Unsourced bare metrics (percentages / cycle counts) — noisy, so WARNING by default.
-    metric_severity: str = "WARNING"
     ignore_artifact_refs: list[str] = field(default_factory=list)
-    # Enable LLM semantic identification of claims and evidence substantiation.
+    # Enable LLM semantic identification of claims and evidence substantiation in LLM Judge.
     llm_substantiation_audit: bool = True
 
 
@@ -303,11 +290,9 @@ class Config:
         ev_defaults = EvidenceConfig()
         evidence = EvidenceConfig(
             enabled=bool(ev_data.get("enabled", ev_defaults.enabled)),
-            claim_patterns=list(ev_data.get("claim_patterns", ev_defaults.claim_patterns)),
-            measurement_patterns=list(ev_data.get("measurement_patterns", ev_defaults.measurement_patterns)),
             artifact_extensions=list(ev_data.get("artifact_extensions", ev_defaults.artifact_extensions)),
-            metric_severity=str(ev_data.get("metric_severity", ev_defaults.metric_severity)).upper(),
             ignore_artifact_refs=list(ev_data.get("ignore_artifact_refs", ev_defaults.ignore_artifact_refs)),
+            llm_substantiation_audit=bool(ev_data.get("llm_substantiation_audit", ev_defaults.llm_substantiation_audit)),
         )
 
         # Obligation Gate
