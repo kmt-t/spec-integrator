@@ -72,8 +72,6 @@ class EvidenceConfig:
         "py", "md", "wit", "tla", "json", "cfg", "yaml", "yml",
     ])
     ignore_artifact_refs: list[str] = field(default_factory=list)
-    # Enable LLM semantic identification of claims and evidence substantiation in LLM Judge.
-    llm_substantiation_audit: bool = True
 
 
 @dataclass
@@ -303,7 +301,6 @@ class Config:
             enabled=bool(ev_data.get("enabled", ev_defaults.enabled)),
             artifact_extensions=list(ev_data.get("artifact_extensions", ev_defaults.artifact_extensions)),
             ignore_artifact_refs=list(ev_data.get("ignore_artifact_refs", ev_defaults.ignore_artifact_refs)),
-            llm_substantiation_audit=bool(ev_data.get("llm_substantiation_audit", ev_defaults.llm_substantiation_audit)),
         )
 
         # Obligation Gate

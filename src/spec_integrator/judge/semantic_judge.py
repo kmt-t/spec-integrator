@@ -60,7 +60,17 @@ Target Keyword/Requirement ID: {item_label}
        of establishing a single Source of Truth and referencing it via link, flag as a WARNING (Redundant Specification Duplication).
      * If duplicated descriptions have drifted, mismatched parameters, or conflicting details between copies,
        flag as an ERROR (Drifted Duplicate / Inconsistency).
-{claim_evidence_criterion}
+7. Claim-Evidence Substantiation & Unbacked Assertions:
+   Identify all factual, safety, or empirical claims made in the prose (e.g., "formally verified",
+   "proven deadlock-free", "zero overhead", "measured on Cortex-M7", specific benchmarks or cycles).
+   - If a section claims a property is "proven", "verified", or "measured", check whether the text
+     explicitly cites a concrete artifact (formal model file, concept test, WIT interface, or benchmark log).
+   - An assertion of a verification without citing the backing artifact, or relying on a vacuous/unrelated
+     model, is an ERROR (Unbacked Verification Claim).
+   - A bare empirical measurement stated as an accomplished fact without an environment or artifact
+     reference is a WARNING (Unsourced Metric / Measurement).
+   - Valid design estimates, aspirations, or budgeted targets ("目標", "想定", "target", "budgeted") are
+     acceptable and must not be flagged as errors.
 Judge what the text actually says, not what it evidently intends. Restating a section's
 claim back as confirmation is not an audit. If the sections agree, say so briefly; do not
 manufacture issues. Cite the specific section names on both sides of any contradiction.
@@ -80,23 +90,6 @@ Respond ONLY with a valid JSON object in English in the following format:
   ]
 }}
 ```
-"""
-
-# Inserted into JUDGE_PROMPT_TEMPLATE's {claim_evidence_criterion} slot when
-# EvidenceConfig.llm_substantiation_audit is True; empty string otherwise, so
-# the flag genuinely controls whether the LLM is asked to apply this criterion
-# rather than existing only as a config field nothing reads.
-CLAIM_EVIDENCE_CRITERION = """7. Claim-Evidence Substantiation & Unbacked Assertions:
-   Identify all factual, safety, or empirical claims made in the prose (e.g., "formally verified",
-   "proven deadlock-free", "zero overhead", "measured on Cortex-M7", specific benchmarks or cycles).
-   - If a section claims a property is "proven", "verified", or "measured", check whether the text
-     explicitly cites a concrete artifact (formal model file, concept test, WIT interface, or benchmark log).
-   - An assertion of a verification without citing the backing artifact, or relying on a vacuous/unrelated
-     model, is an ERROR (Unbacked Verification Claim).
-   - A bare empirical measurement stated as an accomplished fact without an environment or artifact
-     reference is a WARNING (Unsourced Metric / Measurement).
-   - Valid design estimates, aspirations, or budgeted targets ("目標", "想定", "target", "budgeted") are
-     acceptable and must not be flagged as errors.
 """
 
 
@@ -294,9 +287,6 @@ class SemanticJudge:
             item_label=item_label,
             definition_texts="\n\n".join(def_texts) if def_texts else "(No explicit definition section)",
             referencing_texts="\n\n".join(ref_texts) if ref_texts else "(No referencing sections)",
-            claim_evidence_criterion=(
-                CLAIM_EVIDENCE_CRITERION if self.config.evidence.llm_substantiation_audit else ""
-            ),
         )
 
         if backend == "mock":
