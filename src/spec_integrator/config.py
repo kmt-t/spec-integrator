@@ -85,6 +85,8 @@ class EvidenceConfig:
     # Unsourced bare metrics (percentages / cycle counts) — noisy, so WARNING by default.
     metric_severity: str = "WARNING"
     ignore_artifact_refs: list[str] = field(default_factory=list)
+    # Enable LLM semantic identification of claims and evidence substantiation.
+    llm_substantiation_audit: bool = True
 
 
 @dataclass
