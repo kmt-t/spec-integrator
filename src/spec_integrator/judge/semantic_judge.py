@@ -293,7 +293,7 @@ class SemanticJudge:
                 issues=[],
                 covered_files=covered,
             )
-        if backend not in ("sakura", "ollama"):
+        if backend not in ("sakura", "ollama", "openrouter"):
             return JudgeResult(
                 item_id=sg["item_id"],
                 item_label=item_label,
@@ -303,13 +303,8 @@ class SemanticJudge:
                 covered_files=covered,
             )
 
-        # _call_sakura already retries transport-level failures (non-200, timeout,
-        # connection errors) internally. What it cannot catch is a 200 response
-        # whose body is empty or not the JSON shape we asked for -- an LLM backend
-        # under load returns those too, and unlike a transport error they surface
-        # here as a parse failure, one call too late for that retry loop. Without
-        # a second layer here, a single flaky response turns "no contradiction"
-        # into "cannot verify", indistinguishable from a real content problem.
+        # _call_sakura / _call_openrouter already retries transport-level failures
+        # (non-200, timeout, connection errors) internally.
         import time
         last_err: Exception | None = None
         parsed: dict | None = None
@@ -317,6 +312,8 @@ class SemanticJudge:
             try:
                 if backend == "sakura":
                     raw_resp = self._call_sakura(prompt, model)
+                elif backend == "openrouter":
+                    raw_resp = self._call_openrouter(prompt, model)
                 else:
                     raw_resp = self._call_ollama(prompt, model)
                 candidate = self._extract_json(raw_resp)
@@ -423,6 +420,42 @@ class SemanticJudge:
                 last_err = e
                 time.sleep(2)
         raise RuntimeError(f"Failed to call Sakura API after 3 attempts: {last_err}")
+
+    def _call_openrouter(self, prompt: str, model: str | None) -> str:
+        import time
+        b_config = self.config.llm_judge.backends.get("openrouter")
+        api_key_env = b_config.api_key_env if b_config else "OPENROUTER_API_KEY"
+        api_key = os.environ.get(api_key_env, "")
+        if not api_key:
+            raise ValueError(f"OpenRouter API key environment variable '{api_key_env}' is not set.")
+
+        selected_model = model or (b_config.model if (b_config and b_config.model) else "qwen/qwen3.8-27b")
+        endpoint = (b_config.endpoint if (b_config and b_config.endpoint) else "https://openrouter.ai/api/v1/chat/completions")
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/kmt-t/fireball",
+            "X-Title": "Fireball Spec Integrator"
+        }
+        payload = {
+            "model": selected_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0
+        }
+
+        last_err = None
+        for attempt in range(3):
+            try:
+                resp = requests.post(endpoint, json=payload, headers=headers, timeout=90, verify=False)
+                if resp.status_code != 200:
+                    raise RuntimeError(f"OpenRouter API returned status {resp.status_code}: {resp.text}")
+                data = resp.json()
+                return data["choices"][0]["message"]["content"]
+            except Exception as e:
+                last_err = e
+                time.sleep(2)
+        raise RuntimeError(f"Failed to call OpenRouter API after 3 attempts: {last_err}")
 
     def _call_ollama(self, prompt: str, model: str | None) -> str:
         b_config = self.config.llm_judge.backends.get("ollama")

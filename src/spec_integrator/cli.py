@@ -493,7 +493,7 @@ def main():
     # judge
     p_judge = subparsers.add_parser("judge", help="Run LLM as a Judge on semantic subgraphs")
     p_judge.add_argument("-c", "--config", default="spec-integrator.yaml", help="Path to configuration file")
-    p_judge.add_argument("--backend", choices=["sakura", "ollama", "mock"], help="LLM backend")
+    p_judge.add_argument("--backend", choices=["openrouter", "sakura", "ollama", "mock"], help="LLM backend")
     p_judge.add_argument("--model", help="LLM model name override")
     p_judge.add_argument("--max-subgraphs", type=int, default=10, help="Max subgraphs to evaluate (0 for unlimited)")
     p_judge.add_argument("-a", "--all", "--exhaustive", dest="exhaustive", action="store_true",
@@ -519,7 +519,7 @@ def main():
     # assess
     p_assess = subparsers.add_parser("assess", help="Assess section complexity, design risk & formal candidates via LLM")
     p_assess.add_argument("-c", "--config", default="spec-integrator.yaml", help="Path to configuration file")
-    p_assess.add_argument("--backend", choices=["sakura", "ollama", "heuristic", "static_rule", "mock"], help="Risk assessor backend")
+    p_assess.add_argument("--backend", choices=["openrouter", "sakura", "ollama", "heuristic", "static_rule", "mock"], help="Risk assessor backend")
     p_assess.add_argument("--model", help="LLM model name override")
     p_assess.add_argument("--max-sections", type=int, default=15, help="Max sections to assess (0 for unlimited)")
     p_assess.add_argument("-a", "--all", "--exhaustive", dest="exhaustive", action="store_true",
