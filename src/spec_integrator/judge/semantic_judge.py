@@ -45,6 +45,21 @@ Target Keyword/Requirement ID: {item_label}
    which sections disagree.
 4. Completeness: Do referencing sections fulfill or follow the rules specified in the definition?
 5. Clarity: Are there any ambiguous or unspecified requirements left unresolved?
+6. Redundancy & Duplication Audit (Avoid Stale Duplication, Permit Layered Perspectives):
+   Audit the texts for copy-pasted, redundant, or multi-location duplication of concrete specifications.
+   - PERMITTED AND ENCOURAGED (Legitimate Layered / Multi-perspective Descriptions):
+     Describing the same design subject from DIFFERENT architectural abstraction layers or complementary viewpoints
+     is valid and must NOT be flagged as duplication. Examples of legitimate layering:
+       * Tier 1 (Architecture): High-level system goals, 6 pillars summary, end-to-end rationale.
+       * Tier 2 (Subsystem/Manager): Component lifecycle, state machines, API integration, fallback policies.
+       * Tier 3 (Leaf Component): Exact byte/bitfield layouts, physical offsets, register assignments, stencils.
+       * Formal/Verifier: Mathematical properties, invariants, proof assertions, empirical benchmarks.
+   - FLAGGED AS REDUNDANT (WARNING / ERROR):
+     * If two or more sections duplicate the SAME level of detailed technical specification (e.g., verbatim
+       copy-pasted struct tables, duplicated binary layouts, identical step-by-step algorithm lists) instead
+       of establishing a single Source of Truth and referencing it via link, flag as a WARNING (Redundant Specification Duplication).
+     * If duplicated descriptions have drifted, mismatched parameters, or conflicting details between copies,
+       flag as an ERROR (Drifted Duplicate / Inconsistency).
 {claim_evidence_criterion}
 Judge what the text actually says, not what it evidently intends. Restating a section's
 claim back as confirmation is not an audit. If the sections agree, say so briefly; do not
@@ -60,7 +75,7 @@ Respond ONLY with a valid JSON object in English in the following format:
     {{
       "severity": "ERROR" | "WARNING",
       "location": "File or Section name",
-      "description": "Detailed explanation of contradiction or missing spec in English"
+      "description": "Detailed explanation of contradiction, duplicate, or missing spec in English"
     }}
   ]
 }}
@@ -71,7 +86,7 @@ Respond ONLY with a valid JSON object in English in the following format:
 # EvidenceConfig.llm_substantiation_audit is True; empty string otherwise, so
 # the flag genuinely controls whether the LLM is asked to apply this criterion
 # rather than existing only as a config field nothing reads.
-CLAIM_EVIDENCE_CRITERION = """6. Claim-Evidence Substantiation & Unbacked Assertions:
+CLAIM_EVIDENCE_CRITERION = """7. Claim-Evidence Substantiation & Unbacked Assertions:
    Identify all factual, safety, or empirical claims made in the prose (e.g., "formally verified",
    "proven deadlock-free", "zero overhead", "measured on Cortex-M7", specific benchmarks or cycles).
    - If a section claims a property is "proven", "verified", or "measured", check whether the text

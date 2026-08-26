@@ -255,3 +255,13 @@ def test_changed_definition_side_also_selects_the_subgraph():
 
     assert report.total_evaluated == 1
     assert report.results[0].item_label == "A"
+
+
+def test_judge_prompt_template_includes_redundancy_and_layered_criteria():
+    """Verify that the judge prompt explicitly instructs the LLM to audit redundant duplication
+    while permitting multi-perspective and multi-layer descriptions."""
+    from spec_integrator.judge.semantic_judge import JUDGE_PROMPT_TEMPLATE
+
+    assert "Redundancy & Duplication Audit" in JUDGE_PROMPT_TEMPLATE
+    assert "PERMITTED AND ENCOURAGED (Legitimate Layered / Multi-perspective Descriptions)" in JUDGE_PROMPT_TEMPLATE
+    assert "FLAGGED AS REDUNDANT" in JUDGE_PROMPT_TEMPLATE
