@@ -32,8 +32,57 @@ class EvidenceVerifier:
 
         issues: list[VerificationIssue] = []
         for doc in documents:
+            issues.extend(self._check_declared_evidence(doc, docs_root))
             issues.extend(self._check_artifact_refs(doc, docs_root))
             issues.extend(self._check_benchmark_backing(doc, docs_root))
+
+        return issues
+
+    # ------------------------------------------------------------------ #
+    # Check declared evidence in <!-- evidence: ... --> block
+    # ------------------------------------------------------------------ #
+    def _check_declared_evidence(self, doc: ParsedDocument, docs_root: Path) -> list[VerificationIssue]:
+        issues: list[VerificationIssue] = []
+        doc_dir = (docs_root / doc.file_path).parent
+        repo_root = self.config.config_dir
+
+        for ev_type, ev_path in doc.evidence.items():
+            resolved = None
+            for cand in [doc_dir / ev_path, docs_root / ev_path, repo_root / ev_path]:
+                if cand.exists():
+                    resolved = cand
+                    break
+            if resolved is None:
+                issues.append(VerificationIssue(
+                    gate="Evidence", severity="ERROR",
+                    file_path=doc.file_path, line=1,
+                    rule_code="EVID-DECLARED-FILE-MISSING",
+                    message=(f"Declared evidence '{ev_type}: {ev_path}' does not exist on disk. "
+                             "Check the relative path from the document.")
+                ))
+
+        # Check tag-to-evidence obligations
+        if "{VERIFY_FORMAL}" in doc.all_tags and "formal" not in doc.evidence:
+            issues.append(VerificationIssue(
+                gate="Evidence", severity="ERROR",
+                file_path=doc.file_path, line=1,
+                rule_code="EVID-FORMAL-UNDECLARED",
+                message="Document declares '{VERIFY_FORMAL}' but carries no 'formal:' entry in its '<!-- evidence: ... -->' block."
+            ))
+        if "{VERIFY_WIT}" in doc.all_tags and "wit" not in doc.evidence:
+            issues.append(VerificationIssue(
+                gate="Evidence", severity="ERROR",
+                file_path=doc.file_path, line=1,
+                rule_code="EVID-WIT-UNDECLARED",
+                message="Document declares '{VERIFY_WIT}' but carries no 'wit:' entry in its '<!-- evidence: ... -->' block."
+            ))
+        if "{VERIFY_BENCHMARK}" in doc.all_tags and "benchmark" not in doc.evidence:
+            issues.append(VerificationIssue(
+                gate="Evidence", severity="ERROR",
+                file_path=doc.file_path, line=1,
+                rule_code="EVID-BENCHMARK-UNDECLARED",
+                message="Document declares '{VERIFY_BENCHMARK}' but carries no 'benchmark:' entry in its '<!-- evidence: ... -->' block."
+            ))
 
         return issues
 

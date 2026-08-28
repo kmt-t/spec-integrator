@@ -43,10 +43,12 @@ class ParsedDocument:
     all_keywords: list[str] = field(default_factory=list)
     all_tags: list[str] = field(default_factory=list)
     all_links: list[ParsedLink] = field(default_factory=list)
+    evidence: dict[str, str] = field(default_factory=dict)
 
 
 class MarkdownParser:
     KEYWORD_REGEX = re.compile(r"\{([A-Za-z0-9_\-]+)\}")
+    EVIDENCE_BLOCK_RE = re.compile(r"<!--\s*evidence:\s*(.*?)\s*-->", re.DOTALL | re.IGNORECASE)
     TEMPLATE_PREFIXES = ("Decision_", "Strategy_", "Requirement_", "req_", "concept", "Constraint_")
 
     def __init__(self, config: Config):
@@ -54,12 +56,32 @@ class MarkdownParser:
         # Initialize mistune markdown AST parser
         self.md_parser = mistune.create_markdown(renderer=None)
 
+    def _parse_evidence(self, content: str) -> dict[str, str]:
+        evidence = {}
+        for m in self.EVIDENCE_BLOCK_RE.finditer(content):
+            block = m.group(1)
+            for line in block.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    k = k.strip().lower()
+                    v = v.strip().strip('"\'')
+                    if k and v:
+                        evidence[k] = v
+                else:
+                    for km in re.finditer(r'([a-zA-Z0-9_-]+)=["\']?([^"\'\s]+)["\']?', line):
+                        evidence[km.group(1).lower()] = km.group(2)
+        return evidence
+
     def parse_file(self, file_path: Path, docs_root: Path) -> ParsedDocument:
         rel_path = file_path.relative_to(docs_root).as_posix()
         content = file_path.read_text(encoding="utf-8")
         content_hash = self.config_compute_hash(content)
         tier = self.config.get_tier_for_path(rel_path)
         component = self._extract_component(rel_path)
+        evidence = self._parse_evidence(content)
 
         lines = content.splitlines()
         
@@ -106,7 +128,8 @@ class MarkdownParser:
             sections=sections,
             all_keywords=list(dict.fromkeys(all_keywords)),
             all_tags=list(dict.fromkeys(all_tags)),
-            all_links=all_links
+            all_links=all_links,
+            evidence=evidence
         )
 
     def _find_heading_lines(self, lines: list[str], tokens: list[dict]) -> list[tuple[int, int, str]]:
