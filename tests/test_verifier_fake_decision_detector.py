@@ -5,7 +5,7 @@ from pathlib import Path
 from spec_integrator.config import Config
 from spec_integrator.parser import MarkdownParser
 from spec_integrator.graph import DocGraphBuilder
-from spec_integrator.verifier.fake_decision_detector import FakeDecisionDetector, ADRReviewVerifier
+from spec_integrator.verifier.fake_decision_detector import FakeDecisionDetector
 
 
 def _build(tmp_path, files: dict[str, str]):
@@ -86,7 +86,7 @@ def test_isolated_single_option_adr_is_flagged(tmp_path):
     assert f.is_bracket_keyword
     assert f.referenced_file_count == 0
     assert f.option_count == 1
-    assert any("孤立ADR" in r for r in f.reasons)
+    assert any("孤立した決定ブロック" in r for r in f.reasons)
     assert any("実質エントリ数が1件" in r for r in f.reasons)
 
 
@@ -116,7 +116,7 @@ def test_heading_style_adr_without_keyword_uses_text_search_for_isolation(tmp_pa
     f = _keyword(findings, "ADR-SCHED-001")
     assert not f.is_bracket_keyword
     assert f.referenced_file_count == 0
-    assert any("孤立ADR" in r for r in f.reasons)
+    assert any("孤立した決定ブロック" in r for r in f.reasons)
     assert any("実質エントリ数が0件" in r for r in f.reasons)
 
 
@@ -129,7 +129,7 @@ def test_heading_style_adr_referenced_elsewhere_is_not_isolated(tmp_path):
 
     f = _keyword(findings, "ADR-SCHED-001")
     assert f.referenced_file_count == 1
-    assert not any("孤立ADR" in r for r in f.reasons)
+    assert not any("孤立した決定ブロック" in r for r in f.reasons)
 
 
 def _git(repo_root, *args):
@@ -182,10 +182,10 @@ def test_unlabeled_decision_in_working_diff_is_flagged(tmp_path):
     cfg2, docs2, graph2 = _build(tmp_path, {"components/tier2_runtime/runtime_engine.md": modified})
     findings = FakeDecisionDetector(cfg2, repo_root=tmp_path).verify(docs2, graph2)
 
-    unlabeled = [f for f in findings if f.kind == "UNLABELED_DECISION"]
-    assert len(unlabeled) >= 1
-    assert unlabeled[0].in_working_diff
-    assert any("明示的な {ADR_*} タグや選択肢の検討なしに" in r for r in unlabeled[0].reasons)
+    prose_decisions = [f for f in findings if f.kind == "PROSE_DECISION"]
+    assert len(prose_decisions) >= 1
+    assert prose_decisions[0].in_working_diff
+    assert any("コンポーネント内の地の文で" in r for r in prose_decisions[0].reasons)
 
 
 def test_llm_verification_detects_unilateral_decision(tmp_path):

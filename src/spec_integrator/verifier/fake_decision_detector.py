@@ -15,10 +15,10 @@ from spec_integrator.parser import ParsedDocument
 @dataclass
 class DecisionFinding:
     keyword: str
-    is_bracket_keyword: bool  # True: `keyword` is a real `{ADR_*}` tag. False: a bare heading ID or unlabeled section.
+    is_bracket_keyword: bool  # True if keyword is a formal DocGraph tag like {ADR_*}; False for prose/heading
     file_path: str
     line: int
-    kind: str  # "EXPLICIT_ADR", "UNLABELED_DECISION", "LLM_FLAGGED"
+    kind: str  # "PROSE_DECISION", "ADHOC_LOCAL_ADR", "LLM_FLAGGED"
     reasons: list[str] = field(default_factory=list)
     option_count: int = 0
     referenced_file_count: int = 0
@@ -27,21 +27,17 @@ class DecisionFinding:
     snippet: str = ""
 
 
-# For backwards compatibility
-ADRFinding = DecisionFinding
-
-
 @dataclass
-class _ADRBlock:
-    keyword: str          # display label: a `{ADR_*}` keyword, or a bare heading ID like "ADR-SCHED-001"
-    bracket_keyword: str | None  # the `{ADR_*}` keyword if this block used one, else None
+class _LocalDecisionBlock:
+    label: str
+    bracket_keyword: str | None
     line: int
     end_line: int
     text: str
 
 
-FAKE_DECISION_JUDGE_PROMPT = """You are a strict, skeptical Architecture Decision & Specification Auditor.
-Your mission is to scrutinize design specifications and uncommitted diffs to detect "Fake Decisions", "Fabricated Architecture Rationale", or "Unilateral/Unlabeled Design Decisions".
+FAKE_DECISION_PROMPT = """You are a strict, skeptical Architecture & Specification Auditor.
+Your mission is to scrutinize design specifications and uncommitted diffs to detect "Fake Decisions", "Ad-hoc Local ADRs", or "Unapproved/Unilateral Design Decisions Stated in Prose".
 
 === TARGET DOCUMENT / SECTION ===
 File: {file_path}
@@ -51,20 +47,19 @@ Section: {section_title}
 {content_text}
 
 === EVALUATION CRITERIA ===
-Detect whether this text exhibits any of the following problematic patterns:
+Scrutinize whether the author or agent made ad-hoc, unilateral, or fabricated decisions in the component text instead of adhering to authorized requirements:
 
-1. Unilateral / Papering-Over Decisions:
-   - An architectural or component decision made to paper over inconsistencies, broken tests, or simulator errors, without proper justification.
-   - Arbitrary constants, pinned registers, or restriction rules introduced without explaining why alternatives are unacceptable.
+1. Ad-hoc Prose Decisions (地の文での勝手な仕様決定):
+   - Major architectural or component decisions (e.g. pinning physical registers, restricting memory layouts, inventing new error codes, imposing arbitrary size caps, altering calling conventions) stated as settled facts in normal prose without traceability to requirements or authorized system architecture.
 
-2. Unlabeled Architectural Decisions:
-   - Major architectural decisions (affecting register allocation, memory layout, calling conventions, concurrency, or cross-component boundaries) stated as settled facts in normal prose without an explicit ADR block (e.g. {{ADR_*}} with background, options, and trade-off evaluation).
+2. Unilateral Papering-Over (辻褄合わせの独断決定):
+   - Decisions fabricated to mask simulator/compiler mismatches, failed test runs, or spec inconsistencies without genuine cross-component trade-off analysis.
 
-3. Strawman Trade-offs & Fake Options:
-   - "Options" presented where non-selected alternatives are trivial strawmen (e.g. 1-line dismissed options vs. multi-paragraph selected option) to manufacture the appearance of an objective trade-off analysis.
+3. Ad-hoc Local ADRs (コンポーネント内の勝手なADR新設):
+   - Local decision blocks created inside a leaf component that decide cross-cutting system policies unilaterally, especially those using single-option or strawman alternatives.
 
-4. Unbacked / Fabricated Claims:
-   - Assertions of "zero-cost", "optimal", "impossible to fail", or "standard" without verifiable evidence or measurement context.
+4. Unbacked Performance / Safety Claims:
+   - Statements of "zero-cost", "always safe", "impossible to deadlock" asserted without citing verified formal models or benchmarks.
 
 === OUTPUT FORMAT ===
 Respond ONLY with a valid JSON object in English:
@@ -74,15 +69,15 @@ Respond ONLY with a valid JSON object in English:
   "confidence": "HIGH",
   "issues": [
     {{
-      "category": "UNILATERAL_DECISION",
+      "category": "PROSE_DECISION" | "PAPERING_OVER" | "ADHOC_LOCAL_ADR" | "UNBACKED_CLAIM",
       "summary": "Concise 1-sentence issue explanation in English",
-      "reason": "Detailed justification explaining why this decision is suspect or lacks trade-off evaluation",
-      "quote": "Short exact snippet from text that contains the decision"
+      "reason": "Detailed explanation why this text represents an ad-hoc or unauthorized decision",
+      "quote": "Short exact snippet from the text containing the ad-hoc decision"
     }}
   ]
 }}
 ```
-If no problematic decisions are found, respond with:
+If no ad-hoc or fake decisions are found, respond with:
 ```json
 {{
   "is_problematic": false,
@@ -94,12 +89,15 @@ If no problematic decisions are found, respond with:
 
 
 class FakeDecisionDetector:
-    """Detects fabricated, unilateral, or unlabeled architectural decisions.
+    """Detects ad-hoc, unilateral, or fabricated decisions in component prose and diffs.
 
-    Combines:
-    1. Static ADR structure analysis (isolated ADRs, strawman options, uncommitted diff touches).
-    2. Unlabeled decision heuristic scan (critical decisions stated in prose without ADR tags).
-    3. Optional LLM-based semantic audit for deep validation of trade-off integrity and unilateral papering-over.
+    Focuses on checking whether an author/agent has unilaterally introduced
+    ad-hoc ADRs or arbitrary decisions in the prose of a component, rather than
+    adhering to authorized requirements:
+    1. Prose Decisions: Heuristically scans prose for unilateral policy statements.
+    2. Ad-hoc Local ADRs: Scans decision blocks for isolation, single-option, or strawman patterns.
+    3. Working Diff Touches: Flags decisions added/altered in the active uncommitted diff.
+    4. LLM Semantic Audit: Deep semantic verification of trade-off integrity and ad-hoc rules.
     """
 
     INLINE_DECISION_RE = re.compile(r"-\s*\*\*決定事項\*\*:\s*`?\{(ADR_[A-Za-z0-9_]+)\}`?")
@@ -113,10 +111,10 @@ class FakeDecisionDetector:
     NEXT_SUBHEADING_RE = re.compile(r"\n\s*-\s*\*\*[^\*]+\*\*[:：]")
     ADR_KEYWORD_RE = re.compile(r"\{(ADR_[A-Za-z0-9_]+)\}")
 
-    # Patterns for potential decisions hidden in normal prose
-    UNLABELED_DECISION_PATTERNS = [
+    # Patterns detecting unilateral decisions stated in prose
+    PROSE_DECISION_PATTERNS = [
         re.compile(r"(?:設計方針|アーキテクチャ方針|基本方針|決定事項として|方針として|設計判断として)[：:]?\s*([^。\n]{15,120}[。])"),
-        re.compile(r"(?:を採用する|に固定する|を禁止する|はサポート外とする|は不可とする)[。]"),
+        re.compile(r"(?:を採用する|に固定する|を禁止する|はサポート外とする|は不可とする|と決定した)[。]"),
     ]
 
     STRAWMAN_MIN_RATIO = 0.35
@@ -127,30 +125,29 @@ class FakeDecisionDetector:
         self.repo_root = repo_root or config.config_dir
 
     def count_blocks(self, documents: list[ParsedDocument]) -> int:
-        return sum(len(self._find_blocks(d.content)) for d in documents)
+        return sum(len(self._find_local_decision_blocks(d.content)) for d in documents)
 
     def verify(self, documents: list[ParsedDocument], graph: Graph) -> list[DecisionFinding]:
-        """Perform static detection of suspicious ADRs and unlabeled decisions."""
+        """Perform static detection of ad-hoc decisions in prose and local blocks."""
         findings: list[DecisionFinding] = []
         section_by_id = {s.section_id: (d, s) for d in documents for s in d.sections}
         subgraphs = {sg["item_label"].strip("{}"): sg for sg in graph.extract_item_subgraphs()}
         diff_lines_by_file = self._changed_lines_by_file()
 
-        # 1. Explicit ADR block scan
+        # 1. Check local ADR blocks (detect ad-hoc local decisions disguised as ADRs)
         for doc in documents:
-            for blk in self._find_blocks(doc.content):
+            for blk in self._find_local_decision_blocks(doc.content):
                 reasons: list[str] = []
 
                 ref_files = self._referencing_files(blk, doc, documents, subgraphs, section_by_id)
                 if not ref_files:
                     reasons.append(
-                        "他コンポーネントの設計文書から一切参照されていない（孤立ADR。"
-                        "本当に単一コンポーネント限定の決定か確認）"
+                        "他コンポーネントから一切参照されていない孤立した決定ブロック（コンポーネント内で勝手に閉じたアドホック決定の疑い）"
                     )
 
                 option_count, strawman_reason = self._evaluate_options(blk.text)
                 if option_count <= 1:
-                    reasons.append(f"「選択肢」の実質エントリ数が{option_count}件で、対抗案の比較検討が見当たらない")
+                    reasons.append(f"「選択肢」の実質エントリ数が{option_count}件で、対抗案のないアドホックな独断決定")
                 elif strawman_reason:
                     reasons.append(strawman_reason)
 
@@ -158,17 +155,16 @@ class FakeDecisionDetector:
                 touched = any(blk.line <= ln <= blk.end_line for ln in touched_lines)
                 if touched:
                     reasons.append(
-                        "現在の未コミット差分でこの決定事項ブロックが追加/変更されている"
-                        "（Judge/Gate失敗の帳尻合わせで後付けされた記述でないか確認）"
+                        "現在の未コミット差分で決定ブロックが追加/変更されている（テストや辻褄合わせで後付けされた疑い）"
                     )
 
                 if reasons:
                     findings.append(DecisionFinding(
-                        keyword=blk.keyword,
-                        is_bracket_keyword=(blk.keyword == blk.bracket_keyword),
+                        keyword=blk.label,
+                        is_bracket_keyword=(blk.label == blk.bracket_keyword),
                         file_path=doc.file_path,
                         line=blk.line,
-                        kind="EXPLICIT_ADR",
+                        kind="ADHOC_LOCAL_ADR",
                         reasons=reasons,
                         option_count=option_count,
                         referenced_file_count=len(ref_files),
@@ -177,9 +173,9 @@ class FakeDecisionDetector:
                         snippet=blk.text[:200].strip(),
                     ))
 
-        # 2. Unlabeled decisions scan (in touched sections or key design sections)
-        unlabeled_findings = self._detect_unlabeled_decisions(documents, diff_lines_by_file)
-        findings.extend(unlabeled_findings)
+        # 2. Check prose for ad-hoc policy and decision statements
+        prose_findings = self._detect_prose_decisions(documents, diff_lines_by_file)
+        findings.extend(prose_findings)
 
         return findings
 
@@ -189,7 +185,7 @@ class FakeDecisionDetector:
         backend_name: str = "sakura",
         diff_only: bool = False,
     ) -> list[DecisionFinding]:
-        """Perform semantic LLM-based audit to detect fake/unilateral decisions."""
+        """Perform semantic LLM audit to detect ad-hoc decisions in prose and diffs."""
         diff_lines_by_file = self._changed_lines_by_file()
         findings: list[DecisionFinding] = []
 
@@ -204,14 +200,13 @@ class FakeDecisionDetector:
                 if diff_only and not is_touched:
                     continue
 
-                # Review sections that contain design decisions, ADRs, or uncommitted diffs
                 has_decision_clue = any(
                     kw in sec.body_text for kw in ["ADR", "決定", "選択肢", "方針", "採用", "トレードオフ", "固定", "禁止"]
                 )
                 if not (is_touched or has_decision_clue):
                     continue
 
-                prompt = FAKE_DECISION_JUDGE_PROMPT.format(
+                prompt = FAKE_DECISION_PROMPT.format(
                     file_path=doc.file_path,
                     section_title=sec.heading,
                     content_text=sec.body_text[:4000],
@@ -238,7 +233,6 @@ class FakeDecisionDetector:
                                 snippet=sec.body_text[:200].strip(),
                             ))
                 except Exception as e:
-                    # Non-fatal: LLM failure reports advisory warning
                     print(f"[Warning] LLM fake decision audit failed for {doc.file_path}#{sec.heading}: {e}")
 
         return findings
@@ -256,7 +250,7 @@ class FakeDecisionDetector:
             return judge._call_ollama(prompt, model)
 
     # ------------------------------------------------------------------ #
-    def _detect_unlabeled_decisions(
+    def _detect_prose_decisions(
         self, documents: list[ParsedDocument], diff_lines_by_file: dict[str, set[int]]
     ) -> list[DecisionFinding]:
         findings: list[DecisionFinding] = []
@@ -266,31 +260,28 @@ class FakeDecisionDetector:
             touched_lines = diff_lines_by_file.get(doc.file_path, set())
 
             for line_idx, line in enumerate(lines, start=1):
-                # Only check lines with substantive length and not inside formal code blocks
                 if line.startswith("```") or len(line.strip()) < 10:
                     continue
 
-                # Skip explicit ADR lines (handled by _find_blocks)
                 if "決定事項" in line and ("ADR_" in line or "案1" in line):
                     continue
 
-                for pat in self.UNLABELED_DECISION_PATTERNS:
+                for pat in self.PROSE_DECISION_PATTERNS:
                     m = pat.search(line)
                     if m:
                         matched_text = m.group(0)
                         is_touched = line_idx in touched_lines
 
-                        # If in working diff or explicitly introducing a major policy
-                        if is_touched and ("固定する" in matched_text or "方針として" in matched_text or "禁止する" in matched_text):
+                        if is_touched and ("固定する" in matched_text or "方針として" in matched_text or "禁止する" in matched_text or "と決定した" in matched_text):
                             findings.append(DecisionFinding(
-                                keyword=f"Unlabeled: L{line_idx}",
+                                keyword=f"Prose: L{line_idx}",
                                 is_bracket_keyword=False,
                                 file_path=doc.file_path,
                                 line=line_idx,
-                                kind="UNLABELED_DECISION",
+                                kind="PROSE_DECISION",
                                 reasons=[
-                                    "明示的な {ADR_*} タグや選択肢の検討なしに、未コミット差分で設計方針・決定が導入されている"
-                                    "（勝手な独断や辻褄合わせでないか確認）"
+                                    "コンポーネント内の地の文で、要求仕様や正規ADRの裏付けなく勝手な設計方針・制約が導入されている"
+                                    "（アドホックな独断や辻褄合わせでないか確認）"
                                 ],
                                 in_working_diff=is_touched,
                                 confidence="LOW",
@@ -300,8 +291,8 @@ class FakeDecisionDetector:
 
         return findings
 
-    def _find_blocks(self, content: str) -> list[_ADRBlock]:
-        blocks: list[_ADRBlock] = []
+    def _find_local_decision_blocks(self, content: str) -> list[_LocalDecisionBlock]:
+        blocks: list[_LocalDecisionBlock] = []
 
         for m in self.INLINE_DECISION_RE.finditer(content):
             keyword = m.group(1)
@@ -309,8 +300,8 @@ class FakeDecisionDetector:
             nm = self.NEXT_INLINE_DECISION_RE.search(content, m.end())
             end = nm.start() if nm else len(content)
             end_line = content.count("\n", 0, end) + 1
-            blocks.append(_ADRBlock(keyword=keyword, bracket_keyword=keyword, line=line,
-                                     end_line=end_line, text=content[m.end():end]))
+            blocks.append(_LocalDecisionBlock(label=keyword, bracket_keyword=keyword, line=line,
+                                              end_line=end_line, text=content[m.end():end]))
 
         for m in self.HEADING_ADR_RE.finditer(content):
             heading_id = m.group(2)
@@ -324,8 +315,8 @@ class FakeDecisionDetector:
             block_text = content[m.end():end]
             head_region = block_text.split("\n\n", 1)[0]
             bracket_m = self.ADR_KEYWORD_RE.search(head_region)
-            blocks.append(_ADRBlock(
-                keyword=heading_id,
+            blocks.append(_LocalDecisionBlock(
+                label=heading_id,
                 bracket_keyword=bracket_m.group(1) if bracket_m else None,
                 line=line,
                 end_line=end_line,
@@ -335,7 +326,7 @@ class FakeDecisionDetector:
         return blocks
 
     def _referencing_files(
-        self, blk: _ADRBlock, owning_doc: ParsedDocument,
+        self, blk: _LocalDecisionBlock, owning_doc: ParsedDocument,
         documents: list[ParsedDocument], subgraphs: dict,
         section_by_id: dict
     ) -> set[str]:
@@ -355,7 +346,7 @@ class FakeDecisionDetector:
         for other in documents:
             if other.file_path == owning_doc.file_path:
                 continue
-            if blk.keyword in other.content:
+            if blk.label in other.content:
                 files.add(other.file_path)
         return files
 
@@ -442,8 +433,4 @@ class FakeDecisionDetector:
         match = re.search(r"```json\s*(.*?)\s*```", raw_resp, re.DOTALL)
         clean_text = match.group(1) if match else raw_resp.strip()
         return json.loads(clean_text)
-
-
-# Backwards compatibility alias
-ADRReviewVerifier = FakeDecisionDetector
 

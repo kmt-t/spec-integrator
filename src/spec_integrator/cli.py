@@ -483,8 +483,8 @@ def cmd_detect_fake_decision(args):
 
     findings.sort(key=lambda f: (-len(f.reasons), f.file_path, f.line))
 
-    total_adrs = detector.count_blocks(documents)
-    print(f"Fake-decision scan finished: {len(findings)} flagged decision(s) (scanned {total_adrs} explicit ADR blocks).")
+    total_blocks = detector.count_blocks(documents)
+    print(f"Fake-decision scan finished: {len(findings)} flagged decision(s) (scanned {total_blocks} local decision blocks).")
 
     if args.out:
         out_p = Path(args.out).resolve()
@@ -500,12 +500,12 @@ def cmd_detect_fake_decision(args):
     if args.report:
         rep_p = Path(args.report).resolve()
         rep_p.parent.mkdir(parents=True, exist_ok=True)
-        rep_p.write_text(_adr_findings_to_markdown(findings), encoding="utf-8")
+        rep_p.write_text(_decision_findings_to_markdown(findings), encoding="utf-8")
         print(f"✔ Fake-decision scan Markdown report saved to {rep_p}")
 
     for fnd in findings:
-        kind_tag = f"[{fnd.kind}]" if fnd.kind != "EXPLICIT_ADR" else ""
-        print(f"  [{fnd.file_path}:{fnd.line}] {kind_tag} {_adr_label(fnd)}")
+        kind_tag = f"[{fnd.kind}]"
+        print(f"  [{fnd.file_path}:{fnd.line}] {kind_tag} {_decision_label(fnd)}")
         for r in fnd.reasons:
             print(f"    - {r}")
 
@@ -515,18 +515,17 @@ def cmd_detect_fake_decision(args):
     sys.exit(0)
 
 
-def _adr_label(fnd: DecisionFinding) -> str:
+def _decision_label(fnd: DecisionFinding) -> str:
     """`{ADR_Foo}` for a real keyword tag; a bare `ADR-SCHED-001`-style ID
     or section label otherwise."""
     return f"{{{fnd.keyword}}}" if fnd.is_bracket_keyword else fnd.keyword
 
 
-def _adr_findings_to_markdown(findings: list[DecisionFinding]) -> str:
+def _decision_findings_to_markdown(findings: list[DecisionFinding]) -> str:
     lines = [
         "# でっち上げ決定検知レポート (Fake Decision Detection)",
         "",
-        "このレポートはゲートではなく、人間のレビュー対象を絞り込むためのアドバイザリです。",
-        "「勝手に決めるな」を機械的に断罪するものではなく、「確認する価値がある」ことの目印です。",
+        "このレポートはゲートではなく、コンポーネント設計書内で勝手に定義された独断仕様・アドホック決定を人間がレビューするためのアドバイザリです。",
         "",
         f"- **フラグされた決定事項数**: {len(findings)}",
         "",
@@ -538,13 +537,15 @@ def _adr_findings_to_markdown(findings: list[DecisionFinding]) -> str:
         return "\n".join(lines) + "\n"
 
     for fnd in findings:
-        kind_str = f" ({fnd.kind})" if fnd.kind != "EXPLICIT_ADR" else ""
-        lines.append(f"## `{_adr_label(fnd)}`{kind_str} — `{fnd.file_path}:{fnd.line}`")
+        kind_str = f" ({fnd.kind})"
+        lines.append(f"## `{_decision_label(fnd)}`{kind_str} — `{fnd.file_path}:{fnd.line}`")
         lines.append("")
         lines.append(f"- **分類**: `{fnd.kind}`")
         lines.append(f"- **確信度**: `{fnd.confidence}`")
-        lines.append(f"- **選択肢エントリ数**: {fnd.option_count}")
-        lines.append(f"- **他コンポーネントからの参照ファイル数**: {fnd.referenced_file_count}")
+        if fnd.option_count:
+            lines.append(f"- **選択肢エントリ数**: {fnd.option_count}")
+        if fnd.referenced_file_count:
+            lines.append(f"- **他コンポーネントからの参照ファイル数**: {fnd.referenced_file_count}")
         lines.append(f"- **未コミット差分内**: {'はい' if fnd.in_working_diff else 'いいえ'}")
         if fnd.snippet:
             lines.append(f"- **スニペット**: `{fnd.snippet[:120]}...`")
@@ -634,19 +635,18 @@ def main():
                           help="Allow a partial assessment to exit successfully")
     p_assess.set_defaults(func=cmd_assess)
 
-    # detect-fake-decision (alias: adr-review)
-    for name in ("detect-fake-decision", "adr-review"):
-        p_adr = subparsers.add_parser(
-            name,
-            help="Advisory (non-gating) scan for fake, fabricated, unilateral, or unlabeled decisions "
-                 "(isolated / touched by diff / single-option or strawman / unlabeled decisions / LLM semantic check)")
-        p_adr.add_argument("-c", "--config", default="spec-integrator.yaml", help="Path to configuration file")
-        p_adr.add_argument("-o", "--out", default="reports/fake_decision_report.json", help="Output JSON path")
-        p_adr.add_argument("-r", "--report", default="reports/fake_decision_report.md", help="Output Markdown report path")
-        p_adr.add_argument("--llm", action="store_true", help="Perform deep semantic audit using LLM Judge backend")
-        p_adr.add_argument("--backend", default="sakura", help="LLM backend to use (default: sakura)")
-        p_adr.add_argument("--diff-only", action="store_true", help="Only audit sections touched by the working git diff")
-        p_adr.set_defaults(func=cmd_detect_fake_decision)
+    # detect-fake-decision
+    p_fake = subparsers.add_parser(
+        "detect-fake-decision",
+        help="Advisory (non-gating) scan for fake, fabricated, unilateral, or ad-hoc decisions in component prose "
+             "(prose decisions / isolated local ADRs / touched diffs / LLM semantic check)")
+    p_fake.add_argument("-c", "--config", default="spec-integrator.yaml", help="Path to configuration file")
+    p_fake.add_argument("-o", "--out", default="reports/fake_decision_report.json", help="Output JSON path")
+    p_fake.add_argument("-r", "--report", default="reports/fake_decision_report.md", help="Output Markdown report path")
+    p_fake.add_argument("--llm", action="store_true", help="Perform deep semantic audit using LLM Judge backend")
+    p_fake.add_argument("--backend", default="sakura", help="LLM backend to use (default: sakura)")
+    p_fake.add_argument("--diff-only", action="store_true", help="Only audit sections touched by the working git diff")
+    p_fake.set_defaults(func=cmd_detect_fake_decision)
 
     args = parser.parse_args()
     if not hasattr(args, "func"):
