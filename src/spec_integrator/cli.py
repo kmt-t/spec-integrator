@@ -477,8 +477,9 @@ def cmd_detect_fake_decision(args):
     if getattr(args, "llm", False):
         backend = getattr(args, "backend", "sakura")
         diff_only = getattr(args, "diff_only", False)
-        print(f"Running semantic LLM Fake-Decision audit (backend: {backend}, diff_only: {diff_only})...", flush=True)
-        llm_findings = detector.verify_with_llm(documents, backend_name=backend, diff_only=diff_only)
+        max_sections = getattr(args, "max_sections", 15)
+        print(f"Running semantic LLM Fake-Decision audit (backend: {backend}, diff_only: {diff_only}, max_sections: {max_sections})...", flush=True)
+        llm_findings = detector.verify_with_llm(documents, backend_name=backend, diff_only=diff_only, max_sections=max_sections)
         findings.extend(llm_findings)
 
     findings.sort(key=lambda f: (-len(f.reasons), f.file_path, f.line))
@@ -646,6 +647,7 @@ def main():
     p_fake.add_argument("--llm", action="store_true", help="Perform deep semantic audit using LLM Judge backend")
     p_fake.add_argument("--backend", default="sakura", help="LLM backend to use (default: sakura)")
     p_fake.add_argument("--diff-only", action="store_true", help="Only audit sections touched by the working git diff")
+    p_fake.add_argument("--max-sections", type=int, default=15, help="Maximum number of candidate sections to audit with LLM (default: 15, 0 for all)")
     p_fake.set_defaults(func=cmd_detect_fake_decision)
 
     args = parser.parse_args()

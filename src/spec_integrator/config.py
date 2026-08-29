@@ -185,6 +185,29 @@ class HeuristicConfig:
 
 
 @dataclass
+class FakeDecisionDetectorConfig:
+    """Configuration for Fake Decision Detector (prose decisions, local ADRs, LLM triggers)."""
+    prose_decision_patterns: list[str] = field(default_factory=lambda: [
+        r"(?:設計方針|アーキテクチャ方針|基本方針|決定事項として|方針として|設計判断として)[：:]?\s*([^。\n]{15,120}[。])",
+        r"(?:を採用する|に固定する|を禁止する|はサポート外とする|は不可とする|と決定した)[。]",
+    ])
+    section_heading_triggers: list[str] = field(default_factory=lambda: [
+        "ADR", "設計判断", "方針", "トレードオフ", "制約", "設計方針", "決定",
+    ])
+    body_text_triggers: list[str] = field(default_factory=lambda: [
+        "**決定事項**:", "ADR-", "トレードオフ", "設計方針", "アーキテクチャ方針",
+        "方針として", "判断として", "決定する", "固定する", "採用する", "禁止する",
+    ])
+    inline_decision_pattern: str = r"-\s*\*\*決定事項\*\*:\s*`?\{(ADR_[A-Za-z0-9_]+)\}`?"
+    heading_adr_pattern: str = r"^(#{2,6})\s*(ADR[-_][A-Za-z0-9_\-]+)\s*[:：]"
+    option_header_pattern: str = r"\*\*選択肢(?:と評価)?\*\*"
+    option_entry_pattern: str = r"案\s*(\d+)\s*[:：]"
+    conclusion_pattern: str = r"\*\*結論\*\*[:：].*?案\s*(\d+)"
+    strawman_min_ratio: float = 0.35
+    strawman_abs_chars: int = 40
+
+
+@dataclass
 class RiskAssessmentConfig:
     heuristic: HeuristicConfig = field(default_factory=HeuristicConfig)
 
@@ -203,6 +226,7 @@ class Config:
     obligation: ObligationConfig = field(default_factory=ObligationConfig)
     consistency: ConsistencyConfig = field(default_factory=ConsistencyConfig)
     risk_assessment: RiskAssessmentConfig = field(default_factory=RiskAssessmentConfig)
+    fake_decision_detector: FakeDecisionDetectorConfig = field(default_factory=FakeDecisionDetectorConfig)
     config_dir: Path = field(default_factory=Path.cwd)
 
     def is_excluded(self, file_path: str | Path, docs_root: Path | None = None) -> bool:
@@ -394,6 +418,22 @@ class Config:
         )
         risk_assessment = RiskAssessmentConfig(heuristic=heuristic_config)
 
+        # Fake Decision Detector
+        fd_data = data.get("fake_decision_detector", {})
+        fd_defaults = FakeDecisionDetectorConfig()
+        fake_decision_detector = FakeDecisionDetectorConfig(
+            prose_decision_patterns=list(fd_data.get("prose_decision_patterns", fd_defaults.prose_decision_patterns)),
+            section_heading_triggers=list(fd_data.get("section_heading_triggers", fd_defaults.section_heading_triggers)),
+            body_text_triggers=list(fd_data.get("body_text_triggers", fd_defaults.body_text_triggers)),
+            inline_decision_pattern=str(fd_data.get("inline_decision_pattern", fd_defaults.inline_decision_pattern)),
+            heading_adr_pattern=str(fd_data.get("heading_adr_pattern", fd_defaults.heading_adr_pattern)),
+            option_header_pattern=str(fd_data.get("option_header_pattern", fd_defaults.option_header_pattern)),
+            option_entry_pattern=str(fd_data.get("option_entry_pattern", fd_defaults.option_entry_pattern)),
+            conclusion_pattern=str(fd_data.get("conclusion_pattern", fd_defaults.conclusion_pattern)),
+            strawman_min_ratio=float(fd_data.get("strawman_min_ratio", fd_defaults.strawman_min_ratio)),
+            strawman_abs_chars=int(fd_data.get("strawman_abs_chars", fd_defaults.strawman_abs_chars)),
+        )
+
         return cls(
             version=str(data.get("version", "1.0")),
             project=project,
@@ -407,6 +447,7 @@ class Config:
             obligation=obligation,
             consistency=consistency,
             risk_assessment=risk_assessment,
+            fake_decision_detector=fake_decision_detector,
             config_dir=config_dir
         )
 
