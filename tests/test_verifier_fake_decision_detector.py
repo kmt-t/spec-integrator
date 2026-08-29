@@ -1,10 +1,11 @@
 import subprocess
+from unittest.mock import MagicMock, patch
 import pytest
 from pathlib import Path
 from spec_integrator.config import Config
 from spec_integrator.parser import MarkdownParser
 from spec_integrator.graph import DocGraphBuilder
-from spec_integrator.verifier.adr_review import ADRReviewVerifier
+from spec_integrator.verifier.fake_decision_detector import FakeDecisionDetector, ADRReviewVerifier
 
 
 def _build(tmp_path, files: dict[str, str]):
@@ -79,7 +80,7 @@ HEADING_STYLE = """# Scheduler
 
 def test_isolated_single_option_adr_is_flagged(tmp_path):
     cfg, docs, graph = _build(tmp_path, {"components/tier3_jit/jit_compiler.md": ISOLATED_SINGLE_OPTION})
-    findings = ADRReviewVerifier(cfg, repo_root=tmp_path).verify(docs, graph)
+    findings = FakeDecisionDetector(cfg, repo_root=tmp_path).verify(docs, graph)
 
     f = _keyword(findings, "ADR_Lonely")
     assert f.is_bracket_keyword
@@ -94,14 +95,14 @@ def test_well_discussed_cross_referenced_adr_is_not_flagged(tmp_path):
         "components/tier3_jit/jit_compiler.md": WELL_FORMED_ADR,
         "components/tier1_core/other_component.md": REFERENCING_DOC,
     })
-    findings = ADRReviewVerifier(cfg, repo_root=tmp_path).verify(docs, graph)
+    findings = FakeDecisionDetector(cfg, repo_root=tmp_path).verify(docs, graph)
 
     assert all(f.keyword != "ADR_WellDiscussed" for f in findings)
 
 
 def test_strawman_alternative_is_flagged(tmp_path):
     cfg, docs, graph = _build(tmp_path, {"components/tier3_jit/jit_compiler.md": STRAWMAN_ADR})
-    findings = ADRReviewVerifier(cfg, repo_root=tmp_path).verify(docs, graph)
+    findings = FakeDecisionDetector(cfg, repo_root=tmp_path).verify(docs, graph)
 
     f = _keyword(findings, "ADR_Strawman")
     assert f.option_count == 2
@@ -110,7 +111,7 @@ def test_strawman_alternative_is_flagged(tmp_path):
 
 def test_heading_style_adr_without_keyword_uses_text_search_for_isolation(tmp_path):
     cfg, docs, graph = _build(tmp_path, {"components/tier1_core/os_scheduler.md": HEADING_STYLE})
-    findings = ADRReviewVerifier(cfg, repo_root=tmp_path).verify(docs, graph)
+    findings = FakeDecisionDetector(cfg, repo_root=tmp_path).verify(docs, graph)
 
     f = _keyword(findings, "ADR-SCHED-001")
     assert not f.is_bracket_keyword
@@ -124,7 +125,7 @@ def test_heading_style_adr_referenced_elsewhere_is_not_isolated(tmp_path):
         "components/tier1_core/os_scheduler.md": HEADING_STYLE,
         "components/tier1_core/other_component.md": "# Other\nSee ADR-SCHED-001 for the rationale.\n",
     })
-    findings = ADRReviewVerifier(cfg, repo_root=tmp_path).verify(docs, graph)
+    findings = FakeDecisionDetector(cfg, repo_root=tmp_path).verify(docs, graph)
 
     f = _keyword(findings, "ADR-SCHED-001")
     assert f.referenced_file_count == 1
@@ -149,7 +150,7 @@ def test_adr_block_touched_by_uncommitted_diff_is_flagged(tmp_path):
     target.write_text(WELL_FORMED_ADR.replace("案3を採用する。", "案3を採用する（改訂）。"), encoding="utf-8")
 
     cfg2, docs2, graph2 = _build(tmp_path, {"components/tier3_jit/jit_compiler.md": target.read_text(encoding="utf-8")})
-    findings = ADRReviewVerifier(cfg2, repo_root=tmp_path).verify(docs2, graph2)
+    findings = FakeDecisionDetector(cfg2, repo_root=tmp_path).verify(docs2, graph2)
 
     f = _keyword(findings, "ADR_WellDiscussed")
     assert f.in_working_diff
@@ -158,7 +159,64 @@ def test_adr_block_touched_by_uncommitted_diff_is_flagged(tmp_path):
 
 def test_no_git_repo_does_not_raise(tmp_path):
     cfg, docs, graph = _build(tmp_path, {"components/tier3_jit/jit_compiler.md": ISOLATED_SINGLE_OPTION})
-    # tmp_path is not a git repo -- the diff signal must degrade gracefully.
-    findings = ADRReviewVerifier(cfg, repo_root=tmp_path).verify(docs, graph)
+    findings = FakeDecisionDetector(cfg, repo_root=tmp_path).verify(docs, graph)
     f = _keyword(findings, "ADR_Lonely")
     assert not f.in_working_diff
+
+
+def test_unlabeled_decision_in_working_diff_is_flagged(tmp_path):
+    orig = "# Runtime\n## 1. Concept\nNormal description.\n"
+    cfg, docs, graph = _build(tmp_path, {"components/tier2_runtime/runtime_engine.md": orig})
+
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "baseline")
+
+    # Introduce a unilateral policy statement in diff without ADR
+    modified = "# Runtime\n## 1. Concept\n設計方針として、R3レジスタを独占的に内部使用に固定する。\n"
+    target = tmp_path / "docs" / "components" / "tier2_runtime" / "runtime_engine.md"
+    target.write_text(modified, encoding="utf-8")
+
+    cfg2, docs2, graph2 = _build(tmp_path, {"components/tier2_runtime/runtime_engine.md": modified})
+    findings = FakeDecisionDetector(cfg2, repo_root=tmp_path).verify(docs2, graph2)
+
+    unlabeled = [f for f in findings if f.kind == "UNLABELED_DECISION"]
+    assert len(unlabeled) >= 1
+    assert unlabeled[0].in_working_diff
+    assert any("明示的な {ADR_*} タグや選択肢の検討なしに" in r for r in unlabeled[0].reasons)
+
+
+def test_llm_verification_detects_unilateral_decision(tmp_path):
+    doc_text = """# JIT
+## 2. Register Layout
+勝手な判断として、インタープリタと相談せずにR10をフラグ専用に固定することにする。
+"""
+    cfg, docs, graph = _build(tmp_path, {"components/tier3_jit/jit.md": doc_text})
+
+    detector = FakeDecisionDetector(cfg, repo_root=tmp_path)
+
+    mock_resp = """```json
+{
+  "is_problematic": true,
+  "confidence": "HIGH",
+  "issues": [
+    {
+      "category": "UNILATERAL_DECISION",
+      "summary": "Arbitrary register pinning without trade-off analysis",
+      "reason": "R10 is unilaterally pinned without consulting interpreter calling conventions.",
+      "quote": "R10をフラグ専用に固定することにする"
+    }
+  ]
+}
+```"""
+
+    with patch.object(FakeDecisionDetector, "_call_llm_backend", return_value=mock_resp):
+        findings = detector.verify_with_llm(docs, backend_name="sakura")
+
+    assert len(findings) == 1
+    assert findings[0].kind == "LLM_FLAGGED"
+    assert findings[0].confidence == "HIGH"
+    assert any("UNILATERAL_DECISION" in r for r in findings[0].reasons)
+
