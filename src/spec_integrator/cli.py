@@ -23,6 +23,7 @@ from spec_integrator.verifier.evidence import EvidenceVerifier
 from spec_integrator.verifier.obligation import ObligationVerifier
 from spec_integrator.verifier.consistency import ConsistencyVerifier
 from spec_integrator.verifier.topology import TopologyVerifier
+from spec_integrator.verifier.adr_review import ADRReviewVerifier
 from spec_integrator.judge import SemanticJudge, RiskAssessor
 from spec_integrator.reporter import Reporter
 
@@ -458,6 +459,90 @@ def cmd_assess(args):
     sys.exit(0)
 
 
+def cmd_detect_fake_decision(args):
+    """Advisory report, not a gate: flags `{ADR_*}` decisions that look like
+    they were decided unilaterally to paper over an inconsistency, rather
+    than a genuine cross-cutting architectural decision (isolated / touched
+    by the current diff / single-option or strawman), so a reviewer doesn't
+    have to eyeball every ADR in the corpus to find the ones that need it.
+    See ADRReviewVerifier's docstring."""
+    config_path = args.config
+    config = Config.load(config_path)
+    documents, graph, db, docs_root = _load_and_parse_all(config)
+    db.close()
+
+    print("Scanning ADR decision blocks for fabricated/unilateral-decision patterns...", flush=True)
+    verifier = ADRReviewVerifier(config)
+    findings = verifier.verify(documents, graph)
+    findings.sort(key=lambda f: (-len(f.reasons), f.file_path, f.line))
+
+    total_adrs = verifier.count_blocks(documents)
+    print(f"Fake-decision scan finished: {len(findings)} flagged decision(s) out of {total_adrs} total.")
+
+    if args.out:
+        out_p = Path(args.out).resolve()
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_p, "w", encoding="utf-8") as f:
+            json.dump({
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "flagged_count": len(findings),
+                "findings": [asdict(fnd) for fnd in findings],
+            }, f, indent=2, ensure_ascii=False)
+        print(f"✔ Fake-decision scan JSON saved to {out_p}")
+
+    if args.report:
+        rep_p = Path(args.report).resolve()
+        rep_p.parent.mkdir(parents=True, exist_ok=True)
+        rep_p.write_text(_adr_findings_to_markdown(findings), encoding="utf-8")
+        print(f"✔ Fake-decision scan Markdown report saved to {rep_p}")
+
+    for fnd in findings:
+        print(f"  [{fnd.file_path}:{fnd.line}] {_adr_label(fnd)}")
+        for r in fnd.reasons:
+            print(f"    - {r}")
+
+    # Advisory: never fails the build. A human reviews the report (see
+    # `tools/README.md`); auto-failing on a heuristic pattern match would just
+    # move the rubber stamp from the ADR author to this script.
+    sys.exit(0)
+
+
+def _adr_label(fnd) -> str:
+    """`{ADR_Foo}` for a real keyword tag; a bare `ADR-SCHED-001`-style ID
+    otherwise -- wrapping a heading ID in braces would misleadingly imply it
+    is a DocGraph keyword when it is really just heading text."""
+    return f"{{{fnd.keyword}}}" if fnd.is_bracket_keyword else fnd.keyword
+
+
+def _adr_findings_to_markdown(findings: list) -> str:
+    lines = [
+        "# でっち上げ決定検知レポート (Fake Decision Detection)",
+        "",
+        "このレポートはゲートではなく、人間のレビュー対象を絞り込むためのアドバイザリです。",
+        "「勝手に決めるな」を機械的に断罪するものではなく、「確認する価値がある」ことの目印です。",
+        "",
+        f"- **フラグされた決定事項数**: {len(findings)}",
+        "",
+        "---",
+        "",
+    ]
+    if not findings:
+        lines.append("フラグされた ADR はありません。")
+        return "\n".join(lines) + "\n"
+
+    for fnd in findings:
+        lines.append(f"## `{_adr_label(fnd)}` — `{fnd.file_path}:{fnd.line}`")
+        lines.append("")
+        lines.append(f"- **選択肢エントリ数**: {fnd.option_count}")
+        lines.append(f"- **他コンポーネントからの参照ファイル数**: {fnd.referenced_file_count}")
+        lines.append(f"- **未コミット差分内**: {'はい' if fnd.in_working_diff else 'いいえ'}")
+        lines.append("- **検知理由**:")
+        for r in fnd.reasons:
+            lines.append(f"  - {r}")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="spec-integrator",
@@ -535,6 +620,17 @@ def main():
     p_assess.add_argument("--no-strict", dest="strict", action="store_false",
                           help="Allow a partial assessment to exit successfully")
     p_assess.set_defaults(func=cmd_assess)
+
+    # detect-fake-decision
+    p_adr = subparsers.add_parser(
+        "detect-fake-decision",
+        help="Advisory (non-gating) scan for {ADR_*} decisions that look unilaterally decided "
+             "rather than genuine architecture decisions "
+             "(isolated / touched by the current diff / single-option or strawman)")
+    p_adr.add_argument("-c", "--config", default="spec-integrator.yaml", help="Path to configuration file")
+    p_adr.add_argument("-o", "--out", default="reports/fake_decision_report.json", help="Output JSON path")
+    p_adr.add_argument("-r", "--report", default="reports/fake_decision_report.md", help="Output Markdown report path")
+    p_adr.set_defaults(func=cmd_detect_fake_decision)
 
     args = parser.parse_args()
     if not hasattr(args, "func"):
