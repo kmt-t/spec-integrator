@@ -594,13 +594,15 @@ def cmd_judge_test_chain(args):
         print(f"✔ Test chain judge JSON report saved to {out_p}")
 
     # Save Markdown report
+    proj_name = config.project.name if hasattr(config.project, "name") and config.project.name else "System Specification"
+    md_content = report.to_markdown(project_name=proj_name)
     if args.report:
         rep_p = Path(args.report).resolve()
         rep_p.parent.mkdir(parents=True, exist_ok=True)
-        rep_p.write_text(report.to_markdown(), encoding="utf-8")
+        rep_p.write_text(md_content, encoding="utf-8")
         print(f"✔ Test chain judge Markdown report saved to {rep_p}")
 
-    print("\n" + report.to_markdown())
+    print("\n" + md_content)
 
     if report.fail_count > 0:
         sys.exit(1)

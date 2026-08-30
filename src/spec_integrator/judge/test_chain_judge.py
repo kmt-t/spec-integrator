@@ -14,11 +14,11 @@ from spec_integrator.judge.semantic_judge import LLMJudge
 
 TEST_CHAIN_PROMPT_TEMPLATE = """You are a strict, formal Software Verification and Specification Auditor.
 Your mission is to perform an exhaustive, end-to-end consistency audit across a 3-tier traceability chain:
-1. DESIGN SPECIFICATION (Design Specs: Architecture, invariants, layouts, calling conventions, error handling)
+1. DESIGN SPECIFICATION (Design Specs: Architecture, invariants, layouts, interfaces, error handling)
 2. TEST SPECIFICATION (Test Specs: Test cases, preconditions, steps, expected results, requirement mappings)
 3. TEST IMPLEMENTATION CODE (Test Code: Actual runnable test functions, assertions, mocks, harnesses)
 
-Target Component: {component_name}
+Target Component / Module: {component_name}
 
 === 1. DESIGN SPECIFICATION ===
 {design_spec_text}
@@ -33,7 +33,7 @@ Target Component: {component_name}
 Perform your audit systematically against the following 4 core criteria:
 
 1. Design Spec -> Test Spec Completeness (Specification Coverage):
-   - Check whether all critical invariants, calling conventions (e.g. CPS 4-argument, register mappings), memory layouts (e.g. 16-byte fixed headers, offsets), lifecycle states, error handling policies, and safety constraints specified in the DESIGN SPECIFICATION are formally covered by test cases in the TEST SPECIFICATION.
+   - Check whether all critical invariants, calling conventions, data structures, state machines, error handling policies, and safety constraints specified in the DESIGN SPECIFICATION are formally covered by test cases in the TEST SPECIFICATION.
    - Flag any crucial design requirement that lacks a corresponding test case as an ERROR or WARNING (Missing Test Specification).
 
 2. Test Spec -> Test Code Fidelity (Implementation Faithfulness):
@@ -42,15 +42,15 @@ Perform your audit systematically against the following 4 core criteria:
    - Flag any test case in the test spec that is absent or diluted in the test code as an ERROR or WARNING (Unimplemented / Diluted Test Case).
 
 3. Test Code -> Design Spec Semantic Consistency (No Hidden Divergence):
-   - Verify that the actual constants, struct layouts, calling signatures, memory boundaries, and execution models checked in the TEST CODE directly conform to the DESIGN SPECIFICATION.
-   - Detect any contradictions where the test code enforces an outdated or conflicting convention not sanctioned by the design spec.
+   - Verify that the actual constants, data layouts, calling signatures, boundary constraints, and execution models checked in the TEST CODE directly conform to the DESIGN SPECIFICATION.
+   - Detect any contradictions where the test code enforces an outdated, conflicting, or non-compliant behavior not sanctioned by the design spec.
 
 4. Clean Abstraction Separation:
-   - Ensure the Design Specification and Test Specification maintain pure architectural/formal descriptions without leaking experimental prototype implementation details.
+   - Ensure the Design Specification and Test Specification maintain pure architectural/formal descriptions without leaking transient prototype implementation details.
 
 === AUDITOR RULES ===
 - Literal & Rigorous Evaluation: Judge what the texts and code actually state and execute.
-- Specific Citations: When reporting issues, always cite the specific section names in the design spec, test case IDs in the test spec (e.g. JITC-10, INTP-01), and function names / line numbers in the test code.
+- Specific Citations: When reporting issues, always cite the specific section names in the design spec, test case IDs / table rows in the test spec, and function names / line numbers in the test code.
 - No False Positives: If the 3-tier chain is consistent, well-covered, and faithfully verified, state so concisely as PASS.
 
 === OUTPUT FORMAT ===
@@ -102,9 +102,9 @@ class TestChainReport:
     warn_count: int = 0
     fail_count: int = 0
 
-    def to_markdown(self) -> str:
+    def to_markdown(self, project_name: str = "System Specification") -> str:
         lines = [
-            "# Fireball 設計仕様→テスト仕様→テストコード 一貫性監査レポート (LLM as a Judge)",
+            f"# {project_name} 設計仕様→テスト仕様→テストコード 一貫性監査レポート (LLM as a Judge)",
             "",
             f"- **監査コンポーネント総数**: {self.total_evaluated}",
             f"- **合格 (PASS)**: {self.pass_count}",

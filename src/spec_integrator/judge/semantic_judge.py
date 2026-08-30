@@ -128,9 +128,9 @@ class JudgeReport:
     def __getitem__(self, idx):
         return self.results[idx]
 
-    def to_markdown(self) -> str:
+    def to_markdown(self, project_name: str = "System Specification") -> str:
         lines = [
-            "# Fireball 仕様矛盾・セマンティック整合性監査レポート (LLM as a Judge)",
+            f"# {project_name} 仕様矛盾・セマンティック整合性監査レポート (LLM as a Judge)",
             "",
             f"- **監査サブグラフ総数**: {self.total_evaluated}",
             f"- **合格 (PASS)**: {self.pass_count}",
