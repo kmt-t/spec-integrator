@@ -330,7 +330,6 @@ class Config:
         path = Path(config_path).resolve()
         if not path.exists():
             raise FileNotFoundError(f"Config file not found: {path}")
-
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 

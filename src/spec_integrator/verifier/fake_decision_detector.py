@@ -195,13 +195,11 @@ class FakeDecisionDetector:
             touched_lines = diff_lines_by_file.get(doc.file_path, set())
             if diff_only and not touched_lines:
                 continue
-
             for sec in doc.sections:
                 sec_lines = set(range(sec.line_start, sec.line_end + 1))
                 is_touched = bool(touched_lines & sec_lines)
                 if diff_only and not is_touched:
                     continue
-
                 # Target sections triggered by configuration keywords or touched in working diff
                 is_decision_sec = any(kw in sec.heading for kw in heading_triggers) or any(
                     kw in sec.body_text for kw in body_triggers
@@ -254,7 +252,6 @@ class FakeDecisionDetector:
                     f"    [Warning] LLM fake decision audit error for {doc.file_path}#{sec.heading}: {e}",
                     flush=True,
                 )
-
         return findings
 
     def _call_llm_backend(self, prompt: str, backend_name: str) -> str:
@@ -283,10 +280,8 @@ class FakeDecisionDetector:
             for line_idx, line in enumerate(lines, start=1):
                 if line.startswith("```") or len(line.strip()) < 10:
                     continue
-
                 if self.inline_decision_re.search(line):
                     continue
-
                 for pat in self.prose_decision_patterns:
                     m = pat.search(line)
                     if m:
@@ -309,7 +304,6 @@ class FakeDecisionDetector:
                                 )
                             )
                             break
-
         return findings
 
     def _find_local_decision_blocks(self, content: str) -> list[_LocalDecisionBlock]:
@@ -351,7 +345,6 @@ class FakeDecisionDetector:
                     text=block_text,
                 )
             )
-
         return blocks
 
     def _referencing_files(
@@ -373,7 +366,6 @@ class FakeDecisionDetector:
                     files.add(entry[0].file_path)
             files.discard(owning_doc.file_path)
             return files
-
         files = set()
         for other in documents:
             if other.file_path == owning_doc.file_path:
@@ -398,7 +390,6 @@ class FakeDecisionDetector:
         option_count = len(entries)
         if option_count <= 1:
             return option_count, None
-
         lengths = {no: len(scope[s:e].strip()) for no, s, e in entries}
         concl = self.conclusion_re.search(block)
         chosen_no = concl.group(1) if concl else None
@@ -411,7 +402,6 @@ class FakeDecisionDetector:
 
         if not others or chosen_len == 0:
             return option_count, None
-
         weak = [
             no
             for no, l in others.items()
@@ -441,7 +431,6 @@ class FakeDecisionDetector:
                 return result
         except Exception:
             return result
-
         current_file: str | None = None
         hunk_re = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
         for raw_line in proc.stdout.splitlines():

@@ -123,7 +123,6 @@ class RiskAssessmentReport:
             lines.append(
                 f"| `{a.file_path}` | {a.heading} | {a.tier} | {a.complexity_score}/5 | {a.risk_score}/5 | `{a.recommended_verification}` | {tags_str} | {a.summary} |"
             )
-
         return "\n".join(lines)
 
 
@@ -177,7 +176,6 @@ class RiskAssessor:
                     continue
             if target_tiers is not None and str(doc.tier) not in [str(t) for t in target_tiers]:
                 continue
-
             for sec in doc.sections:
                 if len(sec.body_text.strip()) < min_length:
                     continue
@@ -375,7 +373,6 @@ class RiskAssessor:
         api_key = os.environ.get(api_key_env, "")
         if not api_key:
             raise ValueError(f"Sakura API key environment variable '{api_key_env}' is not set.")
-
         selected_model = model or (
             b_config.model if (b_config and b_config.model) else "preview/Qwen3.6-35B-A3B"
         )
@@ -416,7 +413,6 @@ class RiskAssessor:
         api_key = os.environ.get(api_key_env, "")
         if not api_key:
             raise ValueError(f"OpenRouter API key environment variable '{api_key_env}' is not set.")
-
         selected_model = model or (
             b_config.model if (b_config and b_config.model) else "qwen/qwen3.8-27b"
         )
@@ -484,5 +480,4 @@ class RiskAssessor:
                 json_str = raw_text[first_brace : last_brace + 1]
             else:
                 json_str = raw_text
-
         return json.loads(json_str)

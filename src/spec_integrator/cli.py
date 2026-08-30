@@ -616,7 +616,6 @@ def _decision_findings_to_markdown(findings: list[DecisionFinding]) -> str:
     if not findings:
         lines.append("フラグされた決定事項（Fake Decision）はありません。")
         return "\n".join(lines) + "\n"
-
     for fnd in findings:
         kind_str = f" ({fnd.kind})"
         lines.append(f"## `{_decision_label(fnd)}`{kind_str} — `{fnd.file_path}:{fnd.line}`")
@@ -634,7 +633,6 @@ def _decision_findings_to_markdown(findings: list[DecisionFinding]) -> str:
         for r in fnd.reasons:
             lines.append(f"  - {r}")
         lines.append("")
-
     return "\n".join(lines) + "\n"
 
 

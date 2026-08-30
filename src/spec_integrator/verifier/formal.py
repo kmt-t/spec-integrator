@@ -116,7 +116,6 @@ def _eventuality_quantifier(formula) -> str | None:
                 stack.append((sub, child_quantifier))
         except Exception:
             pass
-
     if "universal" in found:
         return "universal"
     if "existential" in found:
@@ -157,7 +156,6 @@ class FormalVerifier:
                     doc_to_backing_models.setdefault(b, []).append(mf)
             except Exception:
                 pass
-
         for doc in tagged_docs:
             if doc.file_path in doc_to_backing_models:
                 for mf in doc_to_backing_models[doc.file_path]:
@@ -217,7 +215,6 @@ class FormalVerifier:
                     )
                 )
                 continue
-
             for model_file in model_files:
                 key = str(model_file.resolve())
                 if key in ran_models:
@@ -225,7 +222,6 @@ class FormalVerifier:
                     if doc.file_path not in res.backing_documents:
                         res.backing_documents.append(doc.file_path)
                     continue
-
                 res = self._audit_model(model_file, doc.component, docs_root)
                 res.backing_documents = [doc.file_path]
                 ran_models[key] = res
@@ -396,7 +392,6 @@ class FormalVerifier:
         """
         if not self.config.formal_verification.check_guard_effectiveness:
             return results
-
         # Only properties that *claim protection* need a guard.
         claims = [
             (i, p)
@@ -406,11 +401,9 @@ class FormalVerifier:
         ]
         if not claims:
             return results
-
         builder = getattr(module, "build_model", None)
         if builder is None:
             return results
-
         import inspect
 
         try:
@@ -433,7 +426,6 @@ class FormalVerifier:
                     "drawn, not because the design prevents it",
                 )
             return results
-
         try:
             unguarded = builder(guards=False)
         except Exception as e:
@@ -447,7 +439,6 @@ class FormalVerifier:
                     f"build_model(guards=False) raised: {e}",
                 )
             return results
-
         try:
             reachable = set(unguarded.get_reachable_set_from(set(unguarded.S0)))
         except Exception:
@@ -470,7 +461,6 @@ class FormalVerifier:
                     f"violation could not be checked on the unguarded model: {e}",
                 )
                 continue
-
             if not bad_states:
                 results[i] = PropertyResult(
                     results[i].name,
@@ -536,7 +526,6 @@ class FormalVerifier:
                                 declared_violations |= {str(x) for x in mc(model, viol)}
                         except Exception:
                             pass
-
         unexplained = sorted(str(s) for s in (unreachable - declared_violations))
         max_branching = 0
         for s in reachable:
@@ -564,7 +553,6 @@ class FormalVerifier:
                 "deterministic path: it cannot exhibit interleaving, races, deadlock or starvation, "
                 "and any concurrency claim proved over it is vacuous"
             )
-
         return {
             "state_count": len(states),
             "reachable_count": len(reachable),
@@ -583,7 +571,6 @@ class FormalVerifier:
         expect = bool(prop.get("expect", True))
         if formula is None:
             return PropertyResult(name, kind, "INVALID", "property descriptor has no 'formula'")
-
         modelcheck = self._resolve_modelcheck(prop, formula)
         if modelcheck is None:
             return PropertyResult(
@@ -683,7 +670,6 @@ class FormalVerifier:
             sat = set(modelcheck(model, formula))
         except Exception as e:
             return PropertyResult(name, kind, "INVALID", f"model checking raised: {e}")
-
         holds = set(model.S0).issubset(sat)
         if holds == expect:
             if not expect:
@@ -720,7 +706,6 @@ class FormalVerifier:
             module_name = type(formula).__module__ or ""
             if ".LTL" in module_name:
                 return mc
-
             return mc
         except Exception:
             return None
@@ -752,14 +737,12 @@ class FormalVerifier:
                 f"Model '{model_file.name}' is not auditable: {res.details}",
             )
             return issues
-
         if res.status == "ERROR":
             add(
                 "FORMAL-MODEL-ERROR",
                 f"Model '{model_file.name}' failed to run: {res.details}",
             )
             return issues
-
         for err in res.audit.get("errors", []):
             add("FORMAL-MODEL-UNSOUND", f"Model '{model_file.name}': {err}")
 
@@ -795,7 +778,6 @@ class FormalVerifier:
                     "FORMAL-VERIFICATION-FAILED",
                     f"Property '{p.name}' in '{model_file.name}' failed: {p.details}",
                 )
-
         return issues
 
     def _verify_backing_attribution(

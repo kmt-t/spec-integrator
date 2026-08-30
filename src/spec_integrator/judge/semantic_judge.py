@@ -180,7 +180,6 @@ class JudgeReport:
                 else ("🟡 WARN" if r.status == "WARN" else "🔴 FAIL")
             )
             lines.append(f"| `{r.item_label}` | {badge} | {r.summary} | {len(r.issues)} |")
-
         return "\n".join(lines)
 
 
@@ -383,7 +382,6 @@ class SemanticJudge:
             str(i.get("severity", "")).upper() == "ERROR" for i in issues if isinstance(i, dict)
         ):
             status = "FAIL"
-
         return JudgeResult(
             item_id=sg["item_id"],
             item_label=item_label,
@@ -435,7 +433,6 @@ class SemanticJudge:
         api_key = os.environ.get(api_key_env, "")
         if not api_key:
             raise ValueError(f"Sakura API key environment variable '{api_key_env}' is not set.")
-
         selected_model = model or (
             b_config.model if (b_config and b_config.model) else "preview/Qwen3.6-35B-A3B"
         )
@@ -476,7 +473,6 @@ class SemanticJudge:
         api_key = os.environ.get(api_key_env, "")
         if not api_key:
             raise ValueError(f"OpenRouter API key environment variable '{api_key_env}' is not set.")
-
         selected_model = model or (
             b_config.model if (b_config and b_config.model) else "qwen/qwen3.8-27b"
         )
@@ -544,7 +540,6 @@ class SemanticJudge:
                 json_str = raw_text[first_brace : last_brace + 1]
             else:
                 json_str = raw_text
-
         return json.loads(json_str)
 
 

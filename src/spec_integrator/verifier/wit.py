@@ -58,7 +58,6 @@ class WITVerifier:
                         )
                     )
                     continue
-
                 for wit_file in wit_files:
                     res, file_issues = self.verify_wit_file(wit_file, doc.component, docs_root)
                     results.append(res)
@@ -77,7 +76,6 @@ class WITVerifier:
                 res, file_issues = self.verify_wit_file(wit_file, comp, docs_root)
                 results.append(res)
                 issues.extend(file_issues)
-
         return issues, results
 
     def verify_wit_file(
@@ -116,7 +114,6 @@ class WITVerifier:
                     ), issues
             except Exception:
                 pass  # fallback to built-in parser
-
         # 2. Built-in WIT Syntax and Semantic Validator
         syntax_err, interfaces, worlds = self._validate_wit_syntax(content)
         if syntax_err:
@@ -169,7 +166,6 @@ class WITVerifier:
                 else:
                     clean_lines.append((idx, ""))
                     continue
-
             if "/*" in stripped:
                 if "*/" in stripped:
                     # Single line block comment
@@ -181,7 +177,6 @@ class WITVerifier:
             if stripped.startswith("//"):
                 clean_lines.append((idx, ""))
                 continue
-
             # Remove trailing comments
             if "//" in stripped:
                 stripped = stripped.split("//", 1)[0].strip()
@@ -192,7 +187,6 @@ class WITVerifier:
         for line_no, line in clean_lines:
             if not line:
                 continue
-
             # Check interface declaration
             m_iface = re.match(r"^interface\s+([a-z0-9\-]+)\s*\{?", line)
             if m_iface:
@@ -211,7 +205,6 @@ class WITVerifier:
                 ):
                     # Warning or error on malformed package
                     pass
-
             for char in line:
                 if char in "{(":
                     brace_stack.append((char, line_no))
@@ -248,5 +241,4 @@ class WITVerifier:
                 interfaces,
                 worlds,
             )
-
         return None, interfaces, worlds

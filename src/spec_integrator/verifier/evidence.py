@@ -33,13 +33,11 @@ class EvidenceVerifier:
     ) -> list[VerificationIssue]:
         if not self.config.evidence.enabled:
             return []
-
         issues: list[VerificationIssue] = []
         for doc in documents:
             issues.extend(self._check_declared_evidence(doc, docs_root))
             issues.extend(self._check_artifact_refs(doc, docs_root))
             issues.extend(self._check_benchmark_backing(doc, docs_root))
-
         return issues
 
     # ------------------------------------------------------------------ #
@@ -106,7 +104,6 @@ class EvidenceVerifier:
                     message="Document declares '{VERIFY_BENCHMARK}' but carries no 'benchmark:' entry in its '<!-- evidence: ... -->' block.",
                 )
             )
-
         return issues
 
     # ------------------------------------------------------------------ #

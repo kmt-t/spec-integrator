@@ -87,7 +87,6 @@ class ConsistencyVerifier:
         cfg = self.config.consistency
         if not cfg.enabled:
             return [], summary
-
         issues: list[VerificationIssue] = []
         scanned = self._collect_scan_targets(documents, docs_root)
         issues.extend(self._check_stale_values(scanned, summary))
@@ -218,7 +217,6 @@ class ConsistencyVerifier:
         cfg = self.config.consistency
         if not cfg.symbol_patterns:
             return []
-
         symbol_res = [re.compile(p) for p in cfg.symbol_patterns]
         # symbol -> normalized value -> list of "file:line"
         observed: dict[str, dict[str, list[str]]] = {}
@@ -248,7 +246,6 @@ class ConsistencyVerifier:
             # position, so two distinct values for one symbol is real drift.
             if len(values) < 2:
                 continue
-
             drift = SymbolDrift(symbol=symbol, values={v: list(l) for v, l in values.items()})
             summary.drifting_symbols.append(drift)
             rendered = "; ".join(
@@ -286,7 +283,6 @@ class ConsistencyVerifier:
         m = re.search(re.escape(symbol) + r"\s*(?:=|:=)\s*" + VALUE_RE.pattern, line)
         if m:
             return _normalize_value(m.group(1))
-
         # 2. Explicit default marker. The separator is required: "デフォルト値: 6144"
         #    declares a value, whereas "デフォルト 3面" counts banks.
         m = re.search(
@@ -295,7 +291,6 @@ class ConsistencyVerifier:
         )
         if m:
             return _normalize_value(m.group(1))
-
         # 3. Markdown table row: exactly one cell that is nothing but a value
         if line.lstrip().startswith("|"):
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
@@ -325,7 +320,6 @@ class ConsistencyVerifier:
         cfg = self.config.consistency
         if not cfg.cochange:
             return []
-
         lock_path = self.config.resolve_path(cfg.lockfile)
         baseline = self._load_lock(lock_path)
         summary.baseline_present = baseline is not None
@@ -380,7 +374,6 @@ class ConsistencyVerifier:
             ]
             if not changed_definers:
                 continue
-
             for ref_id in sorted(new_refs.get(keyword, [])):
                 if ref_id in changed:
                     continue  # revisited in the same edit — propagation happened
@@ -445,7 +438,6 @@ class ConsistencyVerifier:
                         )
                     else:
                         references.setdefault(kw, []).append(sec.section_id)
-
         return {
             "version": 2,
             "sections": sections,

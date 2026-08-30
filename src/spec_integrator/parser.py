@@ -132,7 +132,6 @@ class MarkdownParser:
             all_keywords.extend(s.keywords)
             all_tags.extend(s.tags)
             all_links.extend(s.links)
-
         return ParsedDocument(
             file_path=rel_path,
             full_path=file_path,
@@ -173,7 +172,6 @@ class MarkdownParser:
                     line_idx += 1
                     break
                 line_idx += 1
-
         return heading_indices
 
     def _extract_text_from_children(self, children: list[dict]) -> str:
@@ -213,7 +211,6 @@ class MarkdownParser:
             if stripped.startswith("```"):
                 in_code_block = not in_code_block
                 continue
-
             # Keywords and tags extraction (only outside code blocks)
             if not in_code_block:
                 for m in self.KEYWORD_REGEX.finditer(line):
@@ -247,7 +244,6 @@ class MarkdownParser:
                     )
                     if parsed_link not in links:
                         links.append(parsed_link)
-
         return ParsedSection(
             section_id=section_id,
             file_path=rel_path,

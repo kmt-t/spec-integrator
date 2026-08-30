@@ -39,7 +39,6 @@ class TopologyVerifier:
             doc_issues, doc_results = self.verify_document(doc, docs_root)
             issues.extend(doc_issues)
             results.extend(doc_results)
-
         return issues, results
 
     def verify_document(
@@ -76,7 +75,6 @@ class TopologyVerifier:
                         ),
                     )
                 )
-
         return issues, results
 
     def _extract_topology_graphs(self, doc: ParsedDocument) -> list[dict]:
@@ -105,7 +103,6 @@ class TopologyVerifier:
                 ]
             ):
                 continue
-
             # Explicit opt-out for internal control flows, algorithm pipelines, or local state loops
             if (
                 "%% not-a-topology" in lower_content
@@ -113,7 +110,6 @@ class TopologyVerifier:
                 or "%% not-topology" in lower_content
             ):
                 continue
-
             # Check all graph / flowchart blocks
             if first_cmd.startswith("graph") or first_cmd.startswith("flowchart"):
                 edges, nodes = self._parse_mermaid_edges(content)
@@ -139,7 +135,6 @@ class TopologyVerifier:
                         "line": 1,
                     }
                 )
-
         return graphs
 
     def _parse_mermaid_edges(self, content: str) -> tuple[list[tuple[str, str]], set[str]]:
@@ -164,7 +159,6 @@ class TopologyVerifier:
                     edges.append((src, dst))
                     nodes.add(src)
                     nodes.add(dst)
-
         return edges, nodes
 
     def _extract_role_matrix_edges(
@@ -200,7 +194,6 @@ class TopologyVerifier:
             ):
                 in_matrix_table = True
                 continue
-
             if in_matrix_table:
                 if line_str.startswith("|") and (
                     "target" in line_str.lower()
@@ -257,7 +250,6 @@ class TopologyVerifier:
                     edges.append(edge)
                 nodes.add(src)
                 nodes.add(dst)
-
         return edges, nodes
 
     def _detect_cycles(
@@ -293,5 +285,4 @@ class TopologyVerifier:
         for node in list(adj.keys()):
             if visited[node] == 0:
                 dfs(node)
-
         return (len(cycles) > 0, cycles)

@@ -157,7 +157,6 @@ class TestChainReport:
                 else ("🟡 WARN" if r.status == "WARN" else "🔴 FAIL")
             )
             lines.append(f"| `{r.component_name}` | {badge} | {r.summary} | {len(r.issues)} |")
-
         return "\n".join(lines)
 
 
@@ -181,7 +180,6 @@ Evaluates 3-tier end-to-end consistency between Design Spec -> Test Spec -> Test
         for df in sorted(design_files):
             if "tests" in df.parts or df.name.endswith("_test_spec.md") or df.name == "FORMAT.md":
                 continue
-
             comp_stem = df.stem
             # Locate matching test specification
             test_spec_file = None
@@ -195,14 +193,12 @@ Evaluates 3-tier end-to-end consistency between Design Spec -> Test Spec -> Test
                     if generic_cands:
                         test_spec_file = generic_cands[0]
                         break
-
             if test_spec_file is None or not test_spec_file.exists():
                 global_cands = list(root.glob(f"components/**/tests/*{comp_stem}*.md"))
                 if global_cands:
                     test_spec_file = global_cands[0]
                 else:
                     continue
-
             # Locate relevant test implementation code generically
             test_code_files: list[Path] = []
             tc_cfg = getattr(self.config, "test_chain", None)
@@ -242,7 +238,6 @@ Evaluates 3-tier end-to-end consistency between Design Spec -> Test Spec -> Test
                     test_code_paths=unique_code,
                 )
             )
-
         return targets
 
     def judge_targets(
@@ -272,7 +267,6 @@ Evaluates 3-tier end-to-end consistency between Design Spec -> Test Spec -> Test
                 report.warn_count += 1
             else:
                 report.fail_count += 1
-
         return report
 
     def _evaluate_single_chain(
@@ -315,7 +309,6 @@ Evaluates 3-tier end-to-end consistency between Design Spec -> Test Spec -> Test
                 test_code_chunks.append(f"--- File: {code_path.name} ---\n{code_text}")
             except Exception:
                 pass
-
         test_code_text = (
             "\n\n".join(test_code_chunks)
             if test_code_chunks

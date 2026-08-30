@@ -62,7 +62,6 @@ class Graph:
                     "total_nodes": 1 + len(def_sources) + len(ref_sources),
                 }
             )
-
         return sorted(subgraphs, key=lambda x: len(x["referenced_in"]), reverse=True)
 
     def to_dict(self) -> dict:
@@ -111,7 +110,6 @@ class Graph:
                         f"|{edge.relation}|" if edge.relation not in ("contains", "defines") else ""
                     )
                     lines.append(f"    {s_src} {arrow}{label} {s_tgt}")
-
         return "\n".join(lines)
 
 
@@ -211,7 +209,6 @@ class DocGraphBuilder:
                             metadata={"line": link.source_line, "text": link.text},
                         )
                     )
-
         return graph
 
     def _is_keyword_definition(self, keyword: str, file_path: str) -> bool:

@@ -53,7 +53,6 @@ class ObligationVerifier:
         cfg = self.config.obligation
         if not cfg.enabled:
             return [], summary
-
         issues: list[VerificationIssue] = []
         risk_path = self.config.resolve_path(cfg.risk_report)
         payload = self._load_json(risk_path)
@@ -74,7 +73,6 @@ class ObligationVerifier:
                     )
                 )
             return issues, summary
-
         assessments = payload.get("assessments", []) or []
         doc_hashes = payload.get("doc_hashes", {}) or {}
         doc_map = {d.file_path: d for d in documents}
@@ -188,18 +186,15 @@ class ObligationVerifier:
             )
             if not is_demanded or not demanded_tags:
                 continue
-
             doc = doc_map.get(file_path)
             if doc is None:
                 continue
-
             summary.demanded += 1
             present = set(doc.all_tags)
             missing = sorted(t for t in demanded_tags if t not in present)
             if not missing:
                 summary.discharged += 1
                 continue
-
             summary.skipped.append(
                 {
                     "file_path": file_path,
@@ -227,7 +222,6 @@ class ObligationVerifier:
         # --- 3. {VERIFY_LLM} must have actually been judged ---
         if cfg.require_judge:
             issues.extend(self._verify_judge_coverage(documents, summary))
-
         return issues, summary
 
     # ------------------------------------------------------------------ #
@@ -239,7 +233,6 @@ class ObligationVerifier:
         tagged = [d for d in documents if llm_tag in d.all_tags]
         if not tagged:
             return []
-
         judge_path = self.config.resolve_path(cfg.judge_report)
         payload = self._load_json(judge_path)
         if payload is None:

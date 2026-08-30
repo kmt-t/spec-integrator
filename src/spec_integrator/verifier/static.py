@@ -64,7 +64,6 @@ class StaticVerifier:
                         )
                     )
                     continue
-
                 # 2. Anchor check
                 if link.target_anchor:
                     target_doc = doc_map[target_file]
@@ -92,7 +91,6 @@ class StaticVerifier:
 
             # 3. Mermaid diagram syntax check
             issues.extend(self._verify_mermaid_blocks(doc))
-
         return issues
 
     def _verify_mermaid_blocks(self, doc: ParsedDocument) -> list[VerificationIssue]:
@@ -111,7 +109,6 @@ class StaticVerifier:
                 issues.extend(self._check_mermaid_syntax(doc.file_path, start_line, buf))
             elif in_mermaid:
                 buf.append((idx, line))
-
         return issues
 
     def _check_mermaid_syntax(
@@ -157,7 +154,6 @@ class StaticVerifier:
                 )
             )
             return issues
-
         try:
             diag = mermaidx.Diagram(diagram_code)
             _ = diag.svg()
@@ -179,7 +175,6 @@ class StaticVerifier:
                     message=f"Mermaid syntax error (mermaidx): {first_err_line}",
                 )
             )
-
         return issues
 
     def _verify_traceability_gate(
@@ -205,7 +200,6 @@ class StaticVerifier:
                     is_def = self._is_keyword_definition(kw, doc.file_path)
                     if is_def:
                         continue
-
                     # It's a reference
                     referenced_keywords.add(kw)
                     if kw not in defined_keywords:
@@ -235,7 +229,6 @@ class StaticVerifier:
                         message=f"Requirement '{{{kw}}}' is defined in Tier 0 but never referenced or refined in downstream component specs.",
                     )
                 )
-
         return issues
 
     def _verify_hierarchy_gate(
@@ -249,11 +242,9 @@ class StaticVerifier:
             tgt_node = graph.nodes.get(edge.target)
             if not src_node or not tgt_node:
                 continue
-
             src_tier = src_node.tier
             if src_tier is None or src_tier == "meta":
                 continue
-
             # Case A: Markdown link to lower tier
             if edge.relation == "links_to" and tgt_node.type in ("file", "section"):
                 tgt_tier = tgt_node.tier
@@ -281,7 +272,6 @@ class StaticVerifier:
                 if kw_name.startswith("META_") or kw_name.startswith("GLOBAL_"):
                     # Meta and Global are exempt from hierarchy direction
                     continue
-
                 # Find definition tier of this keyword
                 def_tier = self._get_keyword_definition_tier(kw_name, documents)
                 if (
@@ -301,7 +291,6 @@ class StaticVerifier:
                                 message=f"Encapsulation violation: Upper Tier {src_tier} references Lower Tier {def_tier} keyword '{{{kw_name}}}'.",
                             )
                         )
-
         return issues
 
     def _is_keyword_definition(self, keyword: str, file_path: str) -> bool:
