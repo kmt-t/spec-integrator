@@ -179,15 +179,23 @@ class TestChainJudge:
                 continue
 
             comp_stem = df.stem
-            # Locate matching test specification in same tier/tests/
-            test_spec_dir = df.parent / "tests"
-            test_spec_file = test_spec_dir / f"{comp_stem}_test_spec.md"
+            # Locate matching test specification
+            test_spec_file = None
+            for p in [df.parent / "tests", df.parent.parent / "tests"]:
+                if p.exists():
+                    cand = p / f"{comp_stem}_test_spec.md"
+                    if cand.exists():
+                        test_spec_file = cand
+                        break
+                    generic_cands = list(p.glob(f"*{comp_stem}*.md"))
+                    if generic_cands:
+                        test_spec_file = generic_cands[0]
+                        break
 
-            if not test_spec_file.exists():
-                # Try generic matching in tests/
-                candidates = list(test_spec_dir.glob(f"*{comp_stem}*.md")) if test_spec_dir.exists() else []
-                if candidates:
-                    test_spec_file = candidates[0]
+            if test_spec_file is None or not test_spec_file.exists():
+                global_cands = list(root.glob(f"components/**/tests/*{comp_stem}*.md"))
+                if global_cands:
+                    test_spec_file = global_cands[0]
                 else:
                     continue
 
