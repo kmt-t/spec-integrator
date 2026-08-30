@@ -558,6 +558,55 @@ def _decision_findings_to_markdown(findings: list[DecisionFinding]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def cmd_judge_test_chain(args):
+    cfg_path = Path(args.config)
+    config = Config.load(cfg_path)
+
+    from spec_integrator.judge import TestChainJudge
+
+    judge = TestChainJudge(config)
+    all_targets = judge.auto_discover_targets()
+
+    if args.component:
+        targets = [t for t in all_targets if t.component_name == args.component or args.component in t.component_name]
+        if not targets:
+            print(f"[Error] No matching component found for '{args.component}'. Available: {', '.join(t.component_name for t in all_targets)}")
+            sys.exit(1)
+    else:
+        targets = all_targets
+
+    max_targets = 0 if args.all else args.max_targets
+    backend = args.backend or config.llm_judge.default_backend
+    report = judge.judge_targets(targets, backend=backend, model=args.model, max_targets=max_targets)
+
+    # Save JSON report
+    if args.out:
+        out_p = Path(args.out).resolve()
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "total_evaluated": report.total_evaluated,
+            "pass_count": report.pass_count,
+            "warn_count": report.warn_count,
+            "fail_count": report.fail_count,
+            "results": [asdict(r) for r in report.results],
+        }
+        out_p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"✔ Test chain judge JSON report saved to {out_p}")
+
+    # Save Markdown report
+    if args.report:
+        rep_p = Path(args.report).resolve()
+        rep_p.parent.mkdir(parents=True, exist_ok=True)
+        rep_p.write_text(report.to_markdown(), encoding="utf-8")
+        print(f"✔ Test chain judge Markdown report saved to {rep_p}")
+
+    print("\n" + report.to_markdown())
+
+    if report.fail_count > 0:
+        sys.exit(1)
+    sys.exit(0)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="spec-integrator",
@@ -649,6 +698,21 @@ def main():
     p_fake.add_argument("--diff-only", action="store_true", help="Only audit sections touched by the working git diff")
     p_fake.add_argument("--max-sections", type=int, default=15, help="Maximum number of candidate sections to audit with LLM (default: 15, 0 for all)")
     p_fake.set_defaults(func=cmd_detect_fake_decision)
+
+    # judge-test-chain
+    p_chain = subparsers.add_parser(
+        "judge-test-chain",
+        help="Run LLM as a Judge on 3-tier traceability chain: Design Spec -> Test Spec -> Test Code"
+    )
+    p_chain.add_argument("-c", "--config", default="spec-integrator.yaml", help="Path to configuration file")
+    p_chain.add_argument("--component", help="Specific component name to audit (e.g. 'jit_compiler', 'runtime_interpreter')")
+    p_chain.add_argument("--backend", choices=["openrouter", "sakura", "ollama", "mock"], help="LLM backend")
+    p_chain.add_argument("--model", help="LLM model name override")
+    p_chain.add_argument("--max-targets", type=int, default=10, help="Max components to evaluate (default: 10, 0 for unlimited)")
+    p_chain.add_argument("-a", "--all", dest="all", action="store_true", help="Audit all discoverable components")
+    p_chain.add_argument("-o", "--out", default="reports/test_chain_judge_report.json", help="Output JSON report path")
+    p_chain.add_argument("-r", "--report", default="reports/test_chain_judge_report.md", help="Output Markdown report path")
+    p_chain.set_defaults(func=cmd_judge_test_chain)
 
     args = parser.parse_args()
     if not hasattr(args, "func"):
