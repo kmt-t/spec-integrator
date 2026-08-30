@@ -411,7 +411,6 @@ class RiskAssessor:
         raise RuntimeError(f"Failed to call Sakura API after 3 attempts: {last_err}")
 
     def _call_openrouter(self, prompt: str, model: str | None) -> str:
-
         b_config = self.config.llm_judge.backends.get("openrouter")
         api_key_env = b_config.api_key_env if b_config else "OPENROUTER_API_KEY"
         api_key = os.environ.get(api_key_env, "")

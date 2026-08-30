@@ -432,7 +432,6 @@ class ConsistencyVerifier:
         return MarkdownParser.config_compute_hash("\n".join(lines))
 
     def build_baseline(self, documents: list[ParsedDocument]) -> dict:
-
         sections: dict[str, str] = {}
         definitions: dict[str, dict[str, str]] = {}
         references: dict[str, list[str]] = {}
