@@ -173,12 +173,14 @@ llm_judge:
 from pyModelChecking import Kripke
 from pyModelChecking.CTL import modelcheck, AG, Not, And, AtomicProposition
 
+
 def build_model():
     S = ["s0", "s1", "s2"]
     S0 = {"s0"}
     R = [("s0", "s1"), ("s1", "s2"), ("s2", "s0")]
     L = {"s0": {"idle"}, "s1": {"busy"}, "s2": {"done"}}
     return Kripke(S=S, S0=S0, R=R, L=L)
+
 
 def verify():
     km = build_model()
@@ -188,8 +190,9 @@ def verify():
     is_valid = km.S0.issubset(sat)
     return {
         "status": "PASS" if is_valid else "FAIL",
-        "invariants": [{"formula": str(phi), "satisfied": is_valid}]
+        "invariants": [{"formula": str(phi), "satisfied": is_valid}],
     }
+
 
 if __name__ == "__main__":
     res = verify()

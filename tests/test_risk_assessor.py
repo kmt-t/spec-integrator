@@ -1,10 +1,19 @@
+import json
 from pathlib import Path
 
-from spec_integrator.config import Config, RiskAssessmentConfig, HeuristicConfig, WaiverRule
-from spec_integrator.parser import ParsedDocument, ParsedSection
-from spec_integrator.judge.risk_assessor import (
-    RiskAssessor, SectionRiskAssessment, RiskAssessmentReport, _keyword_matches,
+from spec_integrator.config import (
+    Config,
+    HeuristicConfig,
+    RiskAssessmentConfig,
+    WaiverRule,
 )
+from spec_integrator.judge.risk_assessor import (
+    RiskAssessmentReport,
+    RiskAssessor,
+    SectionRiskAssessment,
+    _keyword_matches,
+)
+from spec_integrator.parser import ParsedDocument, ParsedSection
 
 
 def test_risk_assessment_report_markdown():
@@ -20,8 +29,11 @@ def test_risk_assessment_report_markdown():
                 formal_needed=True,
                 recommended_verification="pyModelChecking",
                 suggested_tags=["{VERIFY_FORMAL}"],
-                risk_factors=["Deadlock risk during handoff", "Race conditions in channel queues"],
-                summary="High concurrency complexity in CSP handoff."
+                risk_factors=[
+                    "Deadlock risk during handoff",
+                    "Race conditions in channel queues",
+                ],
+                summary="High concurrency complexity in CSP handoff.",
             ),
             SectionRiskAssessment(
                 section_id="sec:system_config.md#静的定数",
@@ -34,16 +46,15 @@ def test_risk_assessment_report_markdown():
                 recommended_verification="Static",
                 suggested_tags=[],
                 risk_factors=[],
-                summary="Simple declarative constants."
-            )
+                summary="Simple declarative constants.",
+            ),
         ],
         total_evaluated=2,
         formal_candidates_count=1,
-        llm_candidates_count=0
+        llm_candidates_count=0,
     )
-
     md = report.to_markdown()
-    assert "# Fireball 設計複雑度 & リスク評価レポート" in md
+    assert "設計複雑度 & リスク評価レポート" in md
     assert "形式検証 (pyModelChecking) 推奨セクション" in md
     assert "`components/tier1_core/os_coos.md`" in md
     assert "`{VERIFY_FORMAL}`" in md
@@ -62,8 +73,9 @@ def test_heuristic_config_has_no_hardcoded_word_lists():
 
 def test_keyword_matches_respects_word_boundaries():
     assert _keyword_matches("mpu", "the mpu region is w^x protected") is True
-    assert _keyword_matches("mpu", "an unrelated word like ampule") is False, \
+    assert _keyword_matches("mpu", "an unrelated word like ampule") is False, (
         "a substring hit inside a longer token must not count as a match"
+    )
     assert _keyword_matches("trade-off", "this is a classic trade-off between x and y") is True
     assert _keyword_matches("trade-off", "tradeoffs without the hyphen do not count") is False
 
@@ -93,7 +105,6 @@ def test_call_heuristic_does_not_flag_formal_from_a_bare_tag_citation():
         heuristic=HeuristicConfig(formal_triggers=["csp"], llm_triggers=[])
     )
     assessor = RiskAssessor(cfg)
-
     doc = ParsedDocument(
         file_path="components/tier1_core/os_coos.md",
         full_path=Path("components/tier1_core/os_coos.md"),
@@ -112,11 +123,12 @@ def test_call_heuristic_does_not_flag_formal_from_a_bare_tag_citation():
         body_text="This section only summarizes ownership; it never discusses rendezvous semantics.",
         keywords=["CSPCommunication"],
     )
-
     import json
+
     verdict = json.loads(assessor._call_heuristic(doc, sec))
-    assert verdict["recommended_verification"] != "pyModelChecking", \
+    assert verdict["recommended_verification"] != "pyModelChecking", (
         "citing {CSPCommunication} as a tag must not alone trigger formal verification"
+    )
 
 
 def test_waived_section_is_not_flagged_as_an_llm_candidate_either():
@@ -130,16 +142,17 @@ def test_waived_section_is_not_flagged_as_an_llm_candidate_either():
         heuristic=HeuristicConfig(
             formal_triggers=[],
             llm_triggers=["rationale"],
-            waivers=[WaiverRule(
-                section_pattern=r"components/tier1_core/os_coos\.md",
-                heading_pattern=r"^概要$",
-                rationale="declarative table, no design tradeoff to audit",
-                authorized_at="2026-08-24",
-            )],
+            waivers=[
+                WaiverRule(
+                    section_pattern=r"components/tier1_core/os_coos\.md",
+                    heading_pattern=r"^概要$",
+                    rationale="declarative table, no design tradeoff to audit",
+                    authorized_at="2026-08-24",
+                )
+            ],
         )
     )
     assessor = RiskAssessor(cfg)
-
     doc = ParsedDocument(
         file_path="components/tier1_core/os_coos.md",
         full_path=Path("components/tier1_core/os_coos.md"),
@@ -159,7 +172,7 @@ def test_waived_section_is_not_flagged_as_an_llm_candidate_either():
         keywords=[],
     )
 
-    import json
     verdict = json.loads(assessor._call_heuristic(doc, sec))
-    assert verdict["recommended_verification"] == "Static", \
+    assert verdict["recommended_verification"] == "Static", (
         "a waived section must not be recommended for LLM_Judge just because it contains a trigger word"
+    )

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
+import json
 import os
 import re
-import json
-import urllib3
-import requests
-from pathlib import Path
+import time
 from dataclasses import dataclass, field
+
+import requests
+import urllib3
+
 from spec_integrator.config import Config
-from spec_integrator.graph import Graph
 from spec_integrator.parser import ParsedDocument
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 
 JUDGE_PROMPT_TEMPLATE = """You are a strict, formal System Specification Verification Judge.
 Your mission is to perform an exhaustive, evidence-based consistency and contradiction audit between a Requirement/Definition section and its referencing Design sections.
@@ -142,7 +142,6 @@ class JudgeReport:
             "## 1. 検出された矛盾・警告 (Issues Found)",
             "",
         ]
-
         issues_found = False
         for r in self.results:
             if r.status in ("WARN", "FAIL") or r.issues:
@@ -160,48 +159,61 @@ class JudgeReport:
                 lines.append("")
 
         if not issues_found:
-            lines.append("✔ 評価されたすべてのサブグラフにおいて、定義と参照設計間の重大な矛盾は検出されませんでした。\n")
+            lines.append(
+                "✔ 評価されたすべてのサブグラフにおいて、定義と参照設計間の重大な矛盾は検出されませんでした。\n"
+            )
 
-        lines.extend([
-            "---",
-            "",
-            "## 2. 全評価結果一覧",
-            "",
-            "| キーワード / 要求ID | 判定 | 評価サマリー | 検出Issue数 |",
-            "| :--- | :---: | :--- | :---: |",
-        ])
-
+        lines.extend(
+            [
+                "---",
+                "",
+                "## 2. 全評価結果一覧",
+                "",
+                "| キーワード / 要求ID | 判定 | 評価サマリー | 検出Issue数 |",
+                "| :--- | :---: | :--- | :---: |",
+            ]
+        )
         for r in self.results:
-            badge = "🟢 PASS" if r.status == "PASS" else ("🟡 WARN" if r.status == "WARN" else "🔴 FAIL")
+            badge = (
+                "🟢 PASS"
+                if r.status == "PASS"
+                else ("🟡 WARN" if r.status == "WARN" else "🔴 FAIL")
+            )
             lines.append(f"| `{r.item_label}` | {badge} | {r.summary} | {len(r.issues)} |")
 
         return "\n".join(lines)
 
 
 class SemanticJudge:
-    """Evaluates semantic consistency, completeness, and contradictions
-
-    between specification definitions and their referencing design sections
-    using an LLM as a Judge.
     """
+    Evaluates semantic consistency, completeness, and contradictions
+        between specification definitions and their referencing design sections
+        using an LLM as a Judge.
+    """
+
     def __init__(self, config: Config):
         self.config = config
 
-    def judge_subgraphs(self, subgraphs: list[dict], documents: list[ParsedDocument],
-                         backend: str | None = None, model: str | None = None,
-                         max_subgraphs: int = 10,
-                         exhaustive: bool = False,
-                         min_references: int = 1,
-                         changed_sections: set[str] | None = None) -> JudgeReport:
+    def judge_subgraphs(
+        self,
+        subgraphs: list[dict],
+        documents: list[ParsedDocument],
+        backend: str | None = None,
+        model: str | None = None,
+        max_subgraphs: int = 10,
+        exhaustive: bool = False,
+        min_references: int = 1,
+        changed_sections: set[str] | None = None,
+    ) -> JudgeReport:
         report = JudgeReport()
         selected_backend = backend or self.config.llm_judge.default_backend
-
         llm_tag = self.config.llm_judge.tag
-
         # Filter candidates based on mode
         if exhaustive:
             # Exhaustive mode: check ALL subgraphs with references (or all subgraphs if min_references == 0)
-            target_subgraphs = [sg for sg in subgraphs if len(sg.get("referenced_in", [])) >= min_references]
+            target_subgraphs = [
+                sg for sg in subgraphs if len(sg.get("referenced_in", [])) >= min_references
+            ]
         else:
             # Tagged priority mode
             tagged_subgraphs = []
@@ -218,7 +230,9 @@ class SemanticJudge:
             if tagged_subgraphs:
                 target_subgraphs = tagged_subgraphs
             else:
-                target_subgraphs = [sg for sg in subgraphs if len(sg.get("referenced_in", [])) >= min_references]
+                target_subgraphs = [
+                    sg for sg in subgraphs if len(sg.get("referenced_in", [])) >= min_references
+                ]
 
         # A definition and its referencing sections are audited together as one
         # subgraph regardless of which side actually moved -- there is no need
@@ -230,8 +244,10 @@ class SemanticJudge:
         # own, since selection here is driven by what changed, not by tags.
         if changed_sections is not None:
             target_subgraphs = [
-                sg for sg in target_subgraphs
-                if (set(sg.get("defined_in", [])) | set(sg.get("referenced_in", []))) & changed_sections
+                sg
+                for sg in target_subgraphs
+                if (set(sg.get("defined_in", [])) | set(sg.get("referenced_in", [])))
+                & changed_sections
             ]
 
         # Apply max_subgraphs limit if > 0
@@ -240,13 +256,20 @@ class SemanticJudge:
         else:
             target_candidates = target_subgraphs
 
-        print(f"Auditing {len(target_candidates)} requirement subgraph(s) using LLM Backend: '{selected_backend}'...")
+        print(
+            f"Auditing {len(target_candidates)} requirement subgraph(s) using LLM Backend: '{selected_backend}'..."
+        )
         if exhaustive:
-            print(f"  (Exhaustive mode: checking all subgraphs with >= {min_references} reference(s))")
+            print(
+                f"  (Exhaustive mode: checking all subgraphs with >= {min_references} reference(s))"
+            )
 
         for idx, sg in enumerate(target_candidates, start=1):
             ref_count = len(sg.get("referenced_in", []))
-            print(f"  [{idx}/{len(target_candidates)}] Evaluating '{sg['item_label']}' ({ref_count} reference(s))...", flush=True)
+            print(
+                f"  [{idx}/{len(target_candidates)}] Evaluating '{sg['item_label']}' ({ref_count} reference(s))...",
+                flush=True,
+            )
             res = self._evaluate_single_subgraph(sg, documents, selected_backend, model)
             report.results.append(res)
             if res.status == "PASS":
@@ -268,16 +291,15 @@ class SemanticJudge:
         files: set[str] = set()
         for sec_id in list(sg.get("defined_in", [])) + list(sg.get("referenced_in", [])):
             path = str(sec_id)
-            if path.startswith("sec:"):
-                path = path[4:]
+            path = path.removeprefix("sec:")
             files.add(path.split("#", 1)[0])
         return sorted(files)
 
-    def _evaluate_single_subgraph(self, sg: dict, documents: list[ParsedDocument],
-                                  backend: str, model: str | None) -> JudgeResult:
+    def _evaluate_single_subgraph(
+        self, sg: dict, documents: list[ParsedDocument], backend: str, model: str | None
+    ) -> JudgeResult:
         item_label = sg["item_label"]
         covered = self._covered_files(sg)
-        
         def_texts = []
         for sec_id in sg["defined_in"]:
             content = self._retrieve_section_content(sec_id, documents)
@@ -290,10 +312,11 @@ class SemanticJudge:
 
         prompt = JUDGE_PROMPT_TEMPLATE.format(
             item_label=item_label,
-            definition_texts="\n\n".join(def_texts) if def_texts else "(No explicit definition section)",
+            definition_texts="\n\n".join(def_texts)
+            if def_texts
+            else "(No explicit definition section)",
             referencing_texts="\n\n".join(ref_texts) if ref_texts else "(No referencing sections)",
         )
-
         if backend == "mock":
             return JudgeResult(
                 item_id=sg["item_id"],
@@ -316,6 +339,7 @@ class SemanticJudge:
         # _call_sakura / _call_openrouter already retries transport-level failures
         # (non-200, timeout, connection errors) internally.
         import time
+
         last_err: Exception | None = None
         parsed: dict | None = None
         for attempt in range(3):
@@ -342,8 +366,13 @@ class SemanticJudge:
                 item_label=item_label,
                 status="FAIL",
                 summary=f"Judge error after 3 attempts: {last_err}",
-                issues=[{"severity": "ERROR", "location": item_label,
-                        "description": f"No usable verdict after 3 attempts: {last_err}"}],
+                issues=[
+                    {
+                        "severity": "ERROR",
+                        "location": item_label,
+                        "description": f"No usable verdict after 3 attempts: {last_err}",
+                    }
+                ],
                 covered_files=covered,
             )
 
@@ -351,8 +380,8 @@ class SemanticJudge:
         status = parsed["status"]
         # An audit that lists blocking issues has not passed, whatever it says.
         if status == "PASS" and any(
-                str(i.get("severity", "")).upper() == "ERROR"
-                for i in issues if isinstance(i, dict)):
+            str(i.get("severity", "")).upper() == "ERROR" for i in issues if isinstance(i, dict)
+        ):
             status = "FAIL"
 
         return JudgeResult(
@@ -373,22 +402,25 @@ class SemanticJudge:
         return ""
 
     def _budgeted(self, text: str) -> str:
-        """Applies the per-section character budget, marking any cut explicitly.
-
-        Silent truncation lets the judge report 'no contradiction found' about
-        text it was never shown, which reads identically to a real pass.
+        """
+        Applies the per-section character budget, marking any cut explicitly.
+                Silent truncation lets the judge report 'no contradiction found' about
+                text it was never shown, which reads identically to a real pass.
         """
         limit = self.config.llm_judge.section_char_budget
         if limit <= 0 or len(text) <= limit:
             return text
         omitted = len(text) - limit
-        return (text[:limit] +
-                f"\n\n[TRUNCATED: {omitted} further characters of this section were not shown. "
-                "Do not conclude that this section is consistent with the others on the basis "
-                "of the portion above; report the truncation as a limitation instead.]")
+        return (
+            text[:limit]
+            + f"\n\n[TRUNCATED: {omitted} further characters of this section were not shown. "
+            "Do not conclude that this section is consistent with the others on the basis "
+            "of the portion above; report the truncation as a limitation instead.]"
+        )
 
-    def _find_doc_and_sec(self, sec_id: str, documents: list[ParsedDocument]
-                          ) -> tuple[ParsedDocument | None, any]:
+    def _find_doc_and_sec(
+        self, sec_id: str, documents: list[ParsedDocument]
+    ) -> tuple[ParsedDocument | None, any]:
         for doc in documents:
             if doc.file_path == sec_id:
                 return doc, None
@@ -398,32 +430,40 @@ class SemanticJudge:
         return None, None
 
     def _call_sakura(self, prompt: str, model: str | None) -> str:
-        import time
+
         b_config = self.config.llm_judge.backends.get("sakura")
         api_key_env = b_config.api_key_env if b_config else "SAKURA_API_KEY"
         api_key = os.environ.get(api_key_env, "")
         if not api_key:
             raise ValueError(f"Sakura API key environment variable '{api_key_env}' is not set.")
 
-        selected_model = model or (b_config.model if (b_config and b_config.model) else "preview/Qwen3.6-35B-A3B")
-        endpoint = (b_config.endpoint if (b_config and b_config.endpoint) else "https://api.ai.sakura.ad.jp/v1/chat/completions")
-
+        selected_model = model or (
+            b_config.model if (b_config and b_config.model) else "preview/Qwen3.6-35B-A3B"
+        )
+        endpoint = (
+            b_config.endpoint
+            if (b_config and b_config.endpoint)
+            else "https://api.ai.sakura.ad.jp/v1/chat/completions"
+        )
         headers = {
             "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
         payload = {
             "model": selected_model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.0
+            "temperature": 0.0,
         }
-
         last_err = None
-        for attempt in range(3):
+        for _attempt in range(3):
             try:
-                resp = requests.post(endpoint, json=payload, headers=headers, timeout=60, verify=False)
+                resp = requests.post(
+                    endpoint, json=payload, headers=headers, timeout=60, verify=False
+                )
                 if resp.status_code != 200:
-                    raise RuntimeError(f"Sakura API returned status {resp.status_code}: {resp.text}")
+                    raise RuntimeError(
+                        f"Sakura API returned status {resp.status_code}: {resp.text}"
+                    )
                 data = resp.json()
                 return data["choices"][0]["message"]["content"]
             except Exception as e:
@@ -432,34 +472,44 @@ class SemanticJudge:
         raise RuntimeError(f"Failed to call Sakura API after 3 attempts: {last_err}")
 
     def _call_openrouter(self, prompt: str, model: str | None) -> str:
-        import time
+
         b_config = self.config.llm_judge.backends.get("openrouter")
         api_key_env = b_config.api_key_env if b_config else "OPENROUTER_API_KEY"
         api_key = os.environ.get(api_key_env, "")
         if not api_key:
             raise ValueError(f"OpenRouter API key environment variable '{api_key_env}' is not set.")
 
-        selected_model = model or (b_config.model if (b_config and b_config.model) else "qwen/qwen3.8-27b")
-        endpoint = (b_config.endpoint if (b_config and b_config.endpoint) else "https://openrouter.ai/api/v1/chat/completions")
-
+        selected_model = model or (
+            b_config.model if (b_config and b_config.model) else "qwen/qwen3.8-27b"
+        )
+        endpoint = (
+            b_config.endpoint
+            if (b_config and b_config.endpoint)
+            else "https://openrouter.ai/api/v1/chat/completions"
+        )
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/kmt-t/fireball",
-            "X-Title": "Fireball Spec Integrator"
+            "HTTP-Referer": getattr(
+                self.config.project, "url", "https://github.com/spec-integrator"
+            ),
+            "X-Title": f"{self.config.project.name} Spec Integrator",
         }
         payload = {
             "model": selected_model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.0
+            "temperature": 0.0,
         }
-
         last_err = None
-        for attempt in range(3):
+        for _attempt in range(3):
             try:
-                resp = requests.post(endpoint, json=payload, headers=headers, timeout=90, verify=False)
+                resp = requests.post(
+                    endpoint, json=payload, headers=headers, timeout=90, verify=False
+                )
                 if resp.status_code != 200:
-                    raise RuntimeError(f"OpenRouter API returned status {resp.status_code}: {resp.text}")
+                    raise RuntimeError(
+                        f"OpenRouter API returned status {resp.status_code}: {resp.text}"
+                    )
                 data = resp.json()
                 return data["choices"][0]["message"]["content"]
             except Exception as e:
@@ -469,14 +519,15 @@ class SemanticJudge:
 
     def _call_ollama(self, prompt: str, model: str | None) -> str:
         b_config = self.config.llm_judge.backends.get("ollama")
-        endpoint = (b_config.endpoint if (b_config and b_config.endpoint) else "http://localhost:11434") + "/api/generate"
+        endpoint = (
+            b_config.endpoint if (b_config and b_config.endpoint) else "http://localhost:11434"
+        ) + "/api/generate"
         selected_model = model or (b_config.model if (b_config and b_config.model) else "llama3")
-
         payload = {
             "model": selected_model,
             "prompt": prompt,
             "stream": False,
-            "format": "json"
+            "format": "json",
         }
         resp = requests.post(endpoint, json=payload, timeout=60)
         if resp.status_code != 200:
@@ -492,7 +543,7 @@ class SemanticJudge:
             first_brace = raw_text.find("{")
             last_brace = raw_text.rfind("}")
             if first_brace != -1 and last_brace != -1:
-                json_str = raw_text[first_brace:last_brace + 1]
+                json_str = raw_text[first_brace : last_brace + 1]
             else:
                 json_str = raw_text
 

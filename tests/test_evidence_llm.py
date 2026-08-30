@@ -14,7 +14,12 @@ def _capture_prompt(judge: SemanticJudge) -> list[str]:
 
 
 def _evaluate_empty_subgraph(judge: SemanticJudge):
-    sg = {"item_id": "item:{K}", "item_label": "{K}", "defined_in": [], "referenced_in": []}
+    sg = {
+        "item_id": "item:{K}",
+        "item_label": "{K}",
+        "defined_in": [],
+        "referenced_in": [],
+    }
     return judge._evaluate_single_subgraph(sg, [], backend="sakura", model=None)
 
 
@@ -30,9 +35,7 @@ def test_claim_evidence_criterion_reaches_the_prompt():
     config = Config()
     judge = SemanticJudge(config)
     captured = _capture_prompt(judge)
-
     _evaluate_empty_subgraph(judge)
-
     assert len(captured) == 1
     assert "Claim-Evidence Substantiation & Unbacked Assertions" in captured[0]
     assert "Unbacked Verification Claim" in captured[0]

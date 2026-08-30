@@ -1,10 +1,9 @@
 import subprocess
-from unittest.mock import MagicMock, patch
-import pytest
-from pathlib import Path
+from unittest.mock import patch
+
 from spec_integrator.config import Config
-from spec_integrator.parser import MarkdownParser
 from spec_integrator.graph import DocGraphBuilder
+from spec_integrator.parser import MarkdownParser
 from spec_integrator.verifier.fake_decision_detector import FakeDecisionDetector
 
 
@@ -18,10 +17,8 @@ def _build(tmp_path, files: dict[str, str]):
 
     cfg = Config()
     cfg.config_dir = tmp_path
-
     parser = MarkdownParser(cfg)
     documents = [parser.parse_file(docs_dir / rel, docs_dir) for rel in files]
-
     graph = DocGraphBuilder(cfg).build(documents, docs_dir)
     return cfg, documents, graph
 
@@ -67,7 +64,6 @@ This design relies on {ADR_WellDiscussed} for its register convention.
 
 HEADING_STYLE = """# Scheduler
 ## 6. 設計判断 (ADR)
-
 ### ADR-SCHED-001: 侵入型リストによる管理
 <!-- traceability: {GLOBAL_Policy_Memory} -->
 - **決定事項**: TCBの連結には侵入型リストを採用する。
@@ -79,9 +75,10 @@ HEADING_STYLE = """# Scheduler
 
 
 def test_isolated_single_option_adr_is_flagged(tmp_path):
-    cfg, docs, graph = _build(tmp_path, {"components/tier3_jit/jit_compiler.md": ISOLATED_SINGLE_OPTION})
+    cfg, docs, graph = _build(
+        tmp_path, {"components/tier3_jit/jit_compiler.md": ISOLATED_SINGLE_OPTION}
+    )
     findings = FakeDecisionDetector(cfg, repo_root=tmp_path).verify(docs, graph)
-
     f = _keyword(findings, "ADR_Lonely")
     assert f.is_bracket_keyword
     assert f.referenced_file_count == 0
@@ -91,19 +88,20 @@ def test_isolated_single_option_adr_is_flagged(tmp_path):
 
 
 def test_well_discussed_cross_referenced_adr_is_not_flagged(tmp_path):
-    cfg, docs, graph = _build(tmp_path, {
-        "components/tier3_jit/jit_compiler.md": WELL_FORMED_ADR,
-        "components/tier1_core/other_component.md": REFERENCING_DOC,
-    })
+    cfg, docs, graph = _build(
+        tmp_path,
+        {
+            "components/tier3_jit/jit_compiler.md": WELL_FORMED_ADR,
+            "components/tier1_core/other_component.md": REFERENCING_DOC,
+        },
+    )
     findings = FakeDecisionDetector(cfg, repo_root=tmp_path).verify(docs, graph)
-
     assert all(f.keyword != "ADR_WellDiscussed" for f in findings)
 
 
 def test_strawman_alternative_is_flagged(tmp_path):
     cfg, docs, graph = _build(tmp_path, {"components/tier3_jit/jit_compiler.md": STRAWMAN_ADR})
     findings = FakeDecisionDetector(cfg, repo_root=tmp_path).verify(docs, graph)
-
     f = _keyword(findings, "ADR_Strawman")
     assert f.option_count == 2
     assert any("藁人形" in r for r in f.reasons)
@@ -112,7 +110,6 @@ def test_strawman_alternative_is_flagged(tmp_path):
 def test_heading_style_adr_without_keyword_uses_text_search_for_isolation(tmp_path):
     cfg, docs, graph = _build(tmp_path, {"components/tier1_core/os_scheduler.md": HEADING_STYLE})
     findings = FakeDecisionDetector(cfg, repo_root=tmp_path).verify(docs, graph)
-
     f = _keyword(findings, "ADR-SCHED-001")
     assert not f.is_bracket_keyword
     assert f.referenced_file_count == 0
@@ -121,44 +118,56 @@ def test_heading_style_adr_without_keyword_uses_text_search_for_isolation(tmp_pa
 
 
 def test_heading_style_adr_referenced_elsewhere_is_not_isolated(tmp_path):
-    cfg, docs, graph = _build(tmp_path, {
-        "components/tier1_core/os_scheduler.md": HEADING_STYLE,
-        "components/tier1_core/other_component.md": "# Other\nSee ADR-SCHED-001 for the rationale.\n",
-    })
+    cfg, docs, graph = _build(
+        tmp_path,
+        {
+            "components/tier1_core/os_scheduler.md": HEADING_STYLE,
+            "components/tier1_core/other_component.md": "# Other\nSee ADR-SCHED-001 for the rationale.\n",
+        },
+    )
     findings = FakeDecisionDetector(cfg, repo_root=tmp_path).verify(docs, graph)
-
     f = _keyword(findings, "ADR-SCHED-001")
     assert f.referenced_file_count == 1
     assert not any("孤立した決定ブロック" in r for r in f.reasons)
 
 
 def _git(repo_root, *args):
-    subprocess.run(["git", *args], cwd=repo_root, check=True, capture_output=True,
-                    encoding="utf-8", errors="replace")
+    subprocess.run(
+        ["git", *args],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+    )
 
 
 def test_adr_block_touched_by_uncommitted_diff_is_flagged(tmp_path):
     cfg, docs, graph = _build(tmp_path, {"components/tier3_jit/jit_compiler.md": WELL_FORMED_ADR})
-
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "test@example.com")
     _git(tmp_path, "config", "user.name", "Test")
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-q", "-m", "baseline")
-
     target = tmp_path / "docs" / "components" / "tier3_jit" / "jit_compiler.md"
-    target.write_text(WELL_FORMED_ADR.replace("案3を採用する。", "案3を採用する（改訂）。"), encoding="utf-8")
-
-    cfg2, docs2, graph2 = _build(tmp_path, {"components/tier3_jit/jit_compiler.md": target.read_text(encoding="utf-8")})
+    target.write_text(
+        WELL_FORMED_ADR.replace("案3を採用する。", "案3を採用する（改訂）。"),
+        encoding="utf-8",
+    )
+    cfg2, docs2, graph2 = _build(
+        tmp_path,
+        {"components/tier3_jit/jit_compiler.md": target.read_text(encoding="utf-8")},
+    )
     findings = FakeDecisionDetector(cfg2, repo_root=tmp_path).verify(docs2, graph2)
-
     f = _keyword(findings, "ADR_WellDiscussed")
     assert f.in_working_diff
     assert any("未コミット差分" in r for r in f.reasons)
 
 
 def test_no_git_repo_does_not_raise(tmp_path):
-    cfg, docs, graph = _build(tmp_path, {"components/tier3_jit/jit_compiler.md": ISOLATED_SINGLE_OPTION})
+    cfg, docs, graph = _build(
+        tmp_path, {"components/tier3_jit/jit_compiler.md": ISOLATED_SINGLE_OPTION}
+    )
     findings = FakeDecisionDetector(cfg, repo_root=tmp_path).verify(docs, graph)
     f = _keyword(findings, "ADR_Lonely")
     assert not f.in_working_diff
@@ -167,21 +176,19 @@ def test_no_git_repo_does_not_raise(tmp_path):
 def test_unlabeled_decision_in_working_diff_is_flagged(tmp_path):
     orig = "# Runtime\n## 1. Concept\nNormal description.\n"
     cfg, docs, graph = _build(tmp_path, {"components/tier2_runtime/runtime_engine.md": orig})
-
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "test@example.com")
     _git(tmp_path, "config", "user.name", "Test")
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-q", "-m", "baseline")
-
     # Introduce a unilateral policy statement in diff without ADR
-    modified = "# Runtime\n## 1. Concept\n設計方針として、R3レジスタを独占的に内部使用に固定する。\n"
+    modified = (
+        "# Runtime\n## 1. Concept\n設計方針として、R3レジスタを独占的に内部使用に固定する。\n"
+    )
     target = tmp_path / "docs" / "components" / "tier2_runtime" / "runtime_engine.md"
     target.write_text(modified, encoding="utf-8")
-
     cfg2, docs2, graph2 = _build(tmp_path, {"components/tier2_runtime/runtime_engine.md": modified})
     findings = FakeDecisionDetector(cfg2, repo_root=tmp_path).verify(docs2, graph2)
-
     prose_decisions = [f for f in findings if f.kind == "PROSE_DECISION"]
     assert len(prose_decisions) >= 1
     assert prose_decisions[0].in_working_diff
@@ -194,9 +201,7 @@ def test_llm_verification_detects_unilateral_decision(tmp_path):
 勝手な判断として、インタープリタと相談せずにR10をフラグ専用に固定することにする。
 """
     cfg, docs, graph = _build(tmp_path, {"components/tier3_jit/jit.md": doc_text})
-
     detector = FakeDecisionDetector(cfg, repo_root=tmp_path)
-
     mock_resp = """```json
 {
   "is_problematic": true,
@@ -219,4 +224,3 @@ def test_llm_verification_detects_unilateral_decision(tmp_path):
     assert findings[0].kind == "LLM_FLAGGED"
     assert findings[0].confidence == "HIGH"
     assert any("UNILATERAL_DECISION" in r for r in findings[0].reasons)
-

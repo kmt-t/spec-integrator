@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+import json
 import os
 import re
-import json
-import urllib3
+import time
+from dataclasses import dataclass, field
+
 import requests
-from pathlib import Path
-from dataclasses import dataclass, field, asdict
+import urllib3
+
 from spec_integrator.config import Config
 from spec_integrator.parser import ParsedDocument, ParsedSection
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 
 ASSESS_PROMPT_TEMPLATE = """You are a Principal Embedded Systems Architect and Formal Verification Expert.
 Your job is to analyze the CONTENT and ALGORITHMS of the following specification section, evaluating its complexity, design risks, and whether mathematical formal verification (via Python pyModelChecking: Kripke / CTL / LTL model checking) or semantic LLM auditing is required.
@@ -73,7 +74,7 @@ class RiskAssessmentReport:
     formal_candidates_count: int = 0
     llm_candidates_count: int = 0
 
-    def to_markdown(self, project_name: str = "Fireball") -> str:
+    def to_markdown(self, project_name: str = "Specification Project") -> str:
         lines = [
             f"# {project_name} 設計複雑度 & リスク評価レポート (Risk Assessment Report)",
             "",
@@ -88,28 +89,35 @@ class RiskAssessmentReport:
             "| ファイル | セクション | 複雑度 | リスク | 推奨検証 | 推奨タグ | 主なリスク要因 |",
             "| :--- | :--- | :---: | :---: | :--- | :--- | :--- |",
         ]
-
         formal_items = [a for a in self.assessments if a.formal_needed]
         formal_items.sort(key=lambda x: (x.risk_score, x.complexity_score), reverse=True)
-
         for a in formal_items:
-            tags_str = " ".join(f"`{t}`" for t in a.suggested_tags) if a.suggested_tags else "`{VERIFY_FORMAL}`"
+            tags_str = (
+                " ".join(f"`{t}`" for t in a.suggested_tags)
+                if a.suggested_tags
+                else "`{VERIFY_FORMAL}`"
+            )
             factors_str = "<br>".join(a.risk_factors[:2]) if a.risk_factors else a.summary
             lines.append(
                 f"| `{a.file_path}` | **{a.heading}** | {a.complexity_score}/5 | **{a.risk_score}/5** | `{a.recommended_verification}` | {tags_str} | {factors_str} |"
             )
 
-        lines.extend([
-            "",
-            "---",
-            "",
-            "## 2. 全セクションの複雑度・リスク評価一覧 (降順)",
-            "",
-            "| ファイル | セクション | Tier | 複雑度 | リスク | 推奨手法 | 推奨タグ | 評価サマリー |",
-            "| :--- | :--- | :---: | :---: | :---: | :--- | :--- | :--- |",
-        ])
-
-        all_sorted = sorted(self.assessments, key=lambda x: (x.risk_score + x.complexity_score), reverse=True)
+        lines.extend(
+            [
+                "",
+                "---",
+                "",
+                "## 2. 全セクションの複雑度・リスク評価一覧 (降順)",
+                "",
+                "| ファイル | セクション | Tier | 複雑度 | リスク | 推奨手法 | 推奨タグ | 評価サマリー |",
+                "| :--- | :--- | :---: | :---: | :---: | :--- | :--- | :--- |",
+            ]
+        )
+        all_sorted = sorted(
+            self.assessments,
+            key=lambda x: x.risk_score + x.complexity_score,
+            reverse=True,
+        )
         for a in all_sorted:
             tags_str = " ".join(f"`{t}`" for t in a.suggested_tags) if a.suggested_tags else "-"
             lines.append(
@@ -125,7 +133,6 @@ _LATIN_TERM_RE = re.compile(r"^[a-z0-9][a-z0-9 _\-\^]*$")
 def _keyword_matches(term: str, text_lower: str) -> bool:
     """True if `term` occurs in `text_lower` as a real word, not merely as a
     substring of some unrelated longer token.
-
     A plain `term in text` check lets a short trigger like "csp" fire inside
     any word that happens to contain those three letters -- including a
     section's OWN `{CSPCommunication}` keyword tag citation, which says
@@ -146,17 +153,20 @@ class RiskAssessor:
     def __init__(self, config: Config):
         self.config = config
 
-    def assess_documents(self, documents: list[ParsedDocument],
-                         backend: str | None = None, model: str | None = None,
-                         max_sections: int = 15,
-                         exhaustive: bool = False,
-                         min_length: int = 50,
-                         include_meta: bool = False,
-                         include_reqs: bool = False,
-                         target_tiers: list[int | str] | None = None) -> RiskAssessmentReport:
+    def assess_documents(
+        self,
+        documents: list[ParsedDocument],
+        backend: str | None = None,
+        model: str | None = None,
+        max_sections: int = 15,
+        exhaustive: bool = False,
+        min_length: int = 50,
+        include_meta: bool = False,
+        include_reqs: bool = False,
+        target_tiers: list[int | str] | None = None,
+    ) -> RiskAssessmentReport:
         report = RiskAssessmentReport()
         selected_backend = backend or self.config.llm_judge.default_backend
-
         # Select candidate sections using generic structural metrics (length, level, tier)
         candidates: list[tuple[ParsedDocument, ParsedSection]] = []
         for doc in documents:
@@ -195,19 +205,25 @@ class RiskAssessor:
             return score
 
         candidates.sort(key=structural_priority, reverse=True)
-
         if max_sections > 0:
             target_candidates = candidates[:max_sections]
         else:
             target_candidates = candidates
 
-        print(f"Assessing complexity & design risk for {len(target_candidates)} candidate section(s) using Backend: '{selected_backend}'...")
+        print(
+            f"Assessing complexity & design risk for {len(target_candidates)} candidate section(s) using Backend: '{selected_backend}'..."
+        )
         if exhaustive:
             print("  (Exhaustive mode: evaluating all sections across all tiers)")
 
         for idx, (doc, sec) in enumerate(target_candidates, start=1):
-            print(f"  [{idx}/{len(target_candidates)}] Assessing '{doc.file_path} -> {sec.heading}'...", flush=True)
-            assessment = self._assess_single_section(doc, sec, backend=selected_backend, model=model)
+            print(
+                f"  [{idx}/{len(target_candidates)}] Assessing '{doc.file_path} -> {sec.heading}'...",
+                flush=True,
+            )
+            assessment = self._assess_single_section(
+                doc, sec, backend=selected_backend, model=model
+            )
             report.assessments.append(assessment)
             if assessment.formal_needed:
                 report.formal_candidates_count += 1
@@ -217,16 +233,20 @@ class RiskAssessor:
         report.total_evaluated = len(report.assessments)
         return report
 
-    def _assess_single_section(self, doc: ParsedDocument, sec: ParsedSection,
-                               backend: str, model: str | None = None) -> SectionRiskAssessment:
+    def _assess_single_section(
+        self,
+        doc: ParsedDocument,
+        sec: ParsedSection,
+        backend: str,
+        model: str | None = None,
+    ) -> SectionRiskAssessment:
         prompt = ASSESS_PROMPT_TEMPLATE.format(
             heading=sec.heading,
             file_path=doc.file_path,
             tier=doc.tier,
             keywords=" ".join(f"{{{k}}}" for k in sec.keywords),
-            content=sec.body_text[:2500]
+            content=sec.body_text[:2500],
         )
-
         try:
             if backend == "mock":
                 raw_resp = self._call_mock(doc, sec)
@@ -253,7 +273,7 @@ class RiskAssessor:
                 recommended_verification=str(parsed.get("recommended_verification", "LLM_Judge")),
                 suggested_tags=list(parsed.get("suggested_tags", [])),
                 risk_factors=list(parsed.get("risk_factors", [])),
-                summary=str(parsed.get("summary", ""))
+                summary=str(parsed.get("summary", "")),
             )
         except Exception as e:
             return SectionRiskAssessment(
@@ -267,7 +287,7 @@ class RiskAssessor:
                 recommended_verification="LLM_Judge",
                 suggested_tags=[],
                 risk_factors=[f"Assessment error: {e}"],
-                summary=f"Assessment error: {e}"
+                summary=f"Assessment error: {e}",
             )
 
     def _call_heuristic(self, doc: ParsedDocument, sec: ParsedSection) -> str:
@@ -281,20 +301,21 @@ class RiskAssessor:
         h_cfg = self.config.risk_assessment.heuristic
         text_lower = (sec.heading + " " + sec.body_text).lower()
         keywords_lower = " ".join(k.lower() for k in sec.keywords)
-
         # 1. Check if Tier or path pattern is excluded from formal verification
         is_tier_excluded = doc.tier in h_cfg.non_formal_tiers
-        is_path_excluded = any(regex_match(pat, doc.file_path) for pat in h_cfg.non_formal_path_patterns)
+        is_path_excluded = any(
+            regex_match(pat, doc.file_path) for pat in h_cfg.non_formal_path_patterns
+        )
         is_scope_excluded = is_tier_excluded or is_path_excluded
-
         # 2. Check explicit waivers from configuration
         is_waived = any(w.matches(doc.file_path, sec.heading) for w in h_cfg.waivers)
-
         # 3. Detect formal triggers configured in spec-integrator.yaml
         is_formal = False
         if not is_scope_excluded and not is_waived:
-            is_formal = any(_keyword_matches(t, text_lower) or _keyword_matches(t, keywords_lower)
-                            for t in h_cfg.formal_triggers)
+            is_formal = any(
+                _keyword_matches(t, text_lower) or _keyword_matches(t, keywords_lower)
+                for t in h_cfg.formal_triggers
+            )
 
         # 4. Detect LLM triggers configured in spec-integrator.yaml
         is_llm = False
@@ -307,7 +328,9 @@ class RiskAssessor:
             risk = 4
             verification = "pyModelChecking"
             suggested = ["{VERIFY_FORMAL}"]
-            risk_factors.append("Stateful concurrent protocol or hardware safety invariant identified")
+            risk_factors.append(
+                "Stateful concurrent protocol or hardware safety invariant identified"
+            )
         elif is_llm:
             complexity = 3
             risk = 3
@@ -327,7 +350,7 @@ class RiskAssessor:
             "recommended_verification": verification,
             "suggested_tags": suggested,
             "risk_factors": risk_factors,
-            "summary": f"Independent heuristic evaluation for '{sec.heading}'."
+            "summary": f"Independent heuristic evaluation for '{sec.heading}'.",
         }
         return json.dumps(heuristic_data)
 
@@ -340,37 +363,46 @@ class RiskAssessor:
             "recommended_verification": "Static",
             "suggested_tags": [],
             "risk_factors": ["Static mock for unit tests"],
-            "summary": f"Mock evaluation for {sec.heading}."
+            "summary": f"Mock evaluation for {sec.heading}.",
         }
         return json.dumps(mock_data)
 
     def _call_sakura(self, prompt: str, model: str | None) -> str:
         import time
+
         b_config = self.config.llm_judge.backends.get("sakura")
         api_key_env = b_config.api_key_env if b_config else "SAKURA_API_KEY"
         api_key = os.environ.get(api_key_env, "")
         if not api_key:
             raise ValueError(f"Sakura API key environment variable '{api_key_env}' is not set.")
 
-        selected_model = model or (b_config.model if (b_config and b_config.model) else "preview/Qwen3.6-35B-A3B")
-        endpoint = (b_config.endpoint if (b_config and b_config.endpoint) else "https://api.ai.sakura.ad.jp/v1/chat/completions")
-
+        selected_model = model or (
+            b_config.model if (b_config and b_config.model) else "preview/Qwen3.6-35B-A3B"
+        )
+        endpoint = (
+            b_config.endpoint
+            if (b_config and b_config.endpoint)
+            else "https://api.ai.sakura.ad.jp/v1/chat/completions"
+        )
         headers = {
             "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
         payload = {
             "model": selected_model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.0
+            "temperature": 0.0,
         }
-
         last_err = None
-        for attempt in range(3):
+        for _attempt in range(3):
             try:
-                resp = requests.post(endpoint, json=payload, headers=headers, timeout=60, verify=False)
+                resp = requests.post(
+                    endpoint, json=payload, headers=headers, timeout=60, verify=False
+                )
                 if resp.status_code != 200:
-                    raise RuntimeError(f"Sakura API returned status {resp.status_code}: {resp.text}")
+                    raise RuntimeError(
+                        f"Sakura API returned status {resp.status_code}: {resp.text}"
+                    )
                 data = resp.json()
                 return data["choices"][0]["message"]["content"]
             except Exception as e:
@@ -379,34 +411,44 @@ class RiskAssessor:
         raise RuntimeError(f"Failed to call Sakura API after 3 attempts: {last_err}")
 
     def _call_openrouter(self, prompt: str, model: str | None) -> str:
-        import time
+
         b_config = self.config.llm_judge.backends.get("openrouter")
         api_key_env = b_config.api_key_env if b_config else "OPENROUTER_API_KEY"
         api_key = os.environ.get(api_key_env, "")
         if not api_key:
             raise ValueError(f"OpenRouter API key environment variable '{api_key_env}' is not set.")
 
-        selected_model = model or (b_config.model if (b_config and b_config.model) else "qwen/qwen3.8-27b")
-        endpoint = (b_config.endpoint if (b_config and b_config.endpoint) else "https://openrouter.ai/api/v1/chat/completions")
-
+        selected_model = model or (
+            b_config.model if (b_config and b_config.model) else "qwen/qwen3.8-27b"
+        )
+        endpoint = (
+            b_config.endpoint
+            if (b_config and b_config.endpoint)
+            else "https://openrouter.ai/api/v1/chat/completions"
+        )
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/kmt-t/fireball",
-            "X-Title": "Fireball Spec Integrator"
+            "HTTP-Referer": getattr(
+                self.config.project, "url", "https://github.com/spec-integrator"
+            ),
+            "X-Title": f"{self.config.project.name} Spec Integrator",
         }
         payload = {
             "model": selected_model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.0
+            "temperature": 0.0,
         }
-
         last_err = None
-        for attempt in range(3):
+        for _attempt in range(3):
             try:
-                resp = requests.post(endpoint, json=payload, headers=headers, timeout=90, verify=False)
+                resp = requests.post(
+                    endpoint, json=payload, headers=headers, timeout=90, verify=False
+                )
                 if resp.status_code != 200:
-                    raise RuntimeError(f"OpenRouter API returned status {resp.status_code}: {resp.text}")
+                    raise RuntimeError(
+                        f"OpenRouter API returned status {resp.status_code}: {resp.text}"
+                    )
                 data = resp.json()
                 return data["choices"][0]["message"]["content"]
             except Exception as e:
@@ -416,14 +458,15 @@ class RiskAssessor:
 
     def _call_ollama(self, prompt: str, model: str | None) -> str:
         b_config = self.config.llm_judge.backends.get("ollama")
-        endpoint = (b_config.endpoint if (b_config and b_config.endpoint) else "http://localhost:11434") + "/api/generate"
+        endpoint = (
+            b_config.endpoint if (b_config and b_config.endpoint) else "http://localhost:11434"
+        ) + "/api/generate"
         selected_model = model or (b_config.model if (b_config and b_config.model) else "llama3")
-
         payload = {
             "model": selected_model,
             "prompt": prompt,
             "stream": False,
-            "format": "json"
+            "format": "json",
         }
         resp = requests.post(endpoint, json=payload, timeout=60)
         if resp.status_code != 200:
@@ -439,7 +482,7 @@ class RiskAssessor:
             first_brace = raw_text.find("{")
             last_brace = raw_text.rfind("}")
             if first_brace != -1 and last_brace != -1:
-                json_str = raw_text[first_brace:last_brace + 1]
+                json_str = raw_text[first_brace : last_brace + 1]
             else:
                 json_str = raw_text
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +15,9 @@ from spec_integrator.parser import ParsedDocument
 @dataclass
 class DecisionFinding:
     keyword: str
-    is_bracket_keyword: bool  # True if keyword is a formal DocGraph tag like {ADR_*}; False for prose/heading
+    is_bracket_keyword: (
+        bool  # True if keyword is a formal DocGraph tag like {ADR_*}; False for prose/heading
+    )
     file_path: str
     line: int
     kind: str  # "PROSE_DECISION", "ADHOC_LOCAL_ADR", "LLM_FLAGGED"
@@ -90,7 +92,6 @@ If no ad-hoc or fake decisions are found, respond with:
 
 class FakeDecisionDetector:
     """Detects ad-hoc, unilateral, or fabricated decisions in component prose and diffs.
-
     Focuses on checking whether an author/agent has unilaterally introduced
     ad-hoc ADRs or arbitrary decisions in the prose of a component, rather than
     adhering to authorized requirements:
@@ -103,23 +104,20 @@ class FakeDecisionDetector:
     def __init__(self, config: Config, repo_root: Path | None = None):
         self.config = config
         self.repo_root = repo_root or config.config_dir
-
         fd_cfg = getattr(config, "fake_decision_detector", None)
         if fd_cfg is None:
             from spec_integrator.config import FakeDecisionDetectorConfig
+
             fd_cfg = FakeDecisionDetectorConfig()
         self.fd_cfg = fd_cfg
-
         self.inline_decision_re = re.compile(fd_cfg.inline_decision_pattern)
         self.heading_adr_re = re.compile(fd_cfg.heading_adr_pattern, re.MULTILINE)
         self.option_header_re = re.compile(fd_cfg.option_header_pattern)
         self.option_entry_re = re.compile(fd_cfg.option_entry_pattern)
         self.conclusion_re = re.compile(fd_cfg.conclusion_pattern)
         self.prose_decision_patterns = [re.compile(p) for p in fd_cfg.prose_decision_patterns]
-
         self.strawman_min_ratio = fd_cfg.strawman_min_ratio
         self.strawman_abs_chars = fd_cfg.strawman_abs_chars
-
         self.next_inline_decision_re = re.compile(r"\n-\s*\*\*決定事項\*\*:")
         self.next_heading_re = re.compile(r"^#{1,6}\s", re.MULTILINE)
         self.next_subheading_re = re.compile(r"\n\s*-\s*\*\*[^\*]+\*\*[:：]")
@@ -134,12 +132,10 @@ class FakeDecisionDetector:
         section_by_id = {s.section_id: (d, s) for d in documents for s in d.sections}
         subgraphs = {sg["item_label"].strip("{}"): sg for sg in graph.extract_item_subgraphs()}
         diff_lines_by_file = self._changed_lines_by_file()
-
         # 1. Check local ADR blocks (detect ad-hoc local decisions disguised as ADRs)
         for doc in documents:
             for blk in self._find_local_decision_blocks(doc.content):
                 reasons: list[str] = []
-
                 ref_files = self._referencing_files(blk, doc, documents, subgraphs, section_by_id)
                 if not ref_files:
                     reasons.append(
@@ -148,7 +144,9 @@ class FakeDecisionDetector:
 
                 option_count, strawman_reason = self._evaluate_options(blk.text)
                 if option_count <= 1:
-                    reasons.append(f"「選択肢」の実質エントリ数が{option_count}件で、対抗案のないアドホックな独断決定")
+                    reasons.append(
+                        f"「選択肢」の実質エントリ数が{option_count}件で、対抗案のないアドホックな独断決定"
+                    )
                 elif strawman_reason:
                     reasons.append(strawman_reason)
 
@@ -160,24 +158,25 @@ class FakeDecisionDetector:
                     )
 
                 if reasons:
-                    findings.append(DecisionFinding(
-                        keyword=blk.label,
-                        is_bracket_keyword=(blk.label == blk.bracket_keyword),
-                        file_path=doc.file_path,
-                        line=blk.line,
-                        kind="ADHOC_LOCAL_ADR",
-                        reasons=reasons,
-                        option_count=option_count,
-                        referenced_file_count=len(ref_files),
-                        in_working_diff=touched,
-                        confidence="HIGH" if (touched and option_count <= 1) else "MEDIUM",
-                        snippet=blk.text[:200].strip(),
-                    ))
+                    findings.append(
+                        DecisionFinding(
+                            keyword=blk.label,
+                            is_bracket_keyword=(blk.label == blk.bracket_keyword),
+                            file_path=doc.file_path,
+                            line=blk.line,
+                            kind="ADHOC_LOCAL_ADR",
+                            reasons=reasons,
+                            option_count=option_count,
+                            referenced_file_count=len(ref_files),
+                            in_working_diff=touched,
+                            confidence="HIGH" if (touched and option_count <= 1) else "MEDIUM",
+                            snippet=blk.text[:200].strip(),
+                        )
+                    )
 
         # 2. Check prose for ad-hoc policy and decision statements
         prose_findings = self._detect_prose_decisions(documents, diff_lines_by_file)
         findings.extend(prose_findings)
-
         return findings
 
     def verify_with_llm(
@@ -190,10 +189,8 @@ class FakeDecisionDetector:
         """Perform semantic LLM audit to detect ad-hoc decisions in prose and diffs."""
         diff_lines_by_file = self._changed_lines_by_file()
         target_sections: list[tuple[ParsedDocument, Any, bool]] = []
-
         heading_triggers = self.fd_cfg.section_heading_triggers
         body_triggers = self.fd_cfg.body_text_triggers
-
         for doc in documents:
             touched_lines = diff_lines_by_file.get(doc.file_path, set())
             if diff_only and not touched_lines:
@@ -209,24 +206,27 @@ class FakeDecisionDetector:
                 is_decision_sec = any(kw in sec.heading for kw in heading_triggers) or any(
                     kw in sec.body_text for kw in body_triggers
                 )
-
                 if is_touched or is_decision_sec:
                     target_sections.append((doc, sec, is_touched))
 
         if max_sections > 0:
             target_sections = target_sections[:max_sections]
 
-        print(f"Auditing {len(target_sections)} candidate section(s) for Fake Decisions with LLM backend: '{backend_name}'...", flush=True)
-
+        print(
+            f"Auditing {len(target_sections)} candidate section(s) for Fake Decisions with LLM backend: '{backend_name}'...",
+            flush=True,
+        )
         findings: list[DecisionFinding] = []
         for idx, (doc, sec, is_touched) in enumerate(target_sections, start=1):
-            print(f"  [{idx}/{len(target_sections)}] Auditing {doc.file_path}#{sec.heading}...", flush=True)
+            print(
+                f"  [{idx}/{len(target_sections)}] Auditing {doc.file_path}#{sec.heading}...",
+                flush=True,
+            )
             prompt = FAKE_DECISION_PROMPT.format(
                 file_path=doc.file_path,
                 section_title=sec.heading,
                 content_text=sec.body_text[:4000],
             )
-
             try:
                 raw_resp = self._call_llm_backend(prompt, backend_name)
                 parsed = self._parse_llm_json(raw_resp)
@@ -236,27 +236,35 @@ class FakeDecisionDetector:
                         for iss in parsed.get("issues", [])
                     ]
                     if reasons:
-                        findings.append(DecisionFinding(
-                            keyword=sec.heading,
-                            is_bracket_keyword=False,
-                            file_path=doc.file_path,
-                            line=sec.line_start,
-                            kind="LLM_FLAGGED",
-                            reasons=reasons,
-                            in_working_diff=is_touched,
-                            confidence=parsed.get("confidence", "MEDIUM"),
-                            snippet=sec.body_text[:200].strip(),
-                        ))
+                        findings.append(
+                            DecisionFinding(
+                                keyword=sec.heading,
+                                is_bracket_keyword=False,
+                                file_path=doc.file_path,
+                                line=sec.line_start,
+                                kind="LLM_FLAGGED",
+                                reasons=reasons,
+                                in_working_diff=is_touched,
+                                confidence=parsed.get("confidence", "MEDIUM"),
+                                snippet=sec.body_text[:200].strip(),
+                            )
+                        )
             except Exception as e:
-                print(f"    [Warning] LLM fake decision audit error for {doc.file_path}#{sec.heading}: {e}", flush=True)
+                print(
+                    f"    [Warning] LLM fake decision audit error for {doc.file_path}#{sec.heading}: {e}",
+                    flush=True,
+                )
 
         return findings
 
     def _call_llm_backend(self, prompt: str, backend_name: str) -> str:
         from spec_integrator.judge.semantic_judge import SemanticJudge
+
         judge = SemanticJudge(self.config)
         backend_cfg = getattr(self.config.llm_judge, "backends", {}).get(backend_name)
-        model = getattr(backend_cfg, "model", "sakura-ai-model") if backend_cfg else "sakura-ai-model"
+        model = (
+            getattr(backend_cfg, "model", "sakura-ai-model") if backend_cfg else "sakura-ai-model"
+        )
         if backend_name == "sakura":
             return judge._call_sakura(prompt, model)
         elif backend_name == "openrouter":
@@ -269,11 +277,9 @@ class FakeDecisionDetector:
         self, documents: list[ParsedDocument], diff_lines_by_file: dict[str, set[int]]
     ) -> list[DecisionFinding]:
         findings: list[DecisionFinding] = []
-
         for doc in documents:
             lines = doc.content.splitlines()
             touched_lines = diff_lines_by_file.get(doc.file_path, set())
-
             for line_idx, line in enumerate(lines, start=1):
                 if line.startswith("```") or len(line.strip()) < 10:
                     continue
@@ -286,62 +292,75 @@ class FakeDecisionDetector:
                     if m:
                         is_touched = line_idx in touched_lines
                         if is_touched:
-                            findings.append(DecisionFinding(
-                                keyword=f"Prose: L{line_idx}",
-                                is_bracket_keyword=False,
-                                file_path=doc.file_path,
-                                line=line_idx,
-                                kind="PROSE_DECISION",
-                                reasons=[
-                                    "コンポーネント内の地の文で、要求仕様や正規ADRの裏付けなく勝手な設計方針・制約が導入されている"
-                                    "（アドホックな独断や辻褄合わせでないか確認）"
-                                ],
-                                in_working_diff=is_touched,
-                                confidence="LOW",
-                                snippet=line.strip()[:150],
-                            ))
+                            findings.append(
+                                DecisionFinding(
+                                    keyword=f"Prose: L{line_idx}",
+                                    is_bracket_keyword=False,
+                                    file_path=doc.file_path,
+                                    line=line_idx,
+                                    kind="PROSE_DECISION",
+                                    reasons=[
+                                        "コンポーネント内の地の文で、要求仕様や正規ADRの裏付けなく勝手な設計方針・制約が導入されている"
+                                        "（アドホックな独断や辻褄合わせでないか確認）"
+                                    ],
+                                    in_working_diff=is_touched,
+                                    confidence="LOW",
+                                    snippet=line.strip()[:150],
+                                )
+                            )
                             break
 
         return findings
 
     def _find_local_decision_blocks(self, content: str) -> list[_LocalDecisionBlock]:
         blocks: list[_LocalDecisionBlock] = []
-
         for m in self.inline_decision_re.finditer(content):
             keyword = m.group(1)
             line = content.count("\n", 0, m.start()) + 1
             nm = self.next_inline_decision_re.search(content, m.end())
             end = nm.start() if nm else len(content)
             end_line = content.count("\n", 0, end) + 1
-            blocks.append(_LocalDecisionBlock(label=keyword, bracket_keyword=keyword, line=line,
-                                              end_line=end_line, text=content[m.end():end]))
+            blocks.append(
+                _LocalDecisionBlock(
+                    label=keyword,
+                    bracket_keyword=keyword,
+                    line=line,
+                    end_line=end_line,
+                    text=content[m.end() : end],
+                )
+            )
 
         for m in self.heading_adr_re.finditer(content):
             heading_id = m.group(2)
             line = content.count("\n", 0, m.start()) + 1
             level = len(m.group(1))
             nm = self.next_heading_re.search(content, m.end())
-            while nm and len(content[nm.start():].split(None, 1)[0]) > level:
+            while nm and len(content[nm.start() :].split(None, 1)[0]) > level:
                 nm = self.next_heading_re.search(content, nm.end())
             end = nm.start() if nm else len(content)
             end_line = content.count("\n", 0, end) + 1
-            block_text = content[m.end():end]
+            block_text = content[m.end() : end]
             head_region = block_text.split("\n\n", 1)[0]
             bracket_m = self.adr_keyword_re.search(head_region)
-            blocks.append(_LocalDecisionBlock(
-                label=heading_id,
-                bracket_keyword=bracket_m.group(1) if bracket_m else None,
-                line=line,
-                end_line=end_line,
-                text=block_text,
-            ))
+            blocks.append(
+                _LocalDecisionBlock(
+                    label=heading_id,
+                    bracket_keyword=bracket_m.group(1) if bracket_m else None,
+                    line=line,
+                    end_line=end_line,
+                    text=block_text,
+                )
+            )
 
         return blocks
 
     def _referencing_files(
-        self, blk: _LocalDecisionBlock, owning_doc: ParsedDocument,
-        documents: list[ParsedDocument], subgraphs: dict,
-        section_by_id: dict
+        self,
+        blk: _LocalDecisionBlock,
+        owning_doc: ParsedDocument,
+        documents: list[ParsedDocument],
+        subgraphs: dict,
+        section_by_id: dict,
     ) -> set[str]:
         if blk.bracket_keyword:
             sg = subgraphs.get(blk.bracket_keyword)
@@ -365,8 +384,7 @@ class FakeDecisionDetector:
 
     def _evaluate_options(self, block: str) -> tuple[int, str | None]:
         header = self.option_header_re.search(block)
-        scope = block[header.end():] if header else block
-
+        scope = block[header.end() :] if header else block
         entries: list[tuple[str, int, int]] = []
         matches = list(self.option_entry_re.finditer(scope))
         for i, om in enumerate(matches):
@@ -384,7 +402,6 @@ class FakeDecisionDetector:
         lengths = {no: len(scope[s:e].strip()) for no, s, e in entries}
         concl = self.conclusion_re.search(block)
         chosen_no = concl.group(1) if concl else None
-
         if chosen_no and chosen_no in lengths:
             chosen_len = lengths[chosen_no]
             others = {no: l for no, l in lengths.items() if no != chosen_no}
@@ -395,8 +412,11 @@ class FakeDecisionDetector:
         if not others or chosen_len == 0:
             return option_count, None
 
-        weak = [no for no, l in others.items()
-                if l < self.strawman_abs_chars or l < chosen_len * self.strawman_min_ratio]
+        weak = [
+            no
+            for no, l in others.items()
+            if l < self.strawman_abs_chars or l < chosen_len * self.strawman_min_ratio
+        ]
         if weak:
             return option_count, (
                 f"非採用案（案{', '.join(sorted(weak))}）が採用案に比べて著しく短く記述されており、"
@@ -410,8 +430,12 @@ class FakeDecisionDetector:
             docs_rel = Path(self.config.project.docs_root).as_posix()
             proc = subprocess.run(
                 ["git", "diff", "--unified=0", "--no-color", "HEAD", "--", docs_rel],
-                cwd=self.repo_root, capture_output=True, timeout=30, check=False,
-                encoding="utf-8", errors="replace",
+                cwd=self.repo_root,
+                capture_output=True,
+                timeout=30,
+                check=False,
+                encoding="utf-8",
+                errors="replace",
             )
             if proc.returncode not in (0, 1) or not proc.stdout:
                 return result
@@ -426,7 +450,7 @@ class FakeDecisionDetector:
                 if path_str == "/dev/null":
                     current_file = None
                     continue
-                path_str = path_str[2:] if path_str.startswith("b/") else path_str
+                path_str = path_str.removeprefix("b/")
                 try:
                     rel = Path(path_str).relative_to(docs_rel).as_posix()
                 except ValueError:
@@ -446,4 +470,3 @@ class FakeDecisionDetector:
         match = re.search(r"```json\s*(.*?)\s*```", raw_resp, re.DOTALL)
         clean_text = match.group(1) if match else raw_resp.strip()
         return json.loads(clean_text)
-

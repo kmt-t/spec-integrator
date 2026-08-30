@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import os
-import re
 import json
-import glob
-from pathlib import Path
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from spec_integrator.config import Config
 from spec_integrator.judge.semantic_judge import LLMJudge
-
 
 TEST_CHAIN_PROMPT_TEMPLATE = """You are a strict, formal Software Verification and Specification Auditor.
 Your mission is to perform an exhaustive, end-to-end consistency audit across a 3-tier traceability chain:
@@ -116,7 +113,6 @@ class TestChainReport:
             "## 1. 検出された不一致・網羅性課題 (Issues Found)",
             "",
         ]
-
         issues_found = False
         for r in self.results:
             if r.status in ("WARN", "FAIL") or r.issues:
@@ -125,7 +121,9 @@ class TestChainReport:
                 lines.append(f"### {badge}: `{r.component_name}`")
                 lines.append(f"- **設計仕様書**: `{r.design_doc}`")
                 lines.append(f"- **テスト仕様書**: `{r.test_spec}`")
-                lines.append(f"- **テストコード**: {', '.join(f'`{f}`' for f in r.test_code_files) if r.test_code_files else 'なし'}")
+                lines.append(
+                    f"- **テストコード**: {', '.join(f'`{f}`' for f in r.test_code_files) if r.test_code_files else 'なし'}"
+                )
                 lines.append(f"- **評価サマリー**: {r.summary}")
                 if r.issues:
                     lines.append("- **検出項目**:")
@@ -138,19 +136,26 @@ class TestChainReport:
                 lines.append("")
 
         if not issues_found:
-            lines.append("✔ 評価されたすべてのコンポーネントにおいて、設計仕様 $\\to$ テスト仕様 $\\to$ テスト実装コード間の重大な不一致・欠落は検出されませんでした。\n")
+            lines.append(
+                "✔ 評価されたすべてのコンポーネントにおいて、設計仕様 $\\to$ テスト仕様 $\\to$ テスト実装コード間の重大な不一致・欠落は検出されませんでした。\n"
+            )
 
-        lines.extend([
-            "---",
-            "",
-            "## 2. 全コンポーネント評価一覧",
-            "",
-            "| コンポーネント | 判定 | 評価サマリー | 検出Issue数 |",
-            "| :--- | :---: | :--- | :---: |",
-        ])
-
+        lines.extend(
+            [
+                "---",
+                "",
+                "## 2. 全コンポーネント評価一覧",
+                "",
+                "| コンポーネント | 判定 | 評価サマリー | 検出Issue数 |",
+                "| :--- | :---: | :--- | :---: |",
+            ]
+        )
         for r in self.results:
-            badge = "🟢 PASS" if r.status == "PASS" else ("🟡 WARN" if r.status == "WARN" else "🔴 FAIL")
+            badge = (
+                "🟢 PASS"
+                if r.status == "PASS"
+                else ("🟡 WARN" if r.status == "WARN" else "🔴 FAIL")
+            )
             lines.append(f"| `{r.component_name}` | {badge} | {r.summary} | {len(r.issues)} |")
 
         return "\n".join(lines)
@@ -158,9 +163,10 @@ class TestChainReport:
 
 class TestChainJudge:
     __test__ = False
-    """Evaluates 3-tier end-to-end consistency between Design Spec -> Test Spec -> Test Code
-    using LLM as a Judge.
     """
+Evaluates 3-tier end-to-end consistency between Design Spec -> Test Spec -> Test Code
+    using LLM as a Judge.
+"""
 
     def __init__(self, config: Config):
         self.config = config
@@ -169,10 +175,8 @@ class TestChainJudge:
         """Automatically pairs design specifications with test specifications and test implementation files."""
         root = root_dir or Path(self.config.project.docs_root)
         project_root = root.parent if root.name == "docs" else root
-
         targets: list[TestChainTarget] = []
         design_files = list(root.glob("components/**/*.md"))
-
         # Component map
         for df in sorted(design_files):
             if "tests" in df.parts or df.name.endswith("_test_spec.md") or df.name == "FORMAT.md":
@@ -199,58 +203,66 @@ class TestChainJudge:
                 else:
                     continue
 
-            # Locate relevant test implementation code
+            # Locate relevant test implementation code generically
             test_code_files: list[Path] = []
+            tc_cfg = getattr(self.config, "test_chain", None)
+            test_dirs = (
+                tc_cfg.test_dirs
+                if (tc_cfg and tc_cfg.test_dirs)
+                else ["tests", "tests/**", "experiments/**", "scenarios", "scenarios/**"]
+            )
 
-            # 1. Look in experiments/pysim/
-            pysim_dir = project_root / "experiments" / "pysim"
-            if pysim_dir.exists():
-                # Direct match: test_<comp>.py
-                direct_tests = list(pysim_dir.glob(f"test*{comp_stem}*.py"))
-                test_code_files.extend(direct_tests)
-
-                # Keyword-based mapping
-                if "jit" in comp_stem:
-                    test_code_files.extend(list(pysim_dir.glob("test*jit*.py")))
-                    test_code_files.extend(list(pysim_dir.glob("test*stencil*.py")))
-                elif "interpreter" in comp_stem:
-                    test_code_files.extend(list(pysim_dir.glob("test*interpreter*.py")))
-                elif "scheduler" in comp_stem or "coos" in comp_stem:
-                    test_code_files.extend(list(pysim_dir.glob("test*sched*.py")))
-
-                # Main test suite
-                main_tests = pysim_dir / "tests.py"
-                if main_tests.exists() and main_tests not in test_code_files:
-                    test_code_files.append(main_tests)
+            words = [w for w in comp_stem.split("_") if len(w) >= 3]
+            search_roots = [project_root] if project_root != root else [root.parent, root]
+            for s_root in search_roots:
+                for t_dir_pat in test_dirs:
+                    for cand_dir in s_root.glob(t_dir_pat):
+                        if cand_dir.is_dir():
+                            # Direct match by component name stem or words
+                            test_code_files.extend(list(cand_dir.glob(f"test*{comp_stem}*.py")))
+                            test_code_files.extend(list(cand_dir.glob(f"*{comp_stem}*test*.py")))
+                            test_code_files.extend(list(cand_dir.glob(f"*{comp_stem}*.py")))
+                            for w in words:
+                                test_code_files.extend(list(cand_dir.glob(f"test*{w}*.py")))
+                                test_code_files.extend(list(cand_dir.glob(f"*{w}*test*.py")))
 
             # Deduplicate test code paths
             unique_code = []
             seen = set()
             for tf in test_code_files:
-                if tf.resolve() not in seen and tf.exists():
+                if tf.resolve() not in seen and tf.exists() and tf.is_file():
                     seen.add(tf.resolve())
                     unique_code.append(tf)
 
-            targets.append(TestChainTarget(
-                component_name=comp_stem,
-                design_doc_path=df,
-                test_spec_path=test_spec_file,
-                test_code_paths=unique_code,
-            ))
+            targets.append(
+                TestChainTarget(
+                    component_name=comp_stem,
+                    design_doc_path=df,
+                    test_spec_path=test_spec_file,
+                    test_code_paths=unique_code,
+                )
+            )
 
         return targets
 
-    def judge_targets(self, targets: list[TestChainTarget],
-                      backend: str | None = None, model: str | None = None,
-                      max_targets: int = 10) -> TestChainReport:
+    def judge_targets(
+        self,
+        targets: list[TestChainTarget],
+        backend: str | None = None,
+        model: str | None = None,
+        max_targets: int = 10,
+    ) -> TestChainReport:
         report = TestChainReport()
         selected_backend = backend or self.config.llm_judge.default_backend
-
         candidates = targets[:max_targets] if max_targets > 0 else targets
-        print(f"Auditing {len(candidates)} component 3-tier test chain(s) using LLM Backend: '{selected_backend}'...")
-
+        print(
+            f"Auditing {len(candidates)} component 3-tier test chain(s) using LLM Backend: '{selected_backend}'..."
+        )
         for idx, target in enumerate(candidates, start=1):
-            print(f"  [{idx}/{len(candidates)}] Auditing '{target.component_name}' (Spec -> TestSpec -> TestCode)...", flush=True)
+            print(
+                f"  [{idx}/{len(candidates)}] Auditing '{target.component_name}' (Spec -> TestSpec -> TestCode)...",
+                flush=True,
+            )
             res = self._evaluate_single_chain(target, selected_backend, model)
             report.results.append(res)
             report.total_evaluated += 1
@@ -263,7 +275,9 @@ class TestChainJudge:
 
         return report
 
-    def _evaluate_single_chain(self, target: TestChainTarget, backend: str, model: str | None) -> TestChainResult:
+    def _evaluate_single_chain(
+        self, target: TestChainTarget, backend: str, model: str | None
+    ) -> TestChainResult:
         try:
             design_text = target.design_doc_path.read_text(encoding="utf-8", errors="replace")
         except Exception as e:
@@ -295,20 +309,24 @@ class TestChainJudge:
                 # Truncate very long files to first 300 lines for prompt budget
                 lines = code_text.splitlines()
                 if len(lines) > 300:
-                    code_text = "\n".join(lines[:300]) + f"\n... [truncated {len(lines) - 300} lines]"
+                    code_text = (
+                        "\n".join(lines[:300]) + f"\n... [truncated {len(lines) - 300} lines]"
+                    )
                 test_code_chunks.append(f"--- File: {code_path.name} ---\n{code_text}")
             except Exception:
                 pass
 
-        test_code_text = "\n\n".join(test_code_chunks) if test_code_chunks else "(No test code implementation files found)"
-
+        test_code_text = (
+            "\n\n".join(test_code_chunks)
+            if test_code_chunks
+            else "(No test code implementation files found)"
+        )
         prompt = TEST_CHAIN_PROMPT_TEMPLATE.format(
             component_name=target.component_name,
             design_spec_text=design_text[:8000],
             test_spec_text=test_spec_text[:8000],
             test_code_text=test_code_text[:8000],
         )
-
         if backend == "mock":
             return TestChainResult(
                 component_name=target.component_name,
@@ -323,11 +341,9 @@ class TestChainJudge:
         try:
             raw_response = judge_llm._query_llm(prompt, backend, model)
             parsed = self._parse_json_response(raw_response)
-
             status = parsed.get("status", "WARN")
             summary = parsed.get("summary", "No summary provided by LLM.")
             issues = parsed.get("issues", [])
-
             return TestChainResult(
                 component_name=target.component_name,
                 design_doc=str(target.design_doc_path),
@@ -345,13 +361,18 @@ class TestChainJudge:
                 test_code_files=[str(p) for p in target.test_code_paths],
                 status="FAIL",
                 summary=f"LLM Judge execution error: {e}",
-                issues=[{"severity": "ERROR", "location": "LLM Backend", "description": str(e)}],
+                issues=[
+                    {
+                        "severity": "ERROR",
+                        "location": "LLM Backend",
+                        "description": str(e),
+                    }
+                ],
             )
 
     def _parse_json_response(self, raw_resp: str) -> dict[str, Any]:
         cleaned = re.sub(r"^```(?:json)?", "", raw_resp.strip(), flags=re.MULTILINE)
         cleaned = re.sub(r"```$", "", cleaned.strip(), flags=re.MULTILINE).strip()
-
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError:

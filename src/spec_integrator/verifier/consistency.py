@@ -1,22 +1,22 @@
 from __future__ import annotations
 
-import re
-import json
 import fnmatch
-from pathlib import Path
+import json
+import re
 from dataclasses import dataclass, field
-from spec_integrator.config import Config
-from spec_integrator.parser import ParsedDocument
-from spec_integrator.verifier.static import VerificationIssue
+from pathlib import Path
 
+from spec_integrator.config import Config
+from spec_integrator.parser import MarkdownParser, ParsedDocument
+from spec_integrator.verifier.static import VerificationIssue
 
 # A value token: decimal, hex, or a size/unit-suffixed number.
 VALUE_RE = re.compile(
     r"(?<![\w.])("
-    r"0[xX][0-9a-fA-F][0-9a-fA-F_]*[uUlL]*"                     # 0x8000_0000 / 0x40000000U
+    r"0[xX][0-9a-fA-F][0-9a-fA-F_]*[uUlL]*"  # 0x8000_0000 / 0x40000000U
     r"|\d[\d_]*(?:\.\d+)?\s*"
     r"(?:KB|kB|MB|Bytes|Byte|bytes|byte|キロバイト|バイト|bit|μs|us|ms|B)"  # 6.0 KB / 4096バイト
-    r"|\d[\d_]*(?:\.\d+)?[uUlL]*"                                # 6144 / 6144U
+    r"|\d[\d_]*(?:\.\d+)?[uUlL]*"  # 6144 / 6144U
     r")(?![0-9.])"
 )
 
@@ -26,7 +26,9 @@ FENCE_RE = re.compile(r"^\s*(```|~~~)")
 @dataclass
 class SymbolDrift:
     symbol: str
-    values: dict[str, list[str]] = field(default_factory=dict)  # normalized value -> ["file:line", ...]
+    values: dict[str, list[str]] = field(
+        default_factory=dict
+    )  # normalized value -> ["file:line", ...]
 
 
 @dataclass
@@ -65,10 +67,8 @@ def _normalize_value(raw: str) -> str:
 
 class ConsistencyVerifier:
     """Consistency Gate.
-
     Targets the one failure mode that discipline does not fix: an edit that lands
     in one place and never reaches the other places that restate the same fact.
-
     Three independent mechanisms:
       A. Stale-value scan     — values you migrated away from must never reappear.
       B. Symbol drift         — one symbol must not carry conflicting values across files.
@@ -80,8 +80,9 @@ class ConsistencyVerifier:
         self.config = config
 
     # ------------------------------------------------------------------ #
-    def verify(self, documents: list[ParsedDocument], docs_root: Path
-               ) -> tuple[list[VerificationIssue], ConsistencySummary]:
+    def verify(
+        self, documents: list[ParsedDocument], docs_root: Path
+    ) -> tuple[list[VerificationIssue], ConsistencySummary]:
         summary = ConsistencySummary()
         cfg = self.config.consistency
         if not cfg.enabled:
@@ -89,7 +90,6 @@ class ConsistencyVerifier:
 
         issues: list[VerificationIssue] = []
         scanned = self._collect_scan_targets(documents, docs_root)
-
         issues.extend(self._check_stale_values(scanned, summary))
         issues.extend(self._check_symbol_drift(scanned, summary))
         issues.extend(self._check_cochange(documents, summary))
@@ -99,10 +99,10 @@ class ConsistencyVerifier:
     # ------------------------------------------------------------------ #
     # Duplicate definitions: one keyword, one defining row
     # ------------------------------------------------------------------ #
-    def _check_duplicate_definitions(self, documents: list[ParsedDocument]
-                                     ) -> list[VerificationIssue]:
+    def _check_duplicate_definitions(
+        self, documents: list[ParsedDocument]
+    ) -> list[VerificationIssue]:
         """A keyword defined twice has two authorities that drift apart silently.
-
         Every other consistency check compares a definition against its uses, so
         it is blind to a definition that was written twice: whichever row an editor
         happens to update becomes 'the' definition, and the stale twin keeps
@@ -125,22 +125,29 @@ class ConsistencyVerifier:
                 if len(lines) < 2:
                     continue
                 where = ", ".join(str(n) for n in lines)
-                issues.append(VerificationIssue(
-                    gate="Consistency", severity="ERROR",
-                    file_path=doc.file_path, line=lines[1],
-                    rule_code="CONSIST-DUPLICATE-DEFINITION",
-                    message=(f"'{{{kw}}}' is defined on more than one row of this table "
-                             f"(lines {where}). One keyword must have one definition: with two, "
-                             "an edit reaches whichever row the author happened to find and the "
-                             "other silently keeps the old wording. Merge them into one row.")
-                ))
+                issues.append(
+                    VerificationIssue(
+                        gate="Consistency",
+                        severity="ERROR",
+                        file_path=doc.file_path,
+                        line=lines[1],
+                        rule_code="CONSIST-DUPLICATE-DEFINITION",
+                        message=(
+                            f"'{{{kw}}}' is defined on more than one row of this table "
+                            f"(lines {where}). One keyword must have one definition: with two, "
+                            "an edit reaches whichever row the author happened to find and the "
+                            "other silently keeps the old wording. Merge them into one row."
+                        ),
+                    )
+                )
         return issues
 
     # ------------------------------------------------------------------ #
     # Target collection: docs plus any extra roots (headers, sources)
     # ------------------------------------------------------------------ #
-    def _collect_scan_targets(self, documents: list[ParsedDocument],
-                              docs_root: Path) -> list[tuple[str, list[str]]]:
+    def _collect_scan_targets(
+        self, documents: list[ParsedDocument], docs_root: Path
+    ) -> list[tuple[str, list[str]]]:
         targets: list[tuple[str, list[str]]] = []
         for doc in documents:
             targets.append((doc.file_path, doc.content.splitlines()))
@@ -167,15 +174,15 @@ class ConsistencyVerifier:
     # ------------------------------------------------------------------ #
     # A. Values you migrated away from must not reappear
     # ------------------------------------------------------------------ #
-    def _check_stale_values(self, targets: list[tuple[str, list[str]]],
-                            summary: ConsistencySummary) -> list[VerificationIssue]:
+    def _check_stale_values(
+        self, targets: list[tuple[str, list[str]]], summary: ConsistencySummary
+    ) -> list[VerificationIssue]:
         issues: list[VerificationIssue] = []
         for inv in self.config.consistency.invariants:
             summary.invariants_checked += 1
             patterns = [(p, re.compile(p)) for p in inv.get("forbidden", [])]
             scope = inv.get("scope") or ["**/*"]
             exclude = inv.get("exclude") or []
-
             for rel_path, lines in targets:
                 if not any(fnmatch.fnmatch(rel_path, s) for s in scope):
                     continue
@@ -187,20 +194,27 @@ class ConsistencyVerifier:
                             continue
                         canonical = inv.get("canonical")
                         tail = f" 正: {canonical}" if canonical else ""
-                        issues.append(VerificationIssue(
-                            gate="Consistency", severity="ERROR",
-                            file_path=rel_path, line=idx,
-                            rule_code="CONSIST-STALE-VALUE",
-                            message=(f"[{inv.get('id', 'invariant')}] superseded value matching "
-                                     f"`{raw}` still present.{tail} — {inv.get('reason', '')}")
-                        ))
+                        issues.append(
+                            VerificationIssue(
+                                gate="Consistency",
+                                severity="ERROR",
+                                file_path=rel_path,
+                                line=idx,
+                                rule_code="CONSIST-STALE-VALUE",
+                                message=(
+                                    f"[{inv.get('id', 'invariant')}] superseded value matching "
+                                    f"`{raw}` still present.{tail} — {inv.get('reason', '')}"
+                                ),
+                            )
+                        )
         return issues
 
     # ------------------------------------------------------------------ #
     # B. One symbol, one value — zero configuration required
     # ------------------------------------------------------------------ #
-    def _check_symbol_drift(self, targets: list[tuple[str, list[str]]],
-                            summary: ConsistencySummary) -> list[VerificationIssue]:
+    def _check_symbol_drift(
+        self, targets: list[tuple[str, list[str]]], summary: ConsistencySummary
+    ) -> list[VerificationIssue]:
         cfg = self.config.consistency
         if not cfg.symbol_patterns:
             return []
@@ -208,7 +222,6 @@ class ConsistencyVerifier:
         symbol_res = [re.compile(p) for p in cfg.symbol_patterns]
         # symbol -> normalized value -> list of "file:line"
         observed: dict[str, dict[str, list[str]]] = {}
-
         for rel_path, lines in targets:
             in_code = False
             for idx, line in enumerate(lines, start=1):
@@ -230,7 +243,6 @@ class ConsistencyVerifier:
 
         issues: list[VerificationIssue] = []
         summary.symbols_tracked = len(observed)
-
         for symbol, values in sorted(observed.items()):
             # Values are only recorded from an unambiguous "this is the value"
             # position, so two distinct values for one symbol is real drift.
@@ -239,25 +251,29 @@ class ConsistencyVerifier:
 
             drift = SymbolDrift(symbol=symbol, values={v: list(l) for v, l in values.items()})
             summary.drifting_symbols.append(drift)
-
             rendered = "; ".join(
                 f"{v} @ {', '.join(sorted(set(locs))[:3])}" for v, locs in sorted(values.items())
             )
             all_locs = sorted({l for locs in values.values() for l in locs})
             f_path, _, f_line = all_locs[0].rpartition(":")
-            issues.append(VerificationIssue(
-                gate="Consistency", severity="ERROR",
-                file_path=f_path, line=int(f_line) if f_line.isdigit() else 1,
-                rule_code="CONSIST-SYMBOL-DRIFT",
-                message=(f"'{symbol}' carries conflicting values across the repository: {rendered}. "
-                         "One fact must have one value; an edit reached some of these and not the others.")
-            ))
+            issues.append(
+                VerificationIssue(
+                    gate="Consistency",
+                    severity="ERROR",
+                    file_path=f_path,
+                    line=int(f_line) if f_line.isdigit() else 1,
+                    rule_code="CONSIST-SYMBOL-DRIFT",
+                    message=(
+                        f"'{symbol}' carries conflicting values across the repository: {rendered}. "
+                        "One fact must have one value; an edit reached some of these and not the others."
+                    ),
+                )
+            )
         return issues
 
     @classmethod
     def _value_for_symbol(cls, line: str, symbol: str) -> str | None:
         """Extracts the value of `symbol` only from an unambiguous value position.
-
         Prose that merely mentions numbers near a symbol ("2KB x 3 = 6144 Bytes",
         "254 以下でなければならない") carries components and constraints, not the
         value, and must not be treated as a declaration. Three positions qualify:
@@ -273,7 +289,10 @@ class ConsistencyVerifier:
 
         # 2. Explicit default marker. The separator is required: "デフォルト値: 6144"
         #    declares a value, whereas "デフォルト 3面" counts banks.
-        m = re.search(r"(?:デフォルト値?|既定値?|省略時|[Dd]efault)\s*[:：=]\s*" + VALUE_RE.pattern, line)
+        m = re.search(
+            r"(?:デフォルト値?|既定値?|省略時|[Dd]efault)\s*[:：=]\s*" + VALUE_RE.pattern,
+            line,
+        )
         if m:
             return _normalize_value(m.group(1))
 
@@ -300,8 +319,9 @@ class ConsistencyVerifier:
     # ------------------------------------------------------------------ #
     # C. Co-change: a changed definition invalidates its references
     # ------------------------------------------------------------------ #
-    def _check_cochange(self, documents: list[ParsedDocument],
-                        summary: ConsistencySummary) -> list[VerificationIssue]:
+    def _check_cochange(
+        self, documents: list[ParsedDocument], summary: ConsistencySummary
+    ) -> list[VerificationIssue]:
         cfg = self.config.consistency
         if not cfg.cochange:
             return []
@@ -310,102 +330,120 @@ class ConsistencyVerifier:
         baseline = self._load_lock(lock_path)
         summary.baseline_present = baseline is not None
         current = self.build_baseline(documents)
-
         if baseline is None:
-            return [VerificationIssue(
-                gate="Consistency", severity="WARNING",
-                file_path=cfg.lockfile, line=1,
-                rule_code="CONSIST-BASELINE-MISSING",
-                message=("No consistency baseline recorded, so propagation of edits cannot be "
-                         "checked. Run 'spec-integrator sync' to create it and commit the result.")
-            )]
+            return [
+                VerificationIssue(
+                    gate="Consistency",
+                    severity="WARNING",
+                    file_path=cfg.lockfile,
+                    line=1,
+                    rule_code="CONSIST-BASELINE-MISSING",
+                    message=(
+                        "No consistency baseline recorded, so propagation of edits cannot be "
+                        "checked. Run 'spec-integrator sync' to create it and commit the result."
+                    ),
+                )
+            ]
 
         if int(baseline.get("version", 1)) < 2:
-            return [VerificationIssue(
-                gate="Consistency", severity="WARNING",
-                file_path=cfg.lockfile, line=1,
-                rule_code="CONSIST-BASELINE-OUTDATED",
-                message=("The consistency baseline predates keyword-level fingerprinting. "
-                         "Run 'spec-integrator sync' to regenerate it.")
-            )]
+            return [
+                VerificationIssue(
+                    gate="Consistency",
+                    severity="WARNING",
+                    file_path=cfg.lockfile,
+                    line=1,
+                    rule_code="CONSIST-BASELINE-OUTDATED",
+                    message=(
+                        "The consistency baseline predates keyword-level fingerprinting. "
+                        "Run 'spec-integrator sync' to regenerate it."
+                    ),
+                )
+            ]
 
         old_secs = baseline.get("sections", {})
         new_secs = current["sections"]
         old_defs = baseline.get("definitions", {})
         new_defs = current["definitions"]
         new_refs = current["references"]
-
         changed = {sid for sid, h in new_secs.items() if old_secs.get(sid) not in (None, h)}
         summary.cochange_tracked = len(new_defs)
-
         issues: list[VerificationIssue] = []
         sec_index = {s.section_id: (d, s) for d in documents for s in d.sections}
-
         for keyword, definers in sorted(new_defs.items()):
             old_for_kw = old_defs.get(keyword) or {}
             # Only a definition that existed before can go stale; a brand-new
             # keyword has no downstream text to invalidate yet.
             if not old_for_kw:
                 continue
-            changed_definers = [sid for sid, fp in definers.items()
-                                if sid in old_for_kw and old_for_kw[sid] != fp]
+            changed_definers = [
+                sid for sid, fp in definers.items() if sid in old_for_kw and old_for_kw[sid] != fp
+            ]
             if not changed_definers:
                 continue
 
             for ref_id in sorted(new_refs.get(keyword, [])):
                 if ref_id in changed:
-                    continue          # revisited in the same edit — propagation happened
+                    continue  # revisited in the same edit — propagation happened
                 if ref_id not in old_secs:
-                    continue          # newly written section
+                    continue  # newly written section
                 entry = sec_index.get(ref_id)
                 if entry is None:
                     continue
                 doc, sec = entry
-                summary.cochange_stale.append({
-                    "keyword": keyword,
-                    "definer": changed_definers[0],
-                    "referrer": ref_id,
-                    "file_path": doc.file_path,
-                    "heading": sec.heading,
-                })
-                issues.append(VerificationIssue(
-                    gate="Consistency", severity="ERROR",
-                    file_path=doc.file_path, line=sec.line_start,
-                    rule_code="CONSIST-COCHANGE-STALE",
-                    message=(f"The definition of '{{{keyword}}}' changed in "
-                             f"'{changed_definers[0].replace('sec:', '')}', but this section still "
-                             "carries the wording written against the previous definition. "
-                             "Update it, or re-run 'spec-integrator sync' to accept it as unaffected.")
-                ))
+                summary.cochange_stale.append(
+                    {
+                        "keyword": keyword,
+                        "definer": changed_definers[0],
+                        "referrer": ref_id,
+                        "file_path": doc.file_path,
+                        "heading": sec.heading,
+                    }
+                )
+                issues.append(
+                    VerificationIssue(
+                        gate="Consistency",
+                        severity="ERROR",
+                        file_path=doc.file_path,
+                        line=sec.line_start,
+                        rule_code="CONSIST-COCHANGE-STALE",
+                        message=(
+                            f"The definition of '{{{keyword}}}' changed in "
+                            f"'{changed_definers[0].replace('sec:', '')}', but this section still "
+                            "carries the wording written against the previous definition. "
+                            "Update it, or re-run 'spec-integrator sync' to accept it as unaffected."
+                        ),
+                    )
+                )
         return issues
 
     # ------------------------------------------------------------------ #
     @staticmethod
     def _definition_fingerprint(section_body: str, keyword: str) -> str:
-        """Hashes only the lines that actually define the keyword.
-
-        A requirements table holds dozens of definitions in one section. Hashing the
-        whole section would make every edit invalidate every neighbouring keyword,
-        so the unit of change has to be the definition itself, not its container.
+        """
+        Hashes only the lines that actually define the keyword.
+                A requirements table holds dozens of definitions in one section. Hashing the
+                whole section would make every edit invalidate every neighbouring keyword,
+                so the unit of change has to be the definition itself, not its container.
         """
         from spec_integrator.parser import MarkdownParser
+
         token = "{" + keyword + "}"
         lines = [ln.strip() for ln in section_body.splitlines() if token in ln]
         return MarkdownParser.config_compute_hash("\n".join(lines))
 
     def build_baseline(self, documents: list[ParsedDocument]) -> dict:
-        from spec_integrator.parser import MarkdownParser
+
         sections: dict[str, str] = {}
         definitions: dict[str, dict[str, str]] = {}
         references: dict[str, list[str]] = {}
-
         for doc in documents:
             for sec in doc.sections:
                 sections[sec.section_id] = MarkdownParser.config_compute_hash(sec.body_text)
                 for kw in set(sec.keywords):
                     if self.config.is_keyword_definition(kw, doc.file_path):
-                        definitions.setdefault(kw, {})[sec.section_id] = \
+                        definitions.setdefault(kw, {})[sec.section_id] = (
                             self._definition_fingerprint(sec.body_text, kw)
+                        )
                     else:
                         references.setdefault(kw, []).append(sec.section_id)
 
@@ -420,8 +458,10 @@ class ConsistencyVerifier:
         lock_path = self.config.resolve_path(self.config.consistency.lockfile)
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         payload = self.build_baseline(documents)
-        lock_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True),
-                             encoding="utf-8")
+        lock_path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
         return lock_path
 
     @staticmethod

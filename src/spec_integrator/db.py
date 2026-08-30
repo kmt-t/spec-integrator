@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import sqlite3
-import hashlib
 import datetime
+import hashlib
+import sqlite3
 from pathlib import Path
-from dataclasses import dataclass, asdict
 
 
 class DocAuditDB:
@@ -117,44 +116,113 @@ class DocAuditDB:
 
     def insert_document(self, file_path: str, tier: str, component: str, content_hash: str):
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        self.conn.execute("""
+        self.conn.execute(
+            """
             INSERT OR REPLACE INTO documents (file_path, tier, component, content_hash, updated_at)
             VALUES (?, ?, ?, ?, ?)
-        """, (file_path, str(tier) if tier is not None else None, component, content_hash, now))
+""",
+            (
+                file_path,
+                str(tier) if tier is not None else None,
+                component,
+                content_hash,
+                now,
+            ),
+        )
 
-    def insert_section(self, section_id: str, file_path: str, heading: str, level: int,
-                       line_start: int, line_end: int, body_text: str, content_hash: str):
-        self.conn.execute("""
-            INSERT OR REPLACE INTO sections 
+    def insert_section(
+        self,
+        section_id: str,
+        file_path: str,
+        heading: str,
+        level: int,
+        line_start: int,
+        line_end: int,
+        body_text: str,
+        content_hash: str,
+    ):
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO sections
             (section_id, file_path, heading, level, line_start, line_end, body_text, content_hash)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (section_id, file_path, heading, level, line_start, line_end, body_text, content_hash))
+""",
+            (
+                section_id,
+                file_path,
+                heading,
+                level,
+                line_start,
+                line_end,
+                body_text,
+                content_hash,
+            ),
+        )
 
-    def insert_keyword(self, keyword: str, category: str, defined_in_file: str, defined_in_section: str, description: str = ""):
-        self.conn.execute("""
+    def insert_keyword(
+        self,
+        keyword: str,
+        category: str,
+        defined_in_file: str,
+        defined_in_section: str,
+        description: str = "",
+    ):
+        self.conn.execute(
+            """
             INSERT OR REPLACE INTO keywords (keyword, category, defined_in_file, defined_in_section, description)
             VALUES (?, ?, ?, ?, ?)
-        """, (keyword, category, defined_in_file, defined_in_section, description))
+""",
+            (keyword, category, defined_in_file, defined_in_section, description),
+        )
 
-    def insert_keyword_reference(self, keyword: str, file_path: str, section_id: str,
-                                 relation_type: str, line_number: int):
-        self.conn.execute("""
+    def insert_keyword_reference(
+        self,
+        keyword: str,
+        file_path: str,
+        section_id: str,
+        relation_type: str,
+        line_number: int,
+    ):
+        self.conn.execute(
+            """
             INSERT INTO keyword_references (keyword, file_path, section_id, relation_type, line_number)
             VALUES (?, ?, ?, ?, ?)
-        """, (keyword, file_path, section_id, relation_type, line_number))
+""",
+            (keyword, file_path, section_id, relation_type, line_number),
+        )
 
-    def insert_link(self, source_file: str, source_line: int, target_path: str, target_anchor: str, is_valid: int):
-        self.conn.execute("""
+    def insert_link(
+        self,
+        source_file: str,
+        source_line: int,
+        target_path: str,
+        target_anchor: str,
+        is_valid: int,
+    ):
+        self.conn.execute(
+            """
             INSERT INTO document_links (source_file, source_line, target_path, target_anchor, is_valid)
             VALUES (?, ?, ?, ?, ?)
-        """, (source_file, source_line, target_path, target_anchor, is_valid))
+""",
+            (source_file, source_line, target_path, target_anchor, is_valid),
+        )
 
-    def insert_formal_model(self, component: str, model_path: str, framework: str, status: str, details: str = ""):
+    def insert_formal_model(
+        self,
+        component: str,
+        model_path: str,
+        framework: str,
+        status: str,
+        details: str = "",
+    ):
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        self.conn.execute("""
+        self.conn.execute(
+            """
             INSERT OR REPLACE INTO formal_models (component, model_path, framework, status, details, checked_at)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (component, model_path, framework, status, details, now))
+""",
+            (component, model_path, framework, status, details, now),
+        )
 
     def commit(self):
         self.conn.commit()
@@ -177,14 +245,21 @@ class DocAuditDB:
     def get_keyword_references(self, keyword: str | None = None) -> list[sqlite3.Row]:
         cursor = self.conn.cursor()
         if keyword:
-            cursor.execute("SELECT * FROM keyword_references WHERE keyword = ? ORDER BY file_path, line_number", (keyword,))
+            cursor.execute(
+                "SELECT * FROM keyword_references WHERE keyword = ? ORDER BY file_path, line_number",
+                (keyword,),
+            )
         else:
-            cursor.execute("SELECT * FROM keyword_references ORDER BY keyword, file_path, line_number")
+            cursor.execute(
+                "SELECT * FROM keyword_references ORDER BY keyword, file_path, line_number"
+            )
         return cursor.fetchall()
 
     def get_invalid_links(self) -> list[sqlite3.Row]:
         cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM document_links WHERE is_valid = 0 ORDER BY source_file, source_line")
+        cursor.execute(
+            "SELECT * FROM document_links WHERE is_valid = 0 ORDER BY source_file, source_line"
+        )
         return cursor.fetchall()
 
     def get_cache(self, hash_key: str) -> dict | None:
@@ -198,10 +273,13 @@ class DocAuditDB:
     def set_cache(self, hash_key: str, rule_code: str, target_id: str, status: str, reason: str):
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with self.conn:
-            self.conn.execute("""
+            self.conn.execute(
+                """
                 INSERT OR REPLACE INTO audit_cache (hash_key, rule_code, target_id, status, reason, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (hash_key, rule_code, target_id, status, reason, now))
+""",
+                (hash_key, rule_code, target_id, status, reason, now),
+            )
 
     def close(self):
         self.conn.close()

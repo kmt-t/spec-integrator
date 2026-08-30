@@ -25,12 +25,12 @@ Formal Gate はこれを機械的に拒否する。
 
 ```python
 {
-    "name":      "mutual_exclusion",   # レポート上の識別名
-    "kind":      "safety",             # safety | liveness | reachability | deadlock_freedom
-    "logic":     "CTL",                # CTL | LTL（省略時は式のモジュールから推定）
-    "formula":   AG(Not(bad)),         # 検査する式
-    "violation": bad,                  # ★ この式を満たす状態が存在しなければ NG
-    "expect":    True,                 # 期待する結果（False = 意図的に反証されることを示す）
+    "name": "mutual_exclusion",  # レポート上の識別名
+    "kind": "safety",  # safety | liveness | reachability | deadlock_freedom
+    "logic": "CTL",  # CTL | LTL（省略時は式のモジュールから推定）
+    "formula": AG(Not(bad)),  # 検査する式
+    "violation": bad,  # ★ この式を満たす状態が存在しなければ NG
+    "expect": True,  # 期待する結果（False = 意図的に反証されることを示す）
 }
 ```
 
@@ -74,18 +74,23 @@ BACKS = ["components/tier1_core/os_scheduler.md"]
 def build_model() -> Kripke:
     S = ["s_idle", "s_a_crit", "s_b_crit", "s_both_crit", "s_wait"]
     R = [
-        ("s_idle", "s_a_crit"), ("s_idle", "s_b_crit"), ("s_idle", "s_wait"),
-        ("s_a_crit", "s_both_crit"), ("s_a_crit", "s_idle"),
-        ("s_b_crit", "s_idle"), ("s_b_crit", "s_wait"),
+        ("s_idle", "s_a_crit"),
+        ("s_idle", "s_b_crit"),
+        ("s_idle", "s_wait"),
+        ("s_a_crit", "s_both_crit"),
+        ("s_a_crit", "s_idle"),
+        ("s_b_crit", "s_idle"),
+        ("s_b_crit", "s_wait"),
         ("s_both_crit", "s_idle"),
-        ("s_wait", "s_a_crit"), ("s_wait", "s_idle"),
+        ("s_wait", "s_a_crit"),
+        ("s_wait", "s_idle"),
     ]
     L = {
-        "s_idle":      {"idle"},
-        "s_a_crit":    {"a_crit"},
-        "s_b_crit":    {"b_crit"},
-        "s_both_crit": {"a_crit", "b_crit"},   # ← 違反状態を必ず表現する
-        "s_wait":      {"waiting"},
+        "s_idle": {"idle"},
+        "s_a_crit": {"a_crit"},
+        "s_b_crit": {"b_crit"},
+        "s_both_crit": {"a_crit", "b_crit"},  # ← 違反状態を必ず表現する
+        "s_wait": {"waiting"},
     }
     return Kripke(S=S, S0={"s_idle"}, R=R, L=L)
 
@@ -99,7 +104,7 @@ def properties():
             "logic": "CTL",
             "formula": AG(Not(bad)),
             "violation": bad,
-            "expect": False,   # このモデルは相互排除を保証しない、と明示する
+            "expect": False,  # このモデルは相互排除を保証しない、と明示する
         },
     ]
 ```
@@ -123,9 +128,13 @@ def properties():
 def build_model(*, guards: bool = True) -> Kripke:
     S = ["s_idle", "s_a_crit", "s_b_crit", "s_both_crit", "s_wait"]
     R = [
-        ("s_idle", "s_a_crit"), ("s_idle", "s_b_crit"), ("s_idle", "s_wait"),
-        ("s_a_crit", "s_idle"), ("s_b_crit", "s_idle"),
-        ("s_wait", "s_b_crit"), ("s_wait", "s_idle"),
+        ("s_idle", "s_a_crit"),
+        ("s_idle", "s_b_crit"),
+        ("s_idle", "s_wait"),
+        ("s_a_crit", "s_idle"),
+        ("s_b_crit", "s_idle"),
+        ("s_wait", "s_b_crit"),
+        ("s_wait", "s_idle"),
         ("s_both_crit", "s_idle"),
     ]
     if not guards:
@@ -133,6 +142,7 @@ def build_model(*, guards: bool = True) -> Kripke:
         # ここに「違反が起きる経路」を書く。ガード有効時はこの辺が存在しない。
         R = R + [("s_a_crit", "s_both_crit"), ("s_b_crit", "s_both_crit")]
     ...
+
 
 {
     "name": "mutual_exclusion",

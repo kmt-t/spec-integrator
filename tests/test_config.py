@@ -1,6 +1,4 @@
-import pytest
-from pathlib import Path
-from spec_integrator.config import Config, TierConfig, KeywordRule
+from spec_integrator.config import Config, TierConfig
 
 
 def test_tier_config_regex_matching():
@@ -34,7 +32,6 @@ keywords:
 """
     cfg_file = tmp_path / "spec-integrator.yaml"
     cfg_file.write_text(yaml_content, encoding="utf-8")
-
     cfg = Config.load(cfg_file)
     assert cfg.project.name == "Test Project"
     assert len(cfg.tiers) == 1
@@ -53,7 +50,6 @@ project:
 """
     cfg_file = tmp_path / "spec-integrator.yaml"
     cfg_file.write_text(yaml_content, encoding="utf-8")
-
     cfg = Config.load(cfg_file)
     assert cfg.is_excluded("docs/components/FORMAT.md")
     assert cfg.is_excluded("architecture/FORMAT.md")

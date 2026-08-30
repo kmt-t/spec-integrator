@@ -1,8 +1,7 @@
 import json
+
 import pytest
-import sys
-from pathlib import Path
-from spec_integrator.cli import cmd_init, cmd_check, cmd_graph
+from spec_integrator.cli import cmd_check, cmd_init
 
 
 class ArgsCheck:
@@ -17,11 +16,9 @@ def _scaffold(tmp_path):
     req_dir = docs_dir / "requires"
     req_dir.mkdir(parents=True)
     (req_dir / "req.md").write_text("# Requirements\n## Feat {REQ_01}\nDef.", encoding="utf-8")
-
     comp_dir = docs_dir / "components" / "tier1_core"
     comp_dir.mkdir(parents=True)
-    (comp_dir / "sched.md").write_text("# Sched\n## Design\nImplements {REQ_01}.",
-                                       encoding="utf-8")
+    (comp_dir / "sched.md").write_text("# Sched\n## Design\nImplements {REQ_01}.", encoding="utf-8")
     return docs_dir
 
 
@@ -42,10 +39,17 @@ def _write_clean_assessment(tmp_path, docs_dir):
     out = tmp_path / "reports" / "doc_risk_report.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     # A complete assessment covers every section; a partial one is not a clean bill.
-    out.write_text(json.dumps({
-        "backend": "sakura",
-        "total_evaluated": sections, "assessments": [], "doc_hashes": hashes
-    }), encoding="utf-8")
+    out.write_text(
+        json.dumps(
+            {
+                "backend": "sakura",
+                "total_evaluated": sections,
+                "assessments": [],
+                "doc_hashes": hashes,
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_cli_init_creates_config(tmp_path, monkeypatch):
@@ -66,15 +70,14 @@ def test_check_fails_when_the_risk_assessment_was_never_run(tmp_path, monkeypatc
 
     class ArgsInit:
         pass
+
     with pytest.raises(SystemExit):
         cmd_init(ArgsInit())
 
     _scaffold(tmp_path)
-
     with pytest.raises(SystemExit) as exc_info:
         cmd_check(ArgsCheck())
     assert exc_info.value.code == 1
-
     report = (tmp_path / "spec_report.md").read_text(encoding="utf-8")
     assert "OBLIG-ASSESSMENT-MISSING" in report
 
@@ -84,12 +87,12 @@ def test_check_passes_with_a_complete_assessment(tmp_path, monkeypatch):
 
     class ArgsInit:
         pass
+
     with pytest.raises(SystemExit):
         cmd_init(ArgsInit())
 
     docs_dir = _scaffold(tmp_path)
     _write_clean_assessment(tmp_path, docs_dir)
-
     with pytest.raises(SystemExit) as exc_info:
         cmd_check(ArgsCheck())
     assert exc_info.value.code == 0
@@ -103,15 +106,17 @@ def test_check_can_run_without_the_obligation_gate(tmp_path, monkeypatch):
 
     class ArgsInit:
         pass
+
     with pytest.raises(SystemExit):
         cmd_init(ArgsInit())
 
     cfg_path = tmp_path / "spec-integrator.yaml"
-    cfg_path.write_text(cfg_path.read_text(encoding="utf-8")
-                        + "\nobligation:\n  require_assessment: false\n  require_judge: false\n",
-                        encoding="utf-8")
+    cfg_path.write_text(
+        cfg_path.read_text(encoding="utf-8")
+        + "\nobligation:\n  require_assessment: false\n  require_judge: false\n",
+        encoding="utf-8",
+    )
     _scaffold(tmp_path)
-
     with pytest.raises(SystemExit) as exc_info:
         cmd_check(ArgsCheck())
     assert exc_info.value.code == 0
