@@ -1,9 +1,16 @@
+from __future__ import annotations
+
+from spec_integrator.judge.base import BaseJudge
 from spec_integrator.judge.risk_assessor import (
+    KeywordRiskAssessment,
     RiskAssessmentReport,
     RiskAssessor,
-    SectionRiskAssessment,
 )
-from spec_integrator.judge.semantic_judge import JudgeResult, LLMJudge, SemanticJudge
+from spec_integrator.judge.semantic_judge import (
+    JudgeReport,
+    JudgeResult,
+    SemanticJudge,
+)
 from spec_integrator.judge.test_chain_judge import (
     TestChainJudge,
     TestChainReport,
@@ -12,11 +19,12 @@ from spec_integrator.judge.test_chain_judge import (
 )
 
 __all__ = [
+    "BaseJudge",
+    "JudgeReport",
     "JudgeResult",
-    "LLMJudge",
+    "KeywordRiskAssessment",
     "RiskAssessmentReport",
     "RiskAssessor",
-    "SectionRiskAssessment",
     "SemanticJudge",
     "TestChainJudge",
     "TestChainReport",

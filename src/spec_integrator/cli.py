@@ -1,38 +1,43 @@
+from __future__ import annotations
+
 import argparse
 import json
 import sys
 from dataclasses import asdict
-from datetime import datetime, timezone
 from pathlib import Path
 
-# Ensure UTF-8 output on Windows consoles
-if hasattr(sys.stdout, "reconfigure"):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
 from spec_integrator.config import Config
 from spec_integrator.db import DocAuditDB
 from spec_integrator.graph import DocGraphBuilder
-from spec_integrator.judge import RiskAssessor, SemanticJudge
+from spec_integrator.judge import RiskAssessor, SemanticJudge, TestChainJudge, TestChainReport
+from spec_integrator.models import ParsedDocument
 from spec_integrator.parser import MarkdownParser
 from spec_integrator.reporter import Reporter
-from spec_integrator.verifier.consistency import ConsistencyVerifier
-from spec_integrator.verifier.evidence import EvidenceVerifier
-from spec_integrator.verifier.fake_decision_detector import (
-    DecisionFinding,
-    FakeDecisionDetector,
+from spec_integrator.verifier import (
+    ConsistencyVerifier,
+    EvidenceVerifier,
+    FormalVerifier,
+    ObligationVerifier,
+    StaticVerifier,
+    WITVerifier,
 )
-from spec_integrator.verifier.formal import FormalVerifier
-from spec_integrator.verifier.obligation import ObligationVerifier
-from spec_integrator.verifier.static import StaticVerifier
-from spec_integrator.verifier.topology import TopologyVerifier
-from spec_integrator.verifier.wit import WITVerifier
+
+
+def _configure_utf8_stdio() -> None:
+    """Ensure UTF-8 output on Windows consoles."""
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+            sys.stderr.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
+
+def _log(msg: str) -> None:
+    print(msg, flush=True)
 
 
 def _rel_path(p: Path | str) -> str:
-    """Returns a clean relative path relative to current working directory if possible."""
     path_obj = Path(p).resolve()
     try:
         return str(path_obj.relative_to(Path.cwd()))
@@ -40,6 +45,73 @@ def _rel_path(p: Path | str) -> str:
         return str(path_obj)
 
 
+def _write_text(path: str, content: str) -> Path:
+    out_p = Path(path).resolve()
+    out_p.parent.mkdir(parents=True, exist_ok=True)
+    out_p.write_text(content, encoding="utf-8")
+    return out_p
+
+
+def _load_and_parse_all(config: Config, clean: bool = False):
+    docs_root = config.get_docs_dir()
+    if not docs_root.exists():
+        print(f"[Error] Docs directory not found: {docs_root}", flush=True)
+        sys.exit(1)
+
+    db_path = config.get_db_path()
+    db = DocAuditDB(db_path)
+    if clean:
+        db.clear_all()
+
+    parser = MarkdownParser(config)
+    all_md = sorted(docs_root.rglob("*.md"))
+    md_files = [f for f in all_md if not config.is_excluded(f, docs_root)]
+    _log(f"Scanning {len(md_files)} markdown files in {_rel_path(docs_root)}...")
+    documents: list[ParsedDocument] = []
+    for md_file in md_files:
+        doc = parser.parse_file(md_file, docs_root)
+        documents.append(doc)
+        db.insert_document(doc.file_path, doc.tier, doc.component, doc.content_hash)
+        for sec in doc.sections:
+            sec_hash = parser.config_compute_hash(sec.body_text)
+            db.insert_section(
+                sec.section_id,
+                doc.file_path,
+                sec.heading,
+                sec.level,
+                sec.line_start,
+                sec.line_end,
+                sec.body_text,
+                sec_hash,
+            )
+            for kw in sec.keywords:
+                is_def = (
+                    "defines" if config.is_keyword_definition(kw, doc.file_path) else "refers_to"
+                )
+                db.insert_keyword_reference(
+                    kw, doc.file_path, sec.section_id, is_def, sec.line_start
+                )
+
+        for link in doc.all_links:
+            db.insert_link(
+                link.source_file,
+                link.source_line,
+                link.target_path,
+                link.target_anchor,
+                1,
+            )
+
+    db.commit()
+    _log("Building DocGraph topology...")
+    graph_builder = DocGraphBuilder(config)
+    graph = graph_builder.build(documents, docs_root)
+    _log(f"DocGraph built: {len(graph.nodes)} nodes, {len(graph.edges)} edges.")
+    return documents, graph, db, docs_root
+
+
+# ---------------------------------------------------------------------------
+# Command Handlers
+# ---------------------------------------------------------------------------
 def cmd_init(args):
     target = Path("spec-integrator.yaml")
     if target.exists():
@@ -94,9 +166,6 @@ formal_verification:
   model_dir_name: "formal"
   tag: "{VERIFY_FORMAL}"
   timeout_seconds: 30
-  # A model that cannot fail is not a proof. Each model must expose
-  # build_model() and properties(); safety properties must declare the
-  # violating condition so vacuity can be ruled out.
   require_contract: true
   check_vacuity: true
   check_reachability: true
@@ -114,18 +183,14 @@ llm_judge:
       endpoint: "http://localhost:11434"
       model: "llama3"
 
-# Evidence Gate: a document may not assert a verification it cannot substantiate.
 evidence:
   enabled: true
-  metric_severity: "WARNING"   # raise to ERROR to forbid unsourced figures outright
+  metric_severity: "WARNING"
   ignore_artifact_refs: []
 
-# Obligation Gate: verification demanded by `assess` may not be silently skipped.
 obligation:
   enabled: true
-  risk_report: "reports/doc_risk_report.json"
-  judge_report: "reports/doc_judge_report.json"
-  require_assessment: true     # `check` without a prior `assess` is not a pass
+  require_assessment: true
   require_judge: true
   risk_threshold: 4
   stale_is_error: true
@@ -135,164 +200,75 @@ obligation:
     sys.exit(0)
 
 
-def _load_and_parse_all(config: Config, clean: bool = False):
-    docs_root = config.get_docs_dir()
-    if not docs_root.exists():
-        print(f"[Error] Docs directory not found: {docs_root}", flush=True)
-        sys.exit(1)
-
-    db_path = config.get_db_path()
-    if clean and db_path.exists():
-        db_path.unlink()
-
-    db = DocAuditDB(db_path)
-    if clean:
-        db.clear_all()
-
-    parser = MarkdownParser(config)
-    all_md = sorted(docs_root.rglob("*.md"))
-    md_files = [f for f in all_md if not config.is_excluded(f, docs_root)]
-    print(f"Scanning {len(md_files)} markdown files in {_rel_path(docs_root)}...", flush=True)
-    documents = []
-    for _idx, md_file in enumerate(md_files, 1):
-        doc = parser.parse_file(md_file, docs_root)
-        documents.append(doc)
-        # Store to DB
-        db.insert_document(doc.file_path, doc.tier, doc.component, doc.content_hash)
-        for sec in doc.sections:
-            sec_hash = parser.config_compute_hash(sec.body_text)
-            db.insert_section(
-                sec.section_id,
-                doc.file_path,
-                sec.heading,
-                sec.level,
-                sec.line_start,
-                sec.line_end,
-                sec.body_text,
-                sec_hash,
-            )
-            for kw in sec.keywords:
-                is_def = (
-                    "defines" if config.is_keyword_definition(kw, doc.file_path) else "refers_to"
-                )
-                db.insert_keyword_reference(
-                    kw, doc.file_path, sec.section_id, is_def, sec.line_start
-                )
-
-        for link in doc.all_links:
-            db.insert_link(
-                link.source_file,
-                link.source_line,
-                link.target_path,
-                link.target_anchor,
-                1,
-            )
-
-    db.commit()
-    print("Building DocGraph topology...", flush=True)
-    graph_builder = DocGraphBuilder(config)
-    graph = graph_builder.build(documents, docs_root)
-    print(
-        f"DocGraph built: {len(graph.nodes)} nodes, {len(graph.edges)} edges.",
-        flush=True,
-    )
-    return documents, graph, db, docs_root
-
-
 def cmd_check(args):
-    config_path = args.config
-    config = Config.load(config_path)
-    print(
-        "================================================================================",
-        flush=True,
-    )
-    print(
-        f" Spec-Integrator: Document Verification Pipeline [{config.project.name}]",
-        flush=True,
-    )
-    print(
-        "================================================================================",
-        flush=True,
-    )
+    config = Config.load(args.config)
+    _log("=" * 80)
+    _log(f" Spec-Integrator: Document Verification Pipeline [{config.project.name}]")
+    _log("=" * 80)
     documents, graph, db, docs_root = _load_and_parse_all(config, clean=args.clean)
-    print(
-        f"✔ Parsed {len(documents)} document(s), {len(graph.nodes)} graph node(s).",
-        flush=True,
-    )
+    _log(f"✔ Parsed {len(documents)} document(s), {len(graph.nodes)} graph node(s).")
+
     # 1. Static Verifications (Format, Traceability, Hierarchy)
-    print("Running Static Verifiers (Format, Traceability, Hierarchy)...", flush=True)
-    static_verifier = StaticVerifier(config)
-    issues = static_verifier.verify(documents, graph, docs_root)
-    print(f"Static verification finished. Found {len(issues)} issue(s).", flush=True)
+    _log("Running Static Verifiers (Format, Traceability, Hierarchy)...")
+    issues = StaticVerifier(config).verify(documents, graph, docs_root)
+    _log(f"Static verification finished. Found {len(issues)} issue(s).")
+
     # 2. Formal Verification (pyModelChecking Runner)
-    print("Running Formal Model Verifier...", flush=True)
-    formal_verifier = FormalVerifier(config)
-    formal_issues, formal_results = formal_verifier.verify_documents(documents, docs_root)
+    _log("Running Formal Model Verifier...")
+    formal_issues, formal_results = FormalVerifier(config).verify_documents(documents, docs_root)
     issues.extend(formal_issues)
-    print(
-        f"Formal verification finished: {len(formal_results)} model(s) evaluated.",
-        flush=True,
-    )
-    # Save formal model results to DB
+    _log(f"Formal verification finished: {len(formal_results)} model(s) evaluated.")
     for r in formal_results:
         db.insert_formal_model(r.component, r.model_file, "pymodelchecking", r.status, r.details)
 
     # 3. WIT Interface Verification
-    print("Running WIT Interface Verifier...", flush=True)
-    wit_verifier = WITVerifier(config)
-    wit_issues, wit_results = wit_verifier.verify_documents(documents, docs_root)
+    _log("Running WIT Interface Verifier...")
+    wit_issues, wit_results = WITVerifier(config).verify_documents(documents, docs_root)
     issues.extend(wit_issues)
-    print(f"WIT verification finished: {len(wit_results)} file(s) evaluated.", flush=True)
-    # 4. Evidence Verification (claims must be substantiated)
-    print(
-        "Running Evidence Verifier (unbacked claims & dangling artifacts)...",
-        flush=True,
+    _log(f"WIT verification finished: {len(wit_results)} file(s) evaluated.")
+    for r in wit_results:
+        db.insert_wit_file(
+            r.component,
+            r.wit_file,
+            r.status,
+            r.details,
+            r.defined_interfaces,
+            r.defined_worlds,
+        )
+
+    # 4. Evidence Verification
+    _log("Running Evidence Verifier (unbacked claims & dangling artifacts)...")
+    evidence_issues = EvidenceVerifier(config).verify(
+        documents, docs_root, formal_results, wit_results
     )
-    evidence_verifier = EvidenceVerifier(config)
-    evidence_issues = evidence_verifier.verify(documents, docs_root, formal_results, wit_results)
     issues.extend(evidence_issues)
-    print(
-        f"Evidence verification finished. Found {len(evidence_issues)} issue(s).",
-        flush=True,
-    )
-    # 5. Obligation Verification (risk assessment must not be ignored)
-    print("Running Obligation Verifier (skipped verification detection)...", flush=True)
-    obligation_verifier = ObligationVerifier(config)
-    obligation_issues, obligation_summary = obligation_verifier.verify(documents)
+    _log(f"Evidence verification finished. Found {len(evidence_issues)} issue(s).")
+
+    # 5. Obligation Verification
+    _log("Running Obligation Verifier (skipped verification detection)...")
+    obligation_issues, obligation_summary = ObligationVerifier(config).verify(documents, graph, db)
     issues.extend(obligation_issues)
-    print(
+    _log(
         f"Obligation verification finished: "
-        f"{obligation_summary.discharged}/{obligation_summary.demanded} obligation(s) discharged.",
-        flush=True,
+        f"{obligation_summary.discharged}/{obligation_summary.demanded} obligation(s) discharged."
     )
-    # 6. Consistency Verification (edits must reach every restatement of a fact)
-    print(
-        "Running Consistency Verifier (stale values, symbol drift, co-change)...",
-        flush=True,
+
+    # 6. Consistency Verification
+    _log("Running Consistency Verifier (stale values, symbol drift, co-change)...")
+    consistency_issues, consistency_summary = ConsistencyVerifier(config).verify(
+        documents, docs_root, db=db
     )
-    consistency_verifier = ConsistencyVerifier(config)
-    consistency_issues, consistency_summary = consistency_verifier.verify(documents, docs_root)
     issues.extend(consistency_issues)
-    print(
-        f"Consistency verification finished. Found {len(consistency_issues)} issue(s).",
-        flush=True,
-    )
-    # 7. Topology Verification (circular wait & deadlock freedom in messaging graphs)
-    print(
-        "Running Topology Verifier (static acyclic channel & messaging topology)...",
-        flush=True,
-    )
-    topology_verifier = TopologyVerifier(config)
-    topology_issues, topology_results = topology_verifier.verify_documents(documents, docs_root)
-    issues.extend(topology_issues)
-    print(
-        f"Topology verification finished: {len(topology_results)} topology graph(s) evaluated.",
-        flush=True,
-    )
-    # 8. Generate Report
-    print("Generating Markdown Report & Graph JSON...", flush=True)
-    report_path = Path(args.report).resolve()
+    _log(f"Consistency verification finished. Found {len(consistency_issues)} issue(s).")
+
+    # Persist all verification issues
+    db.replace_verification_issues(issues)
+    db.commit()
+
+    # 7. Generate Report
+    _log("Generating Markdown Report...")
     reporter = Reporter(config)
+    report_path = Path(args.report).resolve()
     reporter.generate_markdown_report(
         documents,
         graph,
@@ -302,44 +278,43 @@ def cmd_check(args):
         report_path,
         obligation_summary=obligation_summary,
         consistency_summary=consistency_summary,
-        topology_results=topology_results,
+        db=db,
     )
-    print(f"✔ Markdown Report generated: {_rel_path(report_path)}", flush=True)
-    if args.graph_json:
-        graph_json_path = Path(args.graph_json).resolve()
-        reporter.export_graph_json(graph, graph_json_path)
-        print(f"✔ Graph JSON exported: {_rel_path(graph_json_path)}", flush=True)
+    _log(f"✔ Markdown Report generated: {_rel_path(report_path)}")
 
     db.close()
+
     # Evaluation
     errors = [i for i in issues if i.severity == "ERROR"]
     warnings = [i for i in issues if i.severity == "WARNING"]
-    print("--------------------------------------------------------------------------------")
+    print("-" * 80)
     print(f" Verification Summary: {len(errors)} Error(s), {len(warnings)} Warning(s)")
-    print("--------------------------------------------------------------------------------")
+    print("-" * 80)
     if errors:
         print("❌ QUALITY GATES FAILED:")
         for err in errors:
             print(f"  [{err.gate}] {err.file_path}:{err.line} - {err.message} ({err.rule_code})")
         sys.exit(1)
-    else:
-        print(
-            f"✅ ALL QUALITY GATES PASSED "
-            f"(verification obligations discharged: "
-            f"{obligation_summary.discharged}/{obligation_summary.demanded})."
-        )
-        sys.exit(0)
+
+    print(
+        f"✅ ALL QUALITY GATES PASSED "
+        f"(verification obligations discharged: "
+        f"{obligation_summary.discharged}/{obligation_summary.demanded})."
+    )
+    sys.exit(0)
 
 
 def cmd_sync(args):
-    """Records the current specification state as the consistency baseline."""
+    """Records the current specification state as the consistency baseline in DB."""
     config = Config.load(args.config)
-    documents, graph, db, docs_root = _load_and_parse_all(config)
+    documents, _graph, db, _docs_root = _load_and_parse_all(config)
     verifier = ConsistencyVerifier(config)
     baseline = verifier.build_baseline(documents)
     lock_path = verifier.write_baseline(documents)
+    db.replace_consistency_baseline(baseline)
+    db.commit()
     db.close()
-    print(f"✔ Consistency baseline written: {_rel_path(lock_path)}")
+    print(f"✔ Consistency baseline recorded in DB and {_rel_path(lock_path)}")
     print(
         f"  {len(baseline['sections'])} section(s), "
         f"{len(baseline['definitions'])} keyword definition(s), "
@@ -350,21 +325,16 @@ def cmd_sync(args):
 
 
 def cmd_graph(args):
-    config_path = args.config
-    config = Config.load(config_path)
-    documents, graph, db, docs_root = _load_and_parse_all(config)
+    config = Config.load(args.config)
+    _documents, graph, db, _docs_root = _load_and_parse_all(config)
     fmt = args.format.lower()
-    if fmt == "mermaid":
-        content = graph.to_mermaid()
-    elif fmt == "json":
+    if fmt == "json":
         content = json.dumps(graph.to_dict(), indent=2, ensure_ascii=False)
     else:
         content = graph.to_mermaid()
 
     if args.out:
-        out_p = Path(args.out).resolve()
-        out_p.parent.mkdir(parents=True, exist_ok=True)
-        out_p.write_text(content, encoding="utf-8")
+        out_p = _write_text(args.out, content)
         print(f"✔ Graph saved to {_rel_path(out_p)}")
     else:
         print(content)
@@ -373,41 +343,39 @@ def cmd_graph(args):
     sys.exit(0)
 
 
+def _resolve_changed_sections(config: Config, documents, args, db) -> set[str]:
+    cv = ConsistencyVerifier(config)
+    lock_path = (
+        Path(args.baseline) if args.baseline else config.resolve_path(config.consistency.lockfile)
+    )
+    baseline = cv.load_lock(lock_path)
+    if baseline is None:
+        print(
+            f"❌ --changed-only requires a consistency baseline. "
+            f"Run 'spec-integrator sync' first to create {lock_path}, "
+            f"or pass --baseline pointing at one."
+        )
+        db.close()
+        sys.exit(2)
+
+    old_secs = baseline.get("sections", {})
+    new_secs = cv.build_baseline(documents)["sections"]
+    changed_sections = {sid for sid, h in new_secs.items() if old_secs.get(sid) != h}
+    print(f"  ({len(changed_sections)} section(s) changed vs. {lock_path})")
+    return changed_sections
+
+
 def cmd_judge(args):
-    config_path = args.config
-    config = Config.load(config_path)
-    documents, graph, db, docs_root = _load_and_parse_all(config)
+    config = Config.load(args.config)
+    documents, graph, db, _docs_root = _load_and_parse_all(config)
     subgraphs = graph.extract_item_subgraphs()
     judge = SemanticJudge(config)
-    changed_sections = None
-    if args.changed_only:
-        cv = ConsistencyVerifier(config)
-        if args.baseline:
-            lock_path = Path(args.baseline)
-            baseline_label = str(lock_path)
-        else:
-            lock_path = config.resolve_path(config.consistency.lockfile)
-            baseline_label = str(lock_path)
-        baseline = cv._load_lock(lock_path)
-        if baseline is None:
-            print(
-                f"❌ --changed-only requires a consistency baseline. "
-                f"Run 'spec-integrator sync' first to create {lock_path}, "
-                f"or pass --baseline pointing at one."
-            )
-            db.close()
-            sys.exit(2)
-        old_secs = baseline.get("sections", {})
-        current = cv.build_baseline(documents)
-        new_secs = current["sections"]
-        # A section with no prior hash is new; either way it differs from
-        # whatever the baseline recorded (or didn't).
-        changed_sections = {sid for sid, h in new_secs.items() if old_secs.get(sid) != h}
-        print(f"  ({len(changed_sections)} section(s) changed vs. {baseline_label})")
-
-    print(
-        f"Running LLM as a Judge on candidate subgraphs (backend: {args.backend or config.llm_judge.default_backend})..."
+    changed_sections = (
+        _resolve_changed_sections(config, documents, args, db) if args.changed_only else None
     )
+
+    used_backend = args.backend or config.llm_judge.default_backend
+    print(f"Running LLM as a Judge on candidate subgraphs (backend: {used_backend})...")
     report = judge.judge_subgraphs(
         subgraphs,
         documents,
@@ -418,231 +386,44 @@ def cmd_judge(args):
         min_references=args.min_references,
         changed_sections=changed_sections,
     )
-    db.close()
-    if args.out:
-        out_p = Path(args.out).resolve()
-        out_p.parent.mkdir(parents=True, exist_ok=True)
-        with open(out_p, "w", encoding="utf-8") as f:
-            # Record the content hash of every document this verdict was formed
-            # against. Without it a committed judge report keeps reading as a
-            # current audit no matter how far the specification moves on, and a
-            # stale opinion is indistinguishable from a fresh pass.
-            json.dump(
-                {
-                    "results": [asdict(r) for r in report.results],
-                    "doc_hashes": {d.file_path: d.content_hash for d in documents},
-                },
-                f,
-                indent=2,
-                ensure_ascii=False,
-            )
-        print(f"✔ Judge report JSON saved to {_rel_path(out_p)}")
+    db.replace_judge_results([asdict(r) for r in report.results], used_backend)
+    db.set_assessed_doc_hashes("judge", {d.file_path: d.content_hash for d in documents})
+    db.commit()
 
-    if args.report:
-        rep_p = Path(args.report).resolve()
-        rep_p.parent.mkdir(parents=True, exist_ok=True)
-        rep_p.write_text(report.to_markdown(), encoding="utf-8")
-        print(f"✔ Judge Markdown report saved to {_rel_path(rep_p)}")
-
-    has_fail = report.fail_count > 0
     print(
-        f"Judge finished. {report.total_evaluated} evaluated. PASS: {report.pass_count}, WARN: {report.warn_count}, FAIL: {report.fail_count}"
+        f"Judge finished. {report.total_evaluated} evaluated. "
+        f"PASS: {report.pass_count}, WARN: {report.warn_count}, FAIL: {report.fail_count}"
     )
-    sys.exit(1 if has_fail else 0)
 
-
-def cmd_assess(args):
-    config_path = args.config
-    config = Config.load(config_path)
-    documents, graph, db, docs_root = _load_and_parse_all(config)
-    target_tiers = [t.strip() for t in args.tier.split(",")] if args.tier else None
-    assessor = RiskAssessor(config)
-    print(
-        f"Running Content Complexity & Risk Assessment (backend: {args.backend or config.llm_judge.default_backend})..."
-    )
-    report = assessor.assess_documents(
+    # Whole-document self-consistency audit
+    print(f"Running LLM as a Judge on whole documents (backend: {used_backend})...")
+    doc_report = judge.judge_documents(
         documents,
         backend=args.backend,
         model=args.model,
-        max_sections=args.max_sections,
+        max_documents=args.max_documents,
         exhaustive=args.exhaustive,
-        min_length=args.min_length,
-        include_meta=args.include_meta or args.exhaustive,
-        include_reqs=args.include_reqs or args.exhaustive,
-        target_tiers=target_tiers,
     )
-    db.close()
-    # Record which document revision each obligation was derived from, so that
-    # `check` can detect an assessment that no longer matches the specification.
-    doc_hashes = {d.file_path: d.content_hash for d in documents}
-    if args.out:
-        out_p = Path(args.out).resolve()
-        out_p.parent.mkdir(parents=True, exist_ok=True)
-        with open(out_p, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
-                    # Which engine produced these obligations. A mock backend derives the
-                    # verdict from the document itself, so obligations it generates cannot
-                    # be evidence about the document.
-                    "backend": args.backend or config.llm_judge.default_backend,
-                    "total_evaluated": report.total_evaluated,
-                    "formal_candidates_count": report.formal_candidates_count,
-                    "llm_candidates_count": report.llm_candidates_count,
-                    "sections_scanned": sum(len(d.sections) for d in documents),
-                    "max_sections": args.max_sections,
-                    "doc_hashes": doc_hashes,
-                    "assessments": [asdict(a) for a in report.assessments],
-                },
-                f,
-                indent=2,
-                ensure_ascii=False,
-            )
-        print(f"✔ Risk assessment JSON saved to {_rel_path(out_p)}")
-
-    if args.report:
-        rep_p = Path(args.report).resolve()
-        rep_p.parent.mkdir(parents=True, exist_ok=True)
-        rep_p.write_text(report.to_markdown(project_name=config.project.name), encoding="utf-8")
-        print(f"✔ Risk assessment Markdown report saved to {_rel_path(rep_p)}")
-
-    print(f"\nAssessment finished. Evaluated {report.total_evaluated} sections.")
-    print(f"  - Formal verification (pyModelChecking) candidates: {report.formal_candidates_count}")
-    print(f"  - LLM Judge candidates: {report.llm_candidates_count}")
-    # An assessment that only covered part of the corpus silently under-reports
-    # the obligations, which is exactly how required verification gets skipped.
-    total_sections = sum(len(d.sections) for d in documents)
-    if args.strict and report.total_evaluated < total_sections:
-        print(
-            f"\n❌ Partial assessment: {report.total_evaluated}/{total_sections} sections evaluated."
-        )
-        print(
-            "   Obligations for the unevaluated sections are unknown, so the result is not a "
-            "clean bill of health. Raise --max-sections, or pass --no-strict to accept it."
-        )
-        sys.exit(1)
-
-    sys.exit(0)
-
-
-def cmd_detect_fake_decision(args):
-    """Advisory report, not a gate: flags architectural decisions that look like
-    they were decided unilaterally to paper over an inconsistency or introduced
-    without trade-off evaluation (isolated / touched by diff / single-option or strawman /
-    unlabeled decisions / LLM semantic detection).
-    See FakeDecisionDetector's docstring."""
-    config_path = args.config
-    config = Config.load(config_path)
-    documents, graph, db, docs_root = _load_and_parse_all(config)
-    db.close()
+    db.replace_document_judge_results([asdict(r) for r in doc_report.results], used_backend)
+    db.set_assessed_doc_hashes("document_judge", {d.file_path: d.content_hash for d in documents})
+    db.commit()
     print(
-        "Scanning specification documents for fake, unilateral, or unlabeled decision patterns...",
-        flush=True,
+        f"Document judge finished. {doc_report.total_evaluated} evaluated. "
+        f"PASS: {doc_report.pass_count}, WARN: {doc_report.warn_count}, FAIL: {doc_report.fail_count}"
     )
-    detector = FakeDecisionDetector(config)
-    findings = detector.verify(documents, graph)
-    if getattr(args, "llm", False):
-        backend = getattr(args, "backend", "sakura")
-        diff_only = getattr(args, "diff_only", False)
-        max_sections = getattr(args, "max_sections", 15)
-        print(
-            f"Running semantic LLM Fake-Decision audit (backend: {backend}, diff_only: {diff_only}, max_sections: {max_sections})...",
-            flush=True,
-        )
-        llm_findings = detector.verify_with_llm(
-            documents,
-            backend_name=backend,
-            diff_only=diff_only,
-            max_sections=max_sections,
-        )
-        findings.extend(llm_findings)
 
-    findings.sort(key=lambda f: (-len(f.reasons), f.file_path, f.line))
-    total_blocks = detector.count_blocks(documents)
-    print(
-        f"Fake-decision scan finished: {len(findings)} flagged decision(s) (scanned {total_blocks} local decision blocks)."
+    # 3-tier traceability chain audit
+    tc_report = _run_test_chain_audit(config, db, args)
+
+    db.close()
+    sys.exit(
+        1 if (report.fail_count > 0 or doc_report.fail_count > 0 or tc_report.fail_count > 0) else 0
     )
-    if args.out:
-        out_p = Path(args.out).resolve()
-        out_p.parent.mkdir(parents=True, exist_ok=True)
-        with open(out_p, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
-                    "flagged_count": len(findings),
-                    "findings": [asdict(fnd) for fnd in findings],
-                },
-                f,
-                indent=2,
-                ensure_ascii=False,
-            )
-        print(f"✔ Fake-decision scan JSON saved to {_rel_path(out_p)}")
-
-    if args.report:
-        rep_p = Path(args.report).resolve()
-        rep_p.parent.mkdir(parents=True, exist_ok=True)
-        rep_p.write_text(_decision_findings_to_markdown(findings), encoding="utf-8")
-        print(f"✔ Fake-decision scan Markdown report saved to {rep_p}")
-
-    for fnd in findings:
-        kind_tag = f"[{fnd.kind}]"
-        print(f"  [{fnd.file_path}:{fnd.line}] {kind_tag} {_decision_label(fnd)}")
-        for r in fnd.reasons:
-            print(f"    - {r}")
-
-    # Advisory: never fails the build. A human reviews the report (see
-    # `tools/README.md`); auto-failing on a heuristic pattern match would just
-    # move the rubber stamp from the ADR author to this script.
-    sys.exit(0)
 
 
-def _decision_label(fnd: DecisionFinding) -> str:
-    """`{ADR_Foo}` for a real keyword tag; a bare `ADR-SCHED-001`-style ID
-    or section label otherwise."""
-    return f"{{{fnd.keyword}}}" if fnd.is_bracket_keyword else fnd.keyword
-
-
-def _decision_findings_to_markdown(findings: list[DecisionFinding]) -> str:
-    lines = [
-        "# でっち上げ決定検知レポート (Fake Decision Detection)",
-        "",
-        "このレポートはゲートではなく、コンポーネント設計書内で勝手に定義された独断仕様・アドホック決定を人間がレビューするためのアドバイザリです。",
-        "",
-        f"- **フラグされた決定事項数**: {len(findings)}",
-        "",
-        "---",
-        "",
-    ]
-    if not findings:
-        lines.append("フラグされた決定事項（Fake Decision）はありません。")
-        return "\n".join(lines) + "\n"
-    for fnd in findings:
-        kind_str = f" ({fnd.kind})"
-        lines.append(f"## `{_decision_label(fnd)}`{kind_str} — `{fnd.file_path}:{fnd.line}`")
-        lines.append("")
-        lines.append(f"- **分類**: `{fnd.kind}`")
-        lines.append(f"- **確信度**: `{fnd.confidence}`")
-        if fnd.option_count:
-            lines.append(f"- **選択肢エントリ数**: {fnd.option_count}")
-        if fnd.referenced_file_count:
-            lines.append(f"- **他コンポーネントからの参照ファイル数**: {fnd.referenced_file_count}")
-        lines.append(f"- **未コミット差分内**: {'はい' if fnd.in_working_diff else 'いいえ'}")
-        if fnd.snippet:
-            lines.append(f"- **スニペット**: `{fnd.snippet[:120]}...`")
-        lines.append("- **検知理由**:")
-        for r in fnd.reasons:
-            lines.append(f"  - {r}")
-        lines.append("")
-    return "\n".join(lines) + "\n"
-
-
-def cmd_judge_test_chain(args):
-    cfg_path = Path(args.config)
-    config = Config.load(cfg_path)
-    from spec_integrator.judge import TestChainJudge
-
-    judge = TestChainJudge(config)
-    all_targets = judge.auto_discover_targets()
+def _run_test_chain_audit(config: Config, db: DocAuditDB, args) -> TestChainReport:
+    test_judge = TestChainJudge(config)
+    all_targets = test_judge.auto_discover_targets()
     if args.component:
         targets = [
             t
@@ -651,322 +432,206 @@ def cmd_judge_test_chain(args):
         ]
         if not targets:
             print(
-                f"[Error] No matching component found for '{args.component}'. Available: {', '.join(t.component_name for t in all_targets)}"
+                f"[Error] No matching component found for '{args.component}'. "
+                f"Available: {', '.join(t.component_name for t in all_targets)}"
             )
+            db.close()
             sys.exit(1)
     else:
         targets = all_targets
 
-    max_targets = 0 if args.all else args.max_targets
+    max_targets = 0 if args.exhaustive else args.max_targets
     backend = args.backend or config.llm_judge.default_backend
-    report = judge.judge_targets(
+    report = test_judge.judge_targets(
         targets, backend=backend, model=args.model, max_targets=max_targets
     )
-    # Save JSON report
-    if args.out:
-        out_p = Path(args.out).resolve()
-        out_p.parent.mkdir(parents=True, exist_ok=True)
-        data = {
-            "total_evaluated": report.total_evaluated,
-            "pass_count": report.pass_count,
-            "warn_count": report.warn_count,
-            "fail_count": report.fail_count,
-            "results": [asdict(r) for r in report.results],
-        }
-        out_p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        print(f"✔ Test chain judge JSON report saved to {_rel_path(out_p)}")
 
-    # Save Markdown report
-    proj_name = (
-        config.project.name
-        if hasattr(config.project, "name") and config.project.name
-        else "System Specification"
+    db.replace_test_chain_results([asdict(r) for r in report.results], backend)
+    db.commit()
+
+    print("\n" + report.to_markdown(project_name=config.project.name or "System Specification"))
+    print("Verdicts recorded in the cache DB; see 'check' report § Test Chain Verdicts.")
+    return report
+
+
+def cmd_assess(args):
+    config = Config.load(args.config)
+    documents, graph, db, _docs_root = _load_and_parse_all(config)
+    subgraphs = graph.extract_item_subgraphs()
+    assessor = RiskAssessor(config)
+    used_backend = args.backend or config.llm_judge.default_backend
+    print(f"Running Content Complexity & Risk Assessment (backend: {used_backend})...")
+    report = assessor.assess_subgraphs(
+        subgraphs,
+        documents,
+        backend=args.backend,
+        model=args.model,
+        max_keywords=args.max_keywords,
+        exhaustive=args.exhaustive,
+        min_references=args.min_references,
     )
-    md_content = report.to_markdown(project_name=proj_name)
-    if args.report:
-        rep_p = Path(args.report).resolve()
-        rep_p.parent.mkdir(parents=True, exist_ok=True)
-        rep_p.write_text(md_content, encoding="utf-8")
-        print(f"✔ Test chain judge Markdown report saved to {_rel_path(rep_p)}")
 
-    print("\n" + md_content)
-    if report.fail_count > 0:
-        sys.exit(1)
+    db.replace_risk_assessments([asdict(a) for a in report.assessments], used_backend)
+    db.set_assessed_doc_hashes("risk_assessment", {d.file_path: d.content_hash for d in documents})
+    db.commit()
+    db.close()
+
+    print(f"\nAssessment finished. Evaluated {report.total_evaluated} keyword(s).")
+    print(f"  - High risk (>= {config.obligation.risk_threshold}/5): {report.high_risk_count}")
+    print("Scores recorded in the cache DB; see 'check' report § Risk Assessment Detail.")
     sys.exit(0)
 
 
+# ---------------------------------------------------------------------------
+# CLI Argument Parsers
+# ---------------------------------------------------------------------------
+def _add_config_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "-c", "--config", default="spec-integrator.yaml", help="Path to configuration file"
+    )
+
+
+def _add_init_subparser(subparsers) -> None:
+    p = subparsers.add_parser("init", help="Initialize spec-integrator.yaml configuration")
+    p.set_defaults(func=cmd_init)
+
+
+def _add_check_subparser(subparsers) -> None:
+    p = subparsers.add_parser("check", help="Run static & formal document verification pipeline")
+    _add_config_arg(p)
+    p.add_argument("-r", "--report", default="spec_report.md", help="Markdown report output path")
+    p.add_argument("--clean", action="store_true", help="Clear cache DB and run clean audit")
+    p.set_defaults(func=cmd_check)
+
+
+def _add_sync_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "sync", help="Record the current spec state as the consistency baseline (lockfile)"
+    )
+    _add_config_arg(p)
+    p.set_defaults(func=cmd_sync)
+
+
+def _add_graph_subparser(subparsers) -> None:
+    p = subparsers.add_parser("graph", help="Extract and visualize DocGraph")
+    _add_config_arg(p)
+    p.add_argument(
+        "-f", "--format", choices=["mermaid", "json"], default="mermaid", help="Output format"
+    )
+    p.add_argument("-o", "--out", help="Output file path")
+    p.set_defaults(func=cmd_graph)
+
+
+def _add_judge_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "llm-judge",
+        help="Run LLM as a Judge on semantic subgraphs, whole documents, and 3-tier test chain",
+    )
+    _add_config_arg(p)
+    p.add_argument(
+        "--backend", choices=["openrouter", "sakura", "ollama", "mock"], help="LLM backend"
+    )
+    p.add_argument("--model", help="LLM model name override")
+    p.add_argument(
+        "--component",
+        help="Limit 3-tier chain audit to one component (e.g. 'jit_compiler').",
+    )
+    p.add_argument(
+        "--max-subgraphs",
+        type=int,
+        default=10,
+        help="Max requirement subgraphs to evaluate (0 for unlimited).",
+    )
+    p.add_argument(
+        "--max-documents",
+        type=int,
+        default=15,
+        help="Max whole documents to evaluate (0 for unlimited).",
+    )
+    p.add_argument(
+        "--max-targets",
+        type=int,
+        default=10,
+        help="Max components in 3-tier test chain audit (0 for unlimited).",
+    )
+    p.add_argument(
+        "-a",
+        "--exhaustive",
+        action="store_true",
+        help="Exhaustive audit across all subgraphs, documents, and test chains.",
+    )
+    p.add_argument(
+        "--min-references",
+        type=int,
+        default=1,
+        help="Minimum referencing sections required to include a subgraph (default: 1).",
+    )
+    p.add_argument(
+        "--changed-only",
+        action="store_true",
+        help="Only audit subgraphs touching a section that changed since last sync.",
+    )
+    p.add_argument(
+        "--baseline",
+        metavar="LOCKFILE",
+        help="Lockfile to diff against for --changed-only.",
+    )
+    p.set_defaults(func=cmd_judge)
+
+
+def _add_assess_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "llm-assess",
+        help="Score requirement/design keywords complexity and design risk via LLM",
+    )
+    _add_config_arg(p)
+    p.add_argument(
+        "--backend",
+        choices=["openrouter", "sakura", "ollama", "mock"],
+        help="Risk assessor backend",
+    )
+    p.add_argument("--model", help="LLM model name override")
+    p.add_argument(
+        "--max-keywords",
+        type=int,
+        default=15,
+        help="Max keywords to assess (0 for unlimited).",
+    )
+    p.add_argument(
+        "-a",
+        "--exhaustive",
+        action="store_true",
+        help="Exhaustive assessment across all keywords.",
+    )
+    p.add_argument(
+        "--min-references",
+        type=int,
+        default=0,
+        help="Minimum referencing sections required to include a keyword (default: 0).",
+    )
+    p.set_defaults(func=cmd_assess)
+
+
+_SUBPARSER_BUILDERS = (
+    _add_init_subparser,
+    _add_check_subparser,
+    _add_sync_subparser,
+    _add_graph_subparser,
+    _add_judge_subparser,
+    _add_assess_subparser,
+)
+
+
 def main():
+    _configure_utf8_stdio()
     parser = argparse.ArgumentParser(
         prog="spec-integrator",
         description="Universal Document Quality, Traceability, Formal Verification & LLM Judge Tool",
     )
     subparsers = parser.add_subparsers(dest="subcommand", help="Available subcommands")
-    # init
-    p_init = subparsers.add_parser("init", help="Initialize spec-integrator.yaml configuration")
-    p_init.set_defaults(func=cmd_init)
-    # check
-    p_check = subparsers.add_parser(
-        "check", help="Run static & formal document verification pipeline"
-    )
-    p_check.add_argument(
-        "-c",
-        "--config",
-        default="spec-integrator.yaml",
-        help="Path to configuration file",
-    )
-    p_check.add_argument(
-        "-r", "--report", default="spec_report.md", help="Markdown report output path"
-    )
-    p_check.add_argument("-g", "--graph-json", default="graph.json", help="Graph JSON output path")
-    p_check.add_argument("--clean", action="store_true", help="Clear cache DB and run clean audit")
-    p_check.set_defaults(func=cmd_check)
-    # sync
-    p_sync = subparsers.add_parser(
-        "sync",
-        help="Record the current spec state as the consistency baseline (lockfile)",
-    )
-    p_sync.add_argument(
-        "-c",
-        "--config",
-        default="spec-integrator.yaml",
-        help="Path to configuration file",
-    )
-    p_sync.set_defaults(func=cmd_sync)
-    # graph
-    p_graph = subparsers.add_parser("graph", help="Extract and visualize DocGraph")
-    p_graph.add_argument(
-        "-c",
-        "--config",
-        default="spec-integrator.yaml",
-        help="Path to configuration file",
-    )
-    p_graph.add_argument(
-        "-f",
-        "--format",
-        choices=["mermaid", "json"],
-        default="mermaid",
-        help="Output format",
-    )
-    p_graph.add_argument("-o", "--out", help="Output file path")
-    p_graph.set_defaults(func=cmd_graph)
-    # judge
-    p_judge = subparsers.add_parser("judge", help="Run LLM as a Judge on semantic subgraphs")
-    p_judge.add_argument(
-        "-c",
-        "--config",
-        default="spec-integrator.yaml",
-        help="Path to configuration file",
-    )
-    p_judge.add_argument(
-        "--backend",
-        choices=["openrouter", "sakura", "ollama", "mock"],
-        help="LLM backend",
-    )
-    p_judge.add_argument("--model", help="LLM model name override")
-    p_judge.add_argument(
-        "--max-subgraphs",
-        type=int,
-        default=10,
-        help="Max subgraphs to evaluate (0 for unlimited)",
-    )
-    p_judge.add_argument(
-        "-a",
-        "--all",
-        "--exhaustive",
-        dest="exhaustive",
-        action="store_true",
-        help="Exhaustive audit: check all requirement subgraphs regardless of {VERIFY_LLM} tag",
-    )
-    p_judge.add_argument(
-        "--min-references",
-        type=int,
-        default=1,
-        help="Minimum referencing sections required to include a subgraph (default: 1, 0 for all)",
-    )
-    p_judge.add_argument(
-        "--changed-only",
-        action="store_true",
-        help="Only audit subgraphs touching a section that changed since the last "
-        "'spec-integrator sync' (per spec-consistency.lock). Cheap enough to run "
-        "on every edit; catches drift regardless of which side of a definition/"
-        "reference pair moved, and regardless of {VERIFY_LLM} tagging.",
-    )
-    p_judge.add_argument(
-        "--baseline",
-        metavar="LOCKFILE",
-        help="Lockfile to diff against for --changed-only, instead of the live "
-        "spec-consistency.lock. In CI the working-tree lockfile has already "
-        "absorbed this PR's own edits (authors run 'sync' before committing), so "
-        "comparing against it finds nothing changed. Pass a checkout of the base "
-        "branch's lockfile here instead, e.g. "
-        "'git show origin/main:spec-consistency.lock > /tmp/base.lock'.",
-    )
-    p_judge.add_argument("-o", "--out", default="judge_report.json", help="Output JSON path")
-    p_judge.add_argument(
-        "-r",
-        "--report",
-        default="reports/doc_judge_report.md",
-        help="Markdown report output path",
-    )
-    p_judge.set_defaults(func=cmd_judge)
-    # assess
-    p_assess = subparsers.add_parser(
-        "assess",
-        help="Assess section complexity, design risk & formal candidates via LLM",
-    )
-    p_assess.add_argument(
-        "-c",
-        "--config",
-        default="spec-integrator.yaml",
-        help="Path to configuration file",
-    )
-    p_assess.add_argument(
-        "--backend",
-        choices=["openrouter", "sakura", "ollama", "heuristic", "static_rule", "mock"],
-        help="Risk assessor backend",
-    )
-    p_assess.add_argument("--model", help="LLM model name override")
-    p_assess.add_argument(
-        "--max-sections",
-        type=int,
-        default=15,
-        help="Max sections to assess (0 for unlimited)",
-    )
-    p_assess.add_argument(
-        "-a",
-        "--all",
-        "--exhaustive",
-        dest="exhaustive",
-        action="store_true",
-        help="Exhaustive assessment: evaluate all sections across all tiers including Requirements and Meta",
-    )
-    p_assess.add_argument(
-        "--min-length",
-        type=int,
-        default=50,
-        help="Minimum body character length to evaluate (default: 50)",
-    )
-    p_assess.add_argument(
-        "--include-meta",
-        action="store_true",
-        help="Include Architecture and Meta tier in candidate selection",
-    )
-    p_assess.add_argument(
-        "--include-reqs",
-        action="store_true",
-        help="Include Tier 0 (Requirements) in candidate selection",
-    )
-    p_assess.add_argument("--tier", help="Comma-separated target tiers to assess (e.g. '0,1,2')")
-    p_assess.add_argument("-o", "--out", default="doc_risk_report.json", help="Output JSON path")
-    p_assess.add_argument(
-        "-r",
-        "--report",
-        default="doc_risk_report.md",
-        help="Output Markdown report path",
-    )
-    p_assess.add_argument(
-        "--strict",
-        dest="strict",
-        action="store_true",
-        default=True,
-        help="Fail when the assessment does not cover every section (default)",
-    )
-    p_assess.add_argument(
-        "--no-strict",
-        dest="strict",
-        action="store_false",
-        help="Allow a partial assessment to exit successfully",
-    )
-    p_assess.set_defaults(func=cmd_assess)
-    # detect-fake-decision
-    p_fake = subparsers.add_parser(
-        "detect-fake-decision",
-        help="Advisory (non-gating) scan for fake, fabricated, unilateral, or ad-hoc decisions in component prose "
-        "(prose decisions / isolated local ADRs / touched diffs / LLM semantic check)",
-    )
-    p_fake.add_argument(
-        "-c",
-        "--config",
-        default="spec-integrator.yaml",
-        help="Path to configuration file",
-    )
-    p_fake.add_argument(
-        "-o",
-        "--out",
-        default="reports/fake_decision_report.json",
-        help="Output JSON path",
-    )
-    p_fake.add_argument(
-        "-r",
-        "--report",
-        default="reports/fake_decision_report.md",
-        help="Output Markdown report path",
-    )
-    p_fake.add_argument(
-        "--llm",
-        action="store_true",
-        help="Perform deep semantic audit using LLM Judge backend",
-    )
-    p_fake.add_argument("--backend", default="sakura", help="LLM backend to use (default: sakura)")
-    p_fake.add_argument(
-        "--diff-only",
-        action="store_true",
-        help="Only audit sections touched by the working git diff",
-    )
-    p_fake.add_argument(
-        "--max-sections",
-        type=int,
-        default=15,
-        help="Maximum number of candidate sections to audit with LLM (default: 15, 0 for all)",
-    )
-    p_fake.set_defaults(func=cmd_detect_fake_decision)
-    # judge-test-chain
-    p_chain = subparsers.add_parser(
-        "judge-test-chain",
-        help="Run LLM as a Judge on 3-tier traceability chain: Design Spec -> Test Spec -> Test Code",
-    )
-    p_chain.add_argument(
-        "-c",
-        "--config",
-        default="spec-integrator.yaml",
-        help="Path to configuration file",
-    )
-    p_chain.add_argument(
-        "--component",
-        help="Specific component name to audit (e.g. 'jit_compiler', 'runtime_interpreter')",
-    )
-    p_chain.add_argument(
-        "--backend",
-        choices=["openrouter", "sakura", "ollama", "mock"],
-        help="LLM backend",
-    )
-    p_chain.add_argument("--model", help="LLM model name override")
-    p_chain.add_argument(
-        "--max-targets",
-        type=int,
-        default=10,
-        help="Max components to evaluate (default: 10, 0 for unlimited)",
-    )
-    p_chain.add_argument(
-        "-a",
-        "--all",
-        dest="all",
-        action="store_true",
-        help="Audit all discoverable components",
-    )
-    p_chain.add_argument(
-        "-o",
-        "--out",
-        default="reports/test_chain_judge_report.json",
-        help="Output JSON report path",
-    )
-    p_chain.add_argument(
-        "-r",
-        "--report",
-        default="reports/test_chain_judge_report.md",
-        help="Output Markdown report path",
-    )
-    p_chain.set_defaults(func=cmd_judge_test_chain)
+    for build_subparser in _SUBPARSER_BUILDERS:
+        build_subparser(subparsers)
+
     args = parser.parse_args()
     if not hasattr(args, "func"):
         parser.print_help()

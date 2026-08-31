@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from spec_integrator.config import Config
+from spec_integrator.db import DocAuditDB
 from spec_integrator.graph import Graph
-from spec_integrator.parser import ParsedDocument
-from spec_integrator.verifier.formal import FormalModelResult
-from spec_integrator.verifier.static import VerificationIssue
-from spec_integrator.verifier.wit import WITFileResult
+from spec_integrator.models import (
+    FormalModelResult,
+    ParsedDocument,
+    VerificationIssue,
+    WITFileResult,
+)
+
+__all__ = ["Reporter"]
 
 
 class Reporter:
@@ -25,7 +29,7 @@ class Reporter:
         out_path: Path,
         obligation_summary=None,
         consistency_summary=None,
-        topology_results=None,
+        db: DocAuditDB | None = None,
     ) -> str:
         lines = []
         total_docs = len(documents)
@@ -36,7 +40,6 @@ class Reporter:
         distinct_models = {r.model_file for r in formal_results}
         passing_models = {r.model_file for r in formal_results if r.status == "PASS"}
         total_wits = len(wit_results)
-        total_topologies = len(topology_results) if topology_results else 0
         errors = [i for i in issues if i.severity == "ERROR"]
         warnings = [i for i in issues if i.severity == "WARNING"]
         is_passed = len(errors) == 0
@@ -58,7 +61,6 @@ class Reporter:
         lines.append(f"| Formal Models (distinct scripts) | {len(distinct_models)} |")
         lines.append(f"| Formal Models Passing Audit | {len(passing_models)} |")
         lines.append(f"| WIT Interface Files | {total_wits} |")
-        lines.append(f"| Topology Graphs Evaluated | {total_topologies} |")
         if obligation_summary is not None:
             lines.append(f"| Verification Obligations Demanded | {obligation_summary.demanded} |")
             lines.append(
@@ -76,7 +78,6 @@ class Reporter:
             "Evidence",
             "Obligation",
             "Consistency",
-            "Topology",
         ]
         lines.append("### Quality Gate Status\n")
         lines.append("| Gate | Status | Issues |")
@@ -146,12 +147,60 @@ class Reporter:
                 )
             lines.append("")
             if obligation_summary.skipped:
-                lines.append("| File | Section | Risk | Missing Verification |")
+                lines.append("| Keyword | File | Risk | Missing Verification |")
                 lines.append("| :--- | :--- | :---: | :--- |")
                 for s in obligation_summary.skipped:
                     tags = ", ".join(f"`{t}`" for t in s["missing_tags"])
                     lines.append(
-                        f"| `{s['file_path']}` | {s['heading']} | {s['risk_score']}/5 | {tags} |"
+                        f"| `{{{s['keyword']}}}` | `{s['file_path']}` | {s['risk_score']}/5 | {tags} |"
+                    )
+                lines.append("")
+
+        # 5b.1 Risk Assessment / LLM Judge / Test Chain detail, sourced from the
+        # cache DB -- the last `llm-assess` / `llm-judge` verdicts, whenever
+        # they were produced, not just the ones from this particular `check` run.
+        if db is not None:
+            risk_rows = db.get_risk_assessments()
+            if risk_rows:
+                lines.append("### 3.5.1 Risk Assessment Detail\n")
+                lines.append("| Keyword | File | Tier | Complexity | Risk | Summary |")
+                lines.append("| :--- | :--- | :---: | :---: | :---: | :--- |")
+                for r in sorted(risk_rows, key=lambda x: x["risk_score"], reverse=True):
+                    lines.append(
+                        f"| `{{{r['keyword']}}}` | `{r['file_path']}` | {r['tier']} | "
+                        f"{r['complexity_score']}/5 | {r['risk_score']}/5 | {r['summary']} |"
+                    )
+                lines.append("")
+
+            judge_rows = db.get_judge_results()
+            if judge_rows:
+                lines.append("### 3.5.2 LLM Judge Verdicts\n")
+                lines.append("| Keyword | Status | Summary |")
+                lines.append("| :--- | :---: | :--- |")
+                for r in judge_rows:
+                    icon = {"PASS": "🟢", "WARN": "🟠", "FAIL": "🔴"}.get(r["status"], "🔴")
+                    lines.append(f"| `{r['item_label']}` | {icon} {r['status']} | {r['summary']} |")
+                lines.append("")
+
+            doc_judge_rows = db.get_document_judge_results()
+            if doc_judge_rows:
+                lines.append("### 3.5.3 Whole-Document LLM Judge Verdicts\n")
+                lines.append("| Document | Status | Summary |")
+                lines.append("| :--- | :---: | :--- |")
+                for r in doc_judge_rows:
+                    icon = {"PASS": "🟢", "WARN": "🟠", "FAIL": "🔴"}.get(r["status"], "🔴")
+                    lines.append(f"| `{r['item_label']}` | {icon} {r['status']} | {r['summary']} |")
+                lines.append("")
+
+            chain_rows = db.get_test_chain_results()
+            if chain_rows:
+                lines.append("### 3.5.4 Design -> Test Spec -> Test Code Chain Verdicts\n")
+                lines.append("| Component | Status | Summary |")
+                lines.append("| :--- | :---: | :--- |")
+                for r in chain_rows:
+                    icon = {"PASS": "🟢", "WARN": "🟠", "FAIL": "🔴"}.get(r["status"], "🔴")
+                    lines.append(
+                        f"| `{r['component_name']}` | {icon} {r['status']} | {r['summary']} |"
                     )
                 lines.append("")
 
@@ -204,21 +253,6 @@ class Reporter:
                 lines.append(
                     f"| `{w.component}` | `{w.wit_file}` | `{summary}` | {st} | {w.details} |"
                 )
-        # 4.4 Topology Verification Details
-        if topology_results:
-            lines.append("## 4.3 Static Channel & Messaging Topology Verification Details\n")
-            lines.append(
-                "| Document | Topology Graph | Nodes | Edges | Acyclic (Deadlock Free) | Status |"
-            )
-            lines.append("| :--- | :--- | :---: | :---: | :---: | :--- |")
-            for t in topology_results:
-                st = "🟢 PASS (Acyclic)" if t.is_acyclic else "🔴 FAIL (Cycle Detected)"
-                is_ac = "Yes (DAG)" if t.is_acyclic else "No (Cycle)"
-                lines.append(
-                    f"| `{t.document}` | {t.graph_name} | {len(t.nodes)} | {len(t.edges)} | {is_ac} | {st} |"
-                )
-            lines.append("")
-
         # 7. Traceability Matrix
         lines.append("## 5. Traceability Matrix\n")
         subgraphs = graph.extract_item_subgraphs()
@@ -277,8 +311,3 @@ class Reporter:
             return f"spec-integrator @ {sha}{suffix}"
         except Exception:
             return "spec-integrator @ unknown revision (not a git checkout)"
-
-    def export_graph_json(self, graph: Graph, out_path: Path):
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(graph.to_dict(), f, indent=2, ensure_ascii=False)

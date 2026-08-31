@@ -1,100 +1,95 @@
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, field
-from pathlib import Path
-
 from spec_integrator.config import Config
-from spec_integrator.parser import ParsedDocument
-from spec_integrator.verifier.static import VerificationIssue
+from spec_integrator.db import DocAuditDB
+from spec_integrator.graph import Graph
+from spec_integrator.models import ObligationSummary, ParsedDocument, VerificationIssue
 
-TAG_BY_RECOMMENDATION = {
-    "pymodelchecking": "{VERIFY_FORMAL}",
-    "formal": "{VERIFY_FORMAL}",
-    "llm_judge": "{VERIFY_LLM}",
-    "llm": "{VERIFY_LLM}",
-}
-
-
-@dataclass
-class ObligationSummary:
-    assessed_documents: int = 0
-    stale_documents: list[str] = field(default_factory=list)
-    unassessed_documents: list[str] = field(default_factory=list)
-    demanded: int = 0
-    discharged: int = 0
-    skipped: list[dict] = field(default_factory=list)
-    judge_missing: list[str] = field(default_factory=list)
-    sections_total: int = 0
-    sections_assessed: int = 0
-
-    @property
-    def coverage(self) -> float:
-        if self.demanded == 0:
-            return 1.0
-        return self.discharged / self.demanded
+__all__ = ["ObligationSummary", "ObligationVerifier"]
 
 
 class ObligationVerifier:
     """Obligation Gate.
-    The risk assessment (`assess`) decides *what must be verified*. Previously that
-    verdict was written to a report and then ignored, so a section could be rated
-    "risk 5/5, formal verification required" and still pass every gate. This gate
-    closes the loop: an unmet verification obligation is an ERROR.
+    The risk assessment (`llm-assess`) decides *what must be verified*. This gate
+    closes the loop: an unmet verification obligation is an ERROR. Assessments,
+    judge verdicts, provenance, and staleness hashes are all read from the cache DB.
     """
 
     def __init__(self, config: Config):
         self.config = config
 
     def verify(
-        self, documents: list[ParsedDocument]
+        self,
+        documents: list[ParsedDocument],
+        graph: Graph | None = None,
+        db: DocAuditDB | None = None,
     ) -> tuple[list[VerificationIssue], ObligationSummary]:
         summary = ObligationSummary()
         cfg = self.config.obligation
         if not cfg.enabled:
             return [], summary
         issues: list[VerificationIssue] = []
-        risk_path = self.config.resolve_path(cfg.risk_report)
-        payload = self._load_json(risk_path)
-        if payload is None:
+        if db is None:
             if cfg.require_assessment:
                 issues.append(
                     VerificationIssue(
                         gate="Obligation",
                         severity="ERROR",
-                        file_path=cfg.risk_report,
+                        file_path=str(self.config.get_db_path()),
                         line=1,
                         rule_code="OBLIG-ASSESSMENT-MISSING",
                         message=(
-                            "No risk assessment found. The pipeline cannot claim the specification "
-                            "is verified without first deciding what needs verifying. "
-                            "Run 'spec-integrator assess' before 'check'."
+                            "No cache DB available, so no risk assessment can be read. The "
+                            "pipeline cannot claim the specification is verified without first "
+                            "deciding what needs verifying. Run 'spec-integrator llm-assess' "
+                            "before 'check'."
                         ),
                     )
                 )
             return issues, summary
-        assessments = payload.get("assessments", []) or []
-        doc_hashes = payload.get("doc_hashes", {}) or {}
+
+        assessments = db.get_risk_assessments()
+        doc_hashes = db.get_assessed_doc_hashes("risk_assessment")
         doc_map = {d.file_path: d for d in documents}
-        # Coverage must be measured against the sections that exist now, not against
+
+        if not assessments and not doc_hashes:
+            if cfg.require_assessment:
+                issues.append(
+                    VerificationIssue(
+                        gate="Obligation",
+                        severity="ERROR",
+                        file_path=str(self.config.get_db_path()),
+                        line=1,
+                        rule_code="OBLIG-ASSESSMENT-MISSING",
+                        message=(
+                            "No risk assessment found in the cache DB. The pipeline cannot "
+                            "claim the specification is verified without first deciding what "
+                            "needs verifying. Run 'spec-integrator llm-assess' before 'check'."
+                        ),
+                    )
+                )
+            return issues, summary
+
+        # Coverage must be measured against the keywords that exist now, not against
         # the ones the assessment happened to look at. "13/13 discharged" is not a
         # clean bill of health when the obligations were derived from 15 of 663
-        # sections — the other 648 have unknown obligations, not zero.
+        # keywords — the other 648 have unknown obligations, not zero.
         # A mock assessor infers "what must be verified" from the tags the document
         # already carries. The Obligation Gate then checks those same tags, so the
         # discharge rate is 1.0 by construction, whatever the specification says.
-        backend = str(payload.get("backend", "") or "").lower()
+        run_meta = db.get_run_metadata("risk_assessment")
+        backend = str((run_meta or {}).get("backend") or "").lower()
         if not backend:
             issues.append(
                 VerificationIssue(
                     gate="Obligation",
                     severity="ERROR",
-                    file_path=cfg.risk_report,
+                    file_path=str(self.config.get_db_path()),
                     line=1,
                     rule_code="OBLIG-ASSESSMENT-PROVENANCE-UNKNOWN",
                     message=(
                         "The risk assessment records no backend, so its independence from the "
-                        "documents it judges cannot be established. Re-run 'assess' with a "
+                        "documents it judges cannot be established. Re-run 'llm-assess' with a "
                         "tool version that stamps the engine."
                     ),
                 )
@@ -104,39 +99,46 @@ class ObligationVerifier:
                 VerificationIssue(
                     gate="Obligation",
                     severity="ERROR",
-                    file_path=cfg.risk_report,
+                    file_path=str(self.config.get_db_path()),
                     line=1,
                     rule_code="OBLIG-ASSESSMENT-NOT-INDEPENDENT",
                     message=(
                         f"The risk assessment was produced by the '{backend}' backend, which "
                         "derives each obligation from the tags the document already carries. "
                         "The discharge rate is then true by construction and says nothing about "
-                        "the specification. Re-run 'assess' against a real backend."
+                        "the specification. Re-run 'llm-assess' against a real backend."
                     ),
                 )
             )
 
-        summary.sections_total = sum(len(d.sections) for d in documents)
-        summary.sections_assessed = int(payload.get("total_evaluated", 0) or 0)
-        if cfg.require_full_coverage and summary.sections_assessed < summary.sections_total:
-            issues.append(
-                VerificationIssue(
-                    gate="Obligation",
-                    severity="ERROR",
-                    file_path=cfg.risk_report,
-                    line=1,
-                    rule_code="OBLIG-ASSESSMENT-PARTIAL",
-                    message=(
-                        f"Only {summary.sections_assessed} of {summary.sections_total} section(s) "
-                        "were risk-assessed, so the verification obligations of the remainder are "
-                        "unknown. A discharge rate computed over a partial assessment does not "
-                        "mean the specification is covered. Re-run 'assess --exhaustive'."
-                    ),
+        # Coverage must be measured against the keywords that exist now (the same
+        # population `llm-judge` audits), not against however many the assessment
+        # happened to look at -- graph is None only in callers/tests that don't
+        # care about this specific check, in which case it is skipped rather than
+        # guessed at.
+        summary.keywords_assessed = len(assessments)
+        if graph is not None:
+            summary.keywords_total = len(graph.extract_item_subgraphs())
+            if cfg.require_full_coverage and summary.keywords_assessed < summary.keywords_total:
+                issues.append(
+                    VerificationIssue(
+                        gate="Obligation",
+                        severity="ERROR",
+                        file_path=str(self.config.get_db_path()),
+                        line=1,
+                        rule_code="OBLIG-ASSESSMENT-PARTIAL",
+                        message=(
+                            f"Only {summary.keywords_assessed} of {summary.keywords_total} "
+                            "keyword(s) were risk-assessed, so the verification obligations of "
+                            "the remainder are unknown. A discharge rate computed over a partial "
+                            "assessment does not mean the specification is covered. Re-run "
+                            "'llm-assess --exhaustive'."
+                        ),
+                    )
                 )
-            )
 
         # --- 1. Staleness: the assessment must describe the documents as they are now ---
-        assessed_files = {a.get("file_path") for a in assessments if a.get("file_path")}
+        assessed_files = {a["file_path"] for a in assessments if a.get("file_path")}
         summary.assessed_documents = len(assessed_files)
         for doc in documents:
             recorded = doc_hashes.get(doc.file_path)
@@ -158,61 +160,51 @@ class ObligationVerifier:
                             message=(
                                 "Document changed since it was risk-assessed. The recorded "
                                 "verification obligations no longer describe this content — "
-                                "re-run 'spec-integrator assess'."
+                                "re-run 'spec-integrator llm-assess'."
                             ),
                         )
                     )
 
-        # --- 2. Demanded verification must actually be tagged and performed ---
+        # --- 2. A high-risk keyword must actually be tagged for semantic audit ---
+        # Assessment scores complexity/risk only -- it does not route to a
+        # verification method. A high risk_score demands exactly one thing:
+        # `{VERIFY_LLM}`, present on some document in the keyword's own
+        # definition/reference subgraph (matching how `llm-judge` itself
+        # decides what to prioritize). Whether formal verification is ALSO
+        # warranted is a deliberate authorial decision, not an auto-demand.
+        llm_tag = self.config.llm_judge.tag
         for a in assessments:
-            file_path = a.get("file_path")
-            heading = a.get("heading", "")
+            keyword = a.get("keyword", "")
+            file_path = a.get("file_path", "")
             risk = int(a.get("risk_score", 0) or 0)
-            formal_needed = bool(a.get("formal_needed", False))
-            recommended = str(a.get("recommended_verification", "") or "").lower()
-            demanded_tags = {t for t in (a.get("suggested_tags") or []) if t.startswith("{VERIFY_")}
-            mapped = TAG_BY_RECOMMENDATION.get(recommended)
-            if mapped:
-                demanded_tags.add(mapped)
+            covered_files = list(a.get("covered_files") or ([file_path] if file_path else []))
+            line = int(a.get("line", 1) or 1)
 
-            # A recommendation IS a demand, independent of the numeric risk
-            # score: `_call_heuristic` hardcodes risk=3 for its LLM_Judge
-            # branch (vs. risk=4 for formal), so gating solely on
-            # `risk >= cfg.risk_threshold` (4) meant every LLM_Judge
-            # recommendation was silently never "demanded" -- the check
-            # below never ran for a single one of them.
-            is_demanded = (
-                formal_needed or recommended in ("llm_judge", "llm") or risk >= cfg.risk_threshold
-            )
-            if not is_demanded or not demanded_tags:
-                continue
-            doc = doc_map.get(file_path)
-            if doc is None:
+            if risk < cfg.risk_threshold or not covered_files:
                 continue
             summary.demanded += 1
-            present = set(doc.all_tags)
-            missing = sorted(t for t in demanded_tags if t not in present)
-            if not missing:
+            present = any(llm_tag in doc_map[f].all_tags for f in covered_files if f in doc_map)
+            if present:
                 summary.discharged += 1
                 continue
             summary.skipped.append(
                 {
+                    "keyword": keyword,
                     "file_path": file_path,
-                    "heading": heading,
                     "risk_score": risk,
-                    "missing_tags": missing,
+                    "missing_tags": [llm_tag],
                 }
             )
             issues.append(
                 VerificationIssue(
                     gate="Obligation",
                     severity="ERROR",
-                    file_path=file_path,
-                    line=self._line_of(doc, heading),
+                    file_path=file_path or covered_files[0],
+                    line=line,
                     rule_code="OBLIG-VERIFICATION-SKIPPED",
                     message=(
-                        f"Section '{heading}' was assessed at risk {risk}/5 and requires "
-                        f"{', '.join(missing)}, but the document carries no such tag, so the "
+                        f"'{{{keyword}}}' was assessed at risk {risk}/5 and requires {llm_tag}, "
+                        "but none of its defining/referencing documents carry that tag, so the "
                         "verification is never executed. Add the tag and supply the evidence, "
                         "or record an explicit, justified waiver."
                     ),
@@ -221,116 +213,38 @@ class ObligationVerifier:
 
         # --- 3. {VERIFY_LLM} must have actually been judged ---
         if cfg.require_judge:
-            issues.extend(self._verify_judge_coverage(documents, summary))
+            issues.extend(self._verify_judge_coverage(documents, summary, db))
         return issues, summary
 
     # ------------------------------------------------------------------ #
     def _verify_judge_coverage(
-        self, documents: list[ParsedDocument], summary: ObligationSummary
+        self, documents: list[ParsedDocument], summary: ObligationSummary, db: DocAuditDB
     ) -> list[VerificationIssue]:
-        cfg = self.config.obligation
         llm_tag = self.config.llm_judge.tag
         tagged = [d for d in documents if llm_tag in d.all_tags]
         if not tagged:
             return []
-        judge_path = self.config.resolve_path(cfg.judge_report)
-        payload = self._load_json(judge_path)
-        if payload is None:
-            summary.judge_missing = [d.file_path for d in tagged]
-            return [
-                VerificationIssue(
-                    gate="Obligation",
-                    severity="ERROR",
-                    file_path=cfg.judge_report,
-                    line=1,
-                    rule_code="OBLIG-JUDGE-MISSING",
-                    message=(
-                        f"{len(tagged)} document(s) declare '{llm_tag}' but no LLM judge report "
-                        "exists. Run 'spec-integrator judge' — a declared semantic audit that never "
-                        "ran is not an audit."
-                    ),
-                )
-            ]
 
-        entries = payload if isinstance(payload, list) else payload.get("results", [])
         issues: list[VerificationIssue] = []
-        # --- Staleness: the verdict must describe the documents as they are now ---
-        # A judge report carries no hashes if it was produced before this check
-        # existed; treat that as stale too, because a verdict whose subject cannot
-        # be identified is not evidence about the current specification.
-        judge_hashes = payload.get("doc_hashes", {}) if isinstance(payload, dict) else {}
-        if not judge_hashes:
-            return [
-                *issues,
-                VerificationIssue(
-                    gate="Obligation",
-                    severity="ERROR",
-                    file_path=cfg.judge_report,
-                    line=1,
-                    rule_code="OBLIG-JUDGE-UNANCHORED",
-                    message="The LLM judge report records no document hashes, so there is no way to "
-                    "tell which version of the specification it audited. A verdict that "
-                    "cannot be tied to a document state cannot discharge an obligation — "
-                    "re-run 'spec-integrator judge' to produce an anchored report.",
-                ),
-            ]
 
-        for doc in tagged:
-            recorded = judge_hashes.get(doc.file_path)
-            if recorded is not None and recorded != doc.content_hash:
-                issues.append(
-                    VerificationIssue(
-                        gate="Obligation",
-                        severity="ERROR",
-                        file_path=doc.file_path,
-                        line=1,
-                        rule_code="OBLIG-JUDGE-STALE",
-                        message=(
-                            f"Document declares '{llm_tag}' but has changed since the LLM judge "
-                            "audited it. The stored verdict describes an earlier version of this "
-                            "text — re-run 'spec-integrator judge'."
-                        ),
-                    )
-                )
-
-        # Real `judge` output is keyword-centric: {"item_label": "{Keyword}",
-        # "status": ...}, not the {"subgraph"|"item"|"target": ...} shape this
-        # used to look for. That mismatch meant `failed` was always empty in
-        # practice, so a FAIL verdict from a real judge run could never
-        # surface here -- this is the first time this path has run against
-        # real (rather than hand-shaped test) judge output.
+        # --- 1. Keyword subgraph audit: definition + referencing sections ---
+        entries, covered = self._check_llm_run_coverage(
+            tagged,
+            db.get_judge_results(),
+            db.get_assessed_doc_hashes("judge"),
+            run_label="LLM judge",
+            rule_prefix="OBLIG-JUDGE",
+            command="'spec-integrator llm-judge'",
+            skipped_hint="Raise --max-subgraphs so the audit actually covers it.",
+            issues=issues,
+            missing_out=summary.judge_missing,
+        )
         failed_keywords = {
-            e.get("item_label", "").strip("{}")
-            for e in entries
-            if isinstance(e, dict) and e.get("status") == "FAIL"
+            e.get("item_label", "").strip("{}") for e in entries if e.get("status") == "FAIL"
         }
-        # Coverage used to be inferred by looking for the document's path anywhere
-        # in the report text. That was wrong in both directions: a document that
-        # passed cleanly contributed no issue text and read as never audited, while
-        # a document merely named inside some other keyword's issue prose read as
-        # audited. Verdicts now record the files they were actually formed over.
-        covered: set[str] = set()
-        for e in entries:
-            if isinstance(e, dict):
-                covered.update(e.get("covered_files", []) or [])
-
         for doc in tagged:
             if doc.file_path not in covered:
-                summary.judge_missing.append(doc.file_path)
-                issues.append(
-                    VerificationIssue(
-                        gate="Obligation",
-                        severity="ERROR",
-                        file_path=doc.file_path,
-                        line=1,
-                        rule_code="OBLIG-JUDGE-SKIPPED",
-                        message=(
-                            f"Document declares '{llm_tag}' but does not appear in the judge report. "
-                            "Raise --max-subgraphs so the audit actually covers it."
-                        ),
-                    )
-                )
-                continue
+                continue  # already reported as OBLIG-JUDGE-SKIPPED above
             for kw in sorted(failed_keywords & set(doc.all_keywords)):
                 issues.append(
                     VerificationIssue(
@@ -341,25 +255,143 @@ class ObligationVerifier:
                         rule_code="OBLIG-JUDGE-FAILED",
                         message=(
                             f"LLM semantic audit reported FAIL for '{{{kw}}}', which this document "
-                            "cites, in the stored judge report."
+                            "cites, in the stored judge verdict."
                         ),
                     )
                 )
+
+        # --- 2. Whole-document self-consistency audit ---
+        # A document can be covered above through only one small keyword
+        # subgraph while the bulk of its own prose was never actually judged;
+        # this is the independent check that closes that gap.
+        doc_entries, doc_covered = self._check_llm_run_coverage(
+            tagged,
+            db.get_document_judge_results(),
+            db.get_assessed_doc_hashes("document_judge"),
+            run_label="whole-document LLM judge",
+            rule_prefix="OBLIG-DOC-JUDGE",
+            command="'spec-integrator llm-judge'",
+            skipped_hint="Raise --max-documents so the audit actually covers it.",
+            issues=issues,
+            missing_out=summary.document_judge_missing,
+        )
+        failed_docs = {e["item_id"] for e in doc_entries if e.get("status") == "FAIL"}
+        for doc in tagged:
+            if doc.file_path in doc_covered and doc.file_path in failed_docs:
+                issues.append(
+                    VerificationIssue(
+                        gate="Obligation",
+                        severity="ERROR",
+                        file_path=doc.file_path,
+                        line=1,
+                        rule_code="OBLIG-DOC-JUDGE-FAILED",
+                        message=(
+                            "The whole-document LLM semantic audit reported FAIL for this "
+                            "document in the stored judge verdict."
+                        ),
+                    )
+                )
+
         return issues
 
-    @staticmethod
-    def _line_of(doc: ParsedDocument, heading: str) -> int:
-        for sec in doc.sections:
-            if sec.heading == heading:
-                return sec.line_start
-        return 1
+    def _check_llm_run_coverage(
+        self,
+        tagged: list[ParsedDocument],
+        entries: list[dict],
+        hashes: dict[str, str],
+        *,
+        run_label: str,
+        rule_prefix: str,
+        command: str,
+        skipped_hint: str,
+        issues: list[VerificationIssue],
+        missing_out: list[str],
+    ) -> tuple[list[dict], set[str]]:
+        """Shared MISSING/UNANCHORED/STALE/SKIPPED check for one LLM audit
+        table against the documents that declare `{VERIFY_LLM}`. Appends any
+        issues found directly to `issues` and returns (entries, covered_files)
+        so the caller can layer its own FAIL-specific check on top."""
+        llm_tag = self.config.llm_judge.tag
+        if not entries and not hashes:
+            missing_out.extend(d.file_path for d in tagged)
+            issues.append(
+                VerificationIssue(
+                    gate="Obligation",
+                    severity="ERROR",
+                    file_path=str(self.config.get_db_path()),
+                    line=1,
+                    rule_code=f"{rule_prefix}-MISSING",
+                    message=(
+                        f"{len(tagged)} document(s) declare '{llm_tag}' but no {run_label} "
+                        f"verdict exists in the cache DB. Run {command} — a declared semantic "
+                        "audit that never ran is not an audit."
+                    ),
+                )
+            )
+            return [], set()
 
-    @staticmethod
-    def _load_json(path: Path):
-        try:
-            if not path.exists():
-                return None
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return None
+        # No recorded hashes at all means a verdict whose subject cannot be
+        # identified -- that is not evidence about the current specification.
+        if not hashes:
+            issues.append(
+                VerificationIssue(
+                    gate="Obligation",
+                    severity="ERROR",
+                    file_path=str(self.config.get_db_path()),
+                    line=1,
+                    rule_code=f"{rule_prefix}-UNANCHORED",
+                    message=(
+                        f"The {run_label} verdict records no document hashes, so there is no "
+                        "way to tell which version of the specification it audited. A verdict "
+                        "that cannot be tied to a document state cannot discharge an "
+                        f"obligation — re-run {command} to produce an anchored verdict."
+                    ),
+                )
+            )
+            return entries, set()
+
+        for doc in tagged:
+            recorded = hashes.get(doc.file_path)
+            if recorded is not None and recorded != doc.content_hash:
+                issues.append(
+                    VerificationIssue(
+                        gate="Obligation",
+                        severity="ERROR",
+                        file_path=doc.file_path,
+                        line=1,
+                        rule_code=f"{rule_prefix}-STALE",
+                        message=(
+                            f"Document declares '{llm_tag}' but has changed since the "
+                            f"{run_label} audited it. The stored verdict describes an earlier "
+                            f"version of this text — re-run {command}."
+                        ),
+                    )
+                )
+
+        # Coverage used to be inferred by looking for the document's path anywhere
+        # in the report text. That was wrong in both directions: a document that
+        # passed cleanly contributed no issue text and read as never audited, while
+        # a document merely named inside some other keyword's issue prose read as
+        # audited. Verdicts record the files they were actually formed over.
+        covered: set[str] = set()
+        for e in entries:
+            covered.update(e.get("covered_files", []) or [])
+
+        for doc in tagged:
+            if doc.file_path not in covered:
+                missing_out.append(doc.file_path)
+                issues.append(
+                    VerificationIssue(
+                        gate="Obligation",
+                        severity="ERROR",
+                        file_path=doc.file_path,
+                        line=1,
+                        rule_code=f"{rule_prefix}-SKIPPED",
+                        message=(
+                            f"Document declares '{llm_tag}' but does not appear in the "
+                            f"{run_label} verdict. {skipped_hint}"
+                        ),
+                    )
+                )
+
+        return entries, covered

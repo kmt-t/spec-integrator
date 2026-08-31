@@ -3,22 +3,12 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from spec_integrator.config import Config
-from spec_integrator.parser import ParsedDocument
-from spec_integrator.verifier.static import VerificationIssue
+from spec_integrator.models import ParsedDocument, VerificationIssue, WITFileResult
 
-
-@dataclass
-class WITFileResult:
-    component: str
-    wit_file: str
-    status: str  # "PASS", "FAIL", "NOT_FOUND"
-    details: str = ""
-    defined_interfaces: list[str] = field(default_factory=list)
-    defined_worlds: list[str] = field(default_factory=list)
+__all__ = ["WITFileResult", "WITVerifier"]
 
 
 class WITVerifier:

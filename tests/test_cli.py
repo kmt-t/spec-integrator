@@ -1,13 +1,11 @@
-import json
-
 import pytest
 from spec_integrator.cli import cmd_check, cmd_init
+from spec_integrator.db import DocAuditDB
 
 
 class ArgsCheck:
     config = "spec-integrator.yaml"
     report = "spec_report.md"
-    graph_json = "graph.json"
     clean = True
 
 
@@ -30,26 +28,30 @@ def _write_clean_assessment(tmp_path, docs_dir):
     cfg = Config.load(tmp_path / "spec-integrator.yaml")
     parser = MarkdownParser(cfg)
     hashes = {}
-    sections = 0
     for md in sorted(docs_dir.rglob("*.md")):
         doc = parser.parse_file(md, docs_dir)
         hashes[doc.file_path] = doc.content_hash
-        sections += len(doc.sections)
 
-    out = tmp_path / "reports" / "doc_risk_report.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    # A complete assessment covers every section; a partial one is not a clean bill.
-    out.write_text(
-        json.dumps(
+    # A complete assessment covers every keyword; a partial one is not a clean
+    # bill. `{REQ_01}` is the one keyword `_scaffold`'s documents cite, so it
+    # must be represented here (at low risk, so it demands nothing) for the
+    # assessment to be "complete" against the graph's own keyword count.
+    db = DocAuditDB(cfg.get_db_path())
+    db.replace_risk_assessments(
+        [
             {
-                "backend": "sakura",
-                "total_evaluated": sections,
-                "assessments": [],
-                "doc_hashes": hashes,
+                "item_id": "item:REQ_01",
+                "keyword": "REQ_01",
+                "file_path": "requires/req.md",
+                "risk_score": 1,
+                "covered_files": ["requires/req.md"],
             }
-        ),
-        encoding="utf-8",
+        ],
+        "sakura",
     )
+    db.set_assessed_doc_hashes("risk_assessment", hashes)
+    db.commit()
+    db.close()
 
 
 def test_cli_init_creates_config(tmp_path, monkeypatch):
@@ -97,7 +99,6 @@ def test_check_passes_with_a_complete_assessment(tmp_path, monkeypatch):
         cmd_check(ArgsCheck())
     assert exc_info.value.code == 0
     assert (tmp_path / "spec_report.md").exists()
-    assert (tmp_path / "graph.json").exists()
 
 
 def test_check_can_run_without_the_obligation_gate(tmp_path, monkeypatch):

@@ -3,12 +3,19 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
-from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from spec_integrator.config import Config
-from spec_integrator.parser import MarkdownParser, ParsedDocument
-from spec_integrator.verifier.static import VerificationIssue
+from spec_integrator.models import (
+    ConsistencySummary,
+    ParsedDocument,
+    SymbolDrift,
+    VerificationIssue,
+)
+from spec_integrator.parser import MarkdownParser
+
+__all__ = ["ConsistencySummary", "ConsistencyVerifier", "SymbolDrift"]
 
 # A value token: decimal, hex, or a size/unit-suffixed number.
 VALUE_RE = re.compile(
@@ -21,24 +28,8 @@ VALUE_RE = re.compile(
 )
 
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
-
-
-@dataclass
-class SymbolDrift:
-    symbol: str
-    values: dict[str, list[str]] = field(
-        default_factory=dict
-    )  # normalized value -> ["file:line", ...]
-
-
-@dataclass
-class ConsistencySummary:
-    invariants_checked: int = 0
-    symbols_tracked: int = 0
-    drifting_symbols: list[SymbolDrift] = field(default_factory=list)
-    cochange_tracked: int = 0
-    cochange_stale: list[dict] = field(default_factory=list)
-    baseline_present: bool = False
+TRACEABILITY_COMMENT_RE = re.compile(r"<!--\s*traceability:\s*(.*?)-->", re.IGNORECASE)
+KEYWORD_TAG_RE = re.compile(r"\{([A-Za-z0-9_\-]+)\}")
 
 
 def _normalize_value(raw: str) -> str:
@@ -81,7 +72,10 @@ class ConsistencyVerifier:
 
     # ------------------------------------------------------------------ #
     def verify(
-        self, documents: list[ParsedDocument], docs_root: Path
+        self,
+        documents: list[ParsedDocument],
+        docs_root: Path,
+        db: Any | None = None,
     ) -> tuple[list[VerificationIssue], ConsistencySummary]:
         summary = ConsistencySummary()
         cfg = self.config.consistency
@@ -91,8 +85,9 @@ class ConsistencyVerifier:
         scanned = self._collect_scan_targets(documents, docs_root)
         issues.extend(self._check_stale_values(scanned, summary))
         issues.extend(self._check_symbol_drift(scanned, summary))
-        issues.extend(self._check_cochange(documents, summary))
+        issues.extend(self._check_cochange(documents, summary, db=db))
         issues.extend(self._check_duplicate_definitions(documents))
+        issues.extend(self._check_traceability_comment_staleness(documents))
         return issues, summary
 
     # ------------------------------------------------------------------ #
@@ -139,6 +134,62 @@ class ConsistencyVerifier:
                         ),
                     )
                 )
+        return issues
+
+    # ------------------------------------------------------------------ #
+    # Declared traceability vs. actual discussion: a section that opens with
+    # `<!-- traceability: {A} {B} --> ` is asserting "this section discusses
+    # A and B". If the prose is later rewritten and stops mentioning one of
+    # them, the declaration silently goes stale -- it still reads as a valid
+    # cross-reference to anyone scanning tags, but no longer describes what
+    # the section actually says.
+    # ------------------------------------------------------------------ #
+    def _check_traceability_comment_staleness(
+        self, documents: list[ParsedDocument]
+    ) -> list[VerificationIssue]:
+        issues: list[VerificationIssue] = []
+        for doc in documents:
+            for sec in doc.sections:
+                lines = sec.body_text.splitlines()
+                for offset, line in enumerate(lines):
+                    m = TRACEABILITY_COMMENT_RE.search(line)
+                    if not m:
+                        continue
+                    declared = set(KEYWORD_TAG_RE.findall(m.group(1)))
+                    if not declared:
+                        continue
+                    used: set[str] = set()
+                    in_code = False
+                    for other_offset, other_line in enumerate(lines):
+                        if other_offset == offset:
+                            continue
+                        if FENCE_RE.match(other_line):
+                            in_code = not in_code
+                            continue
+                        if in_code:
+                            continue
+                        used.update(KEYWORD_TAG_RE.findall(other_line))
+                    stale = sorted(kw for kw in declared if kw not in used)
+                    if not stale:
+                        continue
+                    line_no = sec.line_start + offset
+                    issues.append(
+                        VerificationIssue(
+                            gate="Consistency",
+                            severity="WARNING",
+                            file_path=doc.file_path,
+                            line=line_no,
+                            rule_code="CONSIST-TRACEABILITY-STALE",
+                            message=(
+                                f"'traceability' comment declares {', '.join(f'{{{kw}}}' for kw in stale)}, "
+                                f"but the section '{sec.heading}' never mentions "
+                                f"{'it' if len(stale) == 1 else 'them'} anywhere else in its body. "
+                                "The declaration no longer describes what this section actually "
+                                "discusses -- update the prose or drop the stale keyword(s) from "
+                                "the comment."
+                            ),
+                        )
+                    )
         return issues
 
     # ------------------------------------------------------------------ #
@@ -315,13 +366,23 @@ class ConsistencyVerifier:
     # C. Co-change: a changed definition invalidates its references
     # ------------------------------------------------------------------ #
     def _check_cochange(
-        self, documents: list[ParsedDocument], summary: ConsistencySummary
+        self,
+        documents: list[ParsedDocument],
+        summary: ConsistencySummary,
+        db: Any | None = None,
     ) -> list[VerificationIssue]:
         cfg = self.config.consistency
         if not cfg.cochange:
             return []
-        lock_path = self.config.resolve_path(cfg.lockfile)
-        baseline = self._load_lock(lock_path)
+
+        baseline = None
+        if db is not None and hasattr(db, "get_consistency_baseline"):
+            baseline = db.get_consistency_baseline()
+
+        if baseline is None:
+            lock_path = self.config.resolve_path(cfg.lockfile)
+            baseline = self.load_lock(lock_path)
+
         summary.baseline_present = baseline is not None
         current = self.build_baseline(documents)
         if baseline is None:
@@ -333,8 +394,8 @@ class ConsistencyVerifier:
                     line=1,
                     rule_code="CONSIST-BASELINE-MISSING",
                     message=(
-                        "No consistency baseline recorded, so propagation of edits cannot be "
-                        "checked. Run 'spec-integrator sync' to create it and commit the result."
+                        "No consistency baseline recorded in DB or lockfile. "
+                        "Run 'spec-integrator sync' to create it."
                     ),
                 )
             ]
@@ -418,8 +479,6 @@ class ConsistencyVerifier:
                 whole section would make every edit invalidate every neighbouring keyword,
                 so the unit of change has to be the definition itself, not its container.
         """
-        from spec_integrator.parser import MarkdownParser
-
         token = "{" + keyword + "}"
         lines = [ln.strip() for ln in section_body.splitlines() if token in ln]
         return MarkdownParser.config_compute_hash("\n".join(lines))
@@ -456,7 +515,7 @@ class ConsistencyVerifier:
         return lock_path
 
     @staticmethod
-    def _load_lock(path: Path) -> dict | None:
+    def load_lock(path: Path) -> dict | None:
         try:
             if not path.exists():
                 return None

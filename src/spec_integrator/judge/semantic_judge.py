@@ -1,18 +1,10 @@
 from __future__ import annotations
 
-import json
-import os
-import re
 import time
-from dataclasses import dataclass, field
-
-import requests
-import urllib3
 
 from spec_integrator.config import Config
-from spec_integrator.parser import ParsedDocument
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from spec_integrator.judge.base import BaseJudge
+from spec_integrator.models import JudgeReport, JudgeResult, ParsedDocument
 
 JUDGE_PROMPT_TEMPLATE = """You are a strict, formal System Specification Verification Judge.
 Your mission is to perform an exhaustive, evidence-based consistency and contradiction audit between a Requirement/Definition section and its referencing Design sections.
@@ -98,100 +90,83 @@ Respond ONLY with a valid JSON object in English in the following format:
 """
 
 
-@dataclass
-class JudgeResult:
-    item_id: str
-    item_label: str
-    status: str  # "PASS", "WARN", "FAIL", "SKIPPED"
-    summary: str
-    issues: list[dict] = field(default_factory=list)
-    # Documents this verdict was formed over. Recorded explicitly because a
-    # clean document contributes no issue text, so its path would otherwise
-    # never appear in the report and would read as never audited.
-    covered_files: list[str] = field(default_factory=list)
+DOCUMENT_JUDGE_PROMPT_TEMPLATE = """You are a strict, formal System Specification Verification Judge.
+Your mission is to perform an exhaustive, evidence-based self-consistency audit of a single
+specification document, taken as a whole -- independent of how its individual keywords are
+cross-checked against other documents elsewhere.
+
+File: {file_path} (Tier: {tier})
+
+=== DOCUMENT CONTENT ===
+{content}
+
+=== EVALUATION CRITERIA ===
+Perform your audit systematically against the following 4 core criteria:
+
+1. Internal Consistency:
+   Detect contradictions within this document itself -- mismatched parameters, conflicting
+   state names, incompatible values for the same quantity, or claims that undermine each other
+   in different sections of the same file.
+
+2. Numeric Agreement & Arithmetic:
+   Re-calculate totals, allocations, budgets, and offsets stated within this document. Verify
+   sub-allocations sum exactly to stated totals and that identically named constants/quantities
+   have identical values everywhere in the file. Report any arithmetic discrepancy as an ERROR.
+
+3. Clarity & Unresolved Ambiguity:
+   Detect underspecified protocols, missing fallback behaviours, unassigned states, or ambiguous
+   boundary conditions left unresolved anywhere in the document.
+
+4. Claim-Evidence Substantiation & Unbacked Assertions:
+   Identify all factual, safety, or empirical claims made in the prose (e.g., "formally verified",
+   "proven deadlock-free", "zero overhead", "measured on Cortex-M7", specific benchmarks or cycles).
+   - If the document claims a property is "proven", "verified", or "measured", check whether the
+     text explicitly cites a concrete artifact (formal model file, concept test, WIT interface, or
+     benchmark log).
+   - An assertion of a verification without citing the backing artifact, or relying on a
+     vacuous/unrelated model, is an ERROR (Unbacked Verification Claim).
+   - A bare empirical measurement stated as an accomplished fact without an environment or artifact
+     reference is a WARNING (Unsourced Metric / Measurement).
+   - Valid design estimates, aspirations, or budgeted targets ("目標", "想定", "target", "budgeted")
+     are acceptable and must not be flagged as errors.
+
+=== AUDITOR RULES ===
+- Literal Evaluation: Judge what the text actually and explicitly states, not what it might have intended.
+- No Vacuous Confirmation: Restating the document's claim back as confirmation is not an audit.
+- Specific Citations: When reporting contradictions or missing citations, cite the specific section
+  heading(s) within this document.
+- No False Positives: If the document is internally consistent and meets all criteria, state so
+  concisely as PASS; do not manufacture non-existent issues.
+- Cross-document consistency is out of scope here -- that is audited separately per requirement
+  keyword. Do not flag something as inconsistent with another file you were not shown.
+
+=== OUTPUT FORMAT ===
+Respond ONLY with a valid JSON object in English in the following format:
+```json
+{{
+  "status": "PASS" | "WARN" | "FAIL",
+  "summary": "Concise explanation of the evaluation result in English",
+  "issues": [
+    {{
+      "severity": "ERROR" | "WARNING",
+      "location": "Section name within this document",
+      "description": "Detailed explanation of contradiction, unbacked claim, or ambiguity in English"
+    }}
+  ]
+}}
+```
+"""
 
 
-@dataclass
-class JudgeReport:
-    results: list[JudgeResult] = field(default_factory=list)
-    total_evaluated: int = 0
-    pass_count: int = 0
-    warn_count: int = 0
-    fail_count: int = 0
+class SemanticJudge(BaseJudge):
+    """Evaluates semantic consistency, completeness, and contradictions
 
-    def __iter__(self):
-        return iter(self.results)
-
-    def __len__(self):
-        return len(self.results)
-
-    def __getitem__(self, idx):
-        return self.results[idx]
-
-    def to_markdown(self, project_name: str = "System Specification") -> str:
-        lines = [
-            f"# {project_name} 仕様矛盾・セマンティック整合性監査レポート (LLM as a Judge)",
-            "",
-            f"- **監査サブグラフ総数**: {self.total_evaluated}",
-            f"- **合格 (PASS)**: {self.pass_count}",
-            f"- **警告 (WARN)**: {self.warn_count}",
-            f"- **不合格 (FAIL)**: {self.fail_count}",
-            "",
-            "---",
-            "",
-            "## 1. 検出された矛盾・警告 (Issues Found)",
-            "",
-        ]
-        issues_found = False
-        for r in self.results:
-            if r.status in ("WARN", "FAIL") or r.issues:
-                issues_found = True
-                badge = "🔴 FAIL" if r.status == "FAIL" else "🟡 WARN"
-                lines.append(f"### {badge}: `{r.item_label}`")
-                lines.append(f"- **サマリー**: {r.summary}")
-                if r.issues:
-                    lines.append("- **詳細項目**:")
-                    for iss in r.issues:
-                        sev = iss.get("severity", "WARNING")
-                        loc = iss.get("location", "Unknown")
-                        desc = iss.get("description", "")
-                        lines.append(f"  - **[{sev}]** `{loc}`: {desc}")
-                lines.append("")
-
-        if not issues_found:
-            lines.append(
-                "✔ 評価されたすべてのサブグラフにおいて、定義と参照設計間の重大な矛盾は検出されませんでした。\n"
-            )
-
-        lines.extend(
-            [
-                "---",
-                "",
-                "## 2. 全評価結果一覧",
-                "",
-                "| キーワード / 要求ID | 判定 | 評価サマリー | 検出Issue数 |",
-                "| :--- | :---: | :--- | :---: |",
-            ]
-        )
-        for r in self.results:
-            badge = (
-                "🟢 PASS"
-                if r.status == "PASS"
-                else ("🟡 WARN" if r.status == "WARN" else "🔴 FAIL")
-            )
-            lines.append(f"| `{r.item_label}` | {badge} | {r.summary} | {len(r.issues)} |")
-        return "\n".join(lines)
-
-
-class SemanticJudge:
-    """
-    Evaluates semantic consistency, completeness, and contradictions
-        between specification definitions and their referencing design sections
-        using an LLM as a Judge.
+    between specification definitions and their referencing design sections
+    using an LLM as a Judge.
     """
 
     def __init__(self, config: Config):
-        self.config = config
+        super().__init__(config)
 
     def judge_subgraphs(
         self,
@@ -207,14 +182,12 @@ class SemanticJudge:
         report = JudgeReport()
         selected_backend = backend or self.config.llm_judge.default_backend
         llm_tag = self.config.llm_judge.tag
-        # Filter candidates based on mode
+
         if exhaustive:
-            # Exhaustive mode: check ALL subgraphs with references (or all subgraphs if min_references == 0)
             target_subgraphs = [
                 sg for sg in subgraphs if len(sg.get("referenced_in", [])) >= min_references
             ]
         else:
-            # Tagged priority mode
             tagged_subgraphs = []
             for sg in subgraphs:
                 has_tag = False
@@ -226,21 +199,12 @@ class SemanticJudge:
                 if has_tag:
                     tagged_subgraphs.append(sg)
 
-            if tagged_subgraphs:
-                target_subgraphs = tagged_subgraphs
-            else:
-                target_subgraphs = [
-                    sg for sg in subgraphs if len(sg.get("referenced_in", [])) >= min_references
-                ]
+            target_subgraphs = (
+                tagged_subgraphs
+                if tagged_subgraphs
+                else [sg for sg in subgraphs if len(sg.get("referenced_in", [])) >= min_references]
+            )
 
-        # A definition and its referencing sections are audited together as one
-        # subgraph regardless of which side actually moved -- there is no need
-        # to work out whether it was the definition or a reference that changed
-        # (or classify the edit as significant) before deciding to re-check.
-        # Whether the change matters is exactly the question the LLM answers;
-        # a section that changed in a way that doesn't matter just comes back
-        # PASS. This also covers definitions with no {VERIFY_LLM} tag of their
-        # own, since selection here is driven by what changed, not by tags.
         if changed_sections is not None:
             target_subgraphs = [
                 sg
@@ -249,11 +213,9 @@ class SemanticJudge:
                 & changed_sections
             ]
 
-        # Apply max_subgraphs limit if > 0
-        if max_subgraphs > 0:
-            target_candidates = target_subgraphs[:max_subgraphs]
-        else:
-            target_candidates = target_subgraphs
+        target_candidates = (
+            target_subgraphs[:max_subgraphs] if max_subgraphs > 0 else target_subgraphs
+        )
 
         print(
             f"Auditing {len(target_candidates)} requirement subgraph(s) using LLM Backend: '{selected_backend}'..."
@@ -284,30 +246,76 @@ class SemanticJudge:
         report.total_evaluated = len(report.results)
         return report
 
-    @staticmethod
-    def _covered_files(sg: dict) -> list[str]:
-        """File paths the subgraph draws its sections from."""
-        files: set[str] = set()
-        for sec_id in list(sg.get("defined_in", [])) + list(sg.get("referenced_in", [])):
-            path = str(sec_id)
-            path = path.removeprefix("sec:")
-            files.add(path.split("#", 1)[0])
-        return sorted(files)
+    def judge_documents(
+        self,
+        documents: list[ParsedDocument],
+        backend: str | None = None,
+        model: str | None = None,
+        max_documents: int = 15,
+        exhaustive: bool = False,
+        include_meta: bool = False,
+        include_reqs: bool = False,
+        target_tiers: list[int | str] | None = None,
+    ) -> JudgeReport:
+        report = JudgeReport()
+        selected_backend = backend or self.config.llm_judge.default_backend
+        llm_tag = self.config.llm_judge.tag
+
+        if exhaustive:
+            target_candidates = documents if max_documents <= 0 else documents[:max_documents]
+        else:
+            tagged_docs = [d for d in documents if llm_tag in d.all_tags]
+            cands = tagged_docs if tagged_docs else documents
+            target_candidates = cands if max_documents <= 0 else cands[:max_documents]
+
+        print(
+            f"Auditing {len(target_candidates)} whole document(s) using LLM Backend: '{selected_backend}'..."
+        )
+        if exhaustive:
+            print("  (Exhaustive mode: evaluating all documents across all tiers)")
+
+        for idx, doc in enumerate(target_candidates, start=1):
+            print(f"  [{idx}/{len(target_candidates)}] Evaluating '{doc.file_path}'...", flush=True)
+            res = self._evaluate_single_document(doc, selected_backend, model)
+            report.results.append(res)
+            if res.status == "PASS":
+                report.pass_count += 1
+            elif res.status == "WARN":
+                report.warn_count += 1
+            elif res.status == "FAIL":
+                report.fail_count += 1
+
+            badge = "PASS" if res.status == "PASS" else ("WARN" if res.status == "WARN" else "FAIL")
+            print(f"       -> Result: {badge} ({res.summary[:80]})", flush=True)
+
+        report.total_evaluated = len(report.results)
+        return report
+
+    def _evaluate_single_document(
+        self, doc: ParsedDocument, backend: str, model: str | None
+    ) -> JudgeResult:
+        prompt = DOCUMENT_JUDGE_PROMPT_TEMPLATE.format(
+            file_path=doc.file_path,
+            tier=doc.tier,
+            content=self._budgeted(doc.content),
+        )
+        return self._run_judge_llm(
+            prompt, doc.file_path, doc.file_path, [doc.file_path], backend, model
+        )
 
     def _evaluate_single_subgraph(
         self, sg: dict, documents: list[ParsedDocument], backend: str, model: str | None
     ) -> JudgeResult:
         item_label = sg["item_label"]
         covered = self._covered_files(sg)
-        def_texts = []
-        for sec_id in sg["defined_in"]:
-            content = self._retrieve_section_content(sec_id, documents)
-            def_texts.append(f"--- Section: {sec_id} ---\n{content}")
-
-        ref_texts = []
-        for sec_id in sg["referenced_in"]:
-            content = self._retrieve_section_content(sec_id, documents)
-            ref_texts.append(f"--- Section: {sec_id} ---\n{content}")
+        def_texts = [
+            f"--- Section: {sid} ---\n{self._retrieve_section_content(sid, documents)}"
+            for sid in sg["defined_in"]
+        ]
+        ref_texts = [
+            f"--- Section: {sid} ---\n{self._retrieve_section_content(sid, documents)}"
+            for sid in sg["referenced_in"]
+        ]
 
         prompt = JUDGE_PROMPT_TEMPLATE.format(
             item_label=item_label,
@@ -316,9 +324,20 @@ class SemanticJudge:
             else "(No explicit definition section)",
             referencing_texts="\n\n".join(ref_texts) if ref_texts else "(No referencing sections)",
         )
+        return self._run_judge_llm(prompt, sg["item_id"], item_label, covered, backend, model)
+
+    def _run_judge_llm(
+        self,
+        prompt: str,
+        item_id: str,
+        item_label: str,
+        covered: list[str],
+        backend: str,
+        model: str | None,
+    ) -> JudgeResult:
         if backend == "mock":
             return JudgeResult(
-                item_id=sg["item_id"],
+                item_id=item_id,
                 item_label=item_label,
                 status="PASS",
                 summary="Mock evaluation passed.",
@@ -327,17 +346,13 @@ class SemanticJudge:
             )
         if backend not in ("sakura", "ollama", "openrouter"):
             return JudgeResult(
-                item_id=sg["item_id"],
+                item_id=item_id,
                 item_label=item_label,
                 status="SKIPPED",
                 summary=f"Unknown backend '{backend}'.",
                 issues=[],
                 covered_files=covered,
             )
-
-        # _call_sakura / _call_openrouter already retries transport-level failures
-        # (non-200, timeout, connection errors) internally.
-        import time
 
         last_err: Exception | None = None
         parsed: dict | None = None
@@ -361,7 +376,7 @@ class SemanticJudge:
 
         if parsed is None:
             return JudgeResult(
-                item_id=sg["item_id"],
+                item_id=item_id,
                 item_label=item_label,
                 status="FAIL",
                 summary=f"Judge error after 3 attempts: {last_err}",
@@ -377,13 +392,13 @@ class SemanticJudge:
 
         issues = parsed.get("issues", []) or []
         status = parsed["status"]
-        # An audit that lists blocking issues has not passed, whatever it says.
         if status == "PASS" and any(
             str(i.get("severity", "")).upper() == "ERROR" for i in issues if isinstance(i, dict)
         ):
             status = "FAIL"
+
         return JudgeResult(
-            item_id=sg["item_id"],
+            item_id=item_id,
             item_label=item_label,
             status=status,
             summary=parsed.get("summary", ""),
@@ -391,157 +406,5 @@ class SemanticJudge:
             covered_files=covered,
         )
 
-    def _retrieve_section_content(self, sec_id: str, documents: list[ParsedDocument]) -> str:
-        doc, sec = self._find_doc_and_sec(sec_id, documents)
-        if sec:
-            return self._budgeted(sec.body_text)
-        elif doc:
-            return self._budgeted(doc.raw_content)
-        return ""
 
-    def _budgeted(self, text: str) -> str:
-        """
-        Applies the per-section character budget, marking any cut explicitly.
-                Silent truncation lets the judge report 'no contradiction found' about
-                text it was never shown, which reads identically to a real pass.
-        """
-        limit = self.config.llm_judge.section_char_budget
-        if limit <= 0 or len(text) <= limit:
-            return text
-        omitted = len(text) - limit
-        return (
-            text[:limit]
-            + f"\n\n[TRUNCATED: {omitted} further characters of this section were not shown. "
-            "Do not conclude that this section is consistent with the others on the basis "
-            "of the portion above; report the truncation as a limitation instead.]"
-        )
-
-    def _find_doc_and_sec(
-        self, sec_id: str, documents: list[ParsedDocument]
-    ) -> tuple[ParsedDocument | None, any]:
-        for doc in documents:
-            if doc.file_path == sec_id:
-                return doc, None
-            for sec in doc.sections:
-                if sec.section_id == sec_id or f"{doc.file_path}#{sec.heading}" == sec_id:
-                    return doc, sec
-        return None, None
-
-    def _call_sakura(self, prompt: str, model: str | None) -> str:
-        b_config = self.config.llm_judge.backends.get("sakura")
-        api_key_env = b_config.api_key_env if b_config else "SAKURA_API_KEY"
-        api_key = os.environ.get(api_key_env, "")
-        if not api_key:
-            raise ValueError(f"Sakura API key environment variable '{api_key_env}' is not set.")
-        selected_model = model or (
-            b_config.model if (b_config and b_config.model) else "preview/Qwen3.6-35B-A3B"
-        )
-        endpoint = (
-            b_config.endpoint
-            if (b_config and b_config.endpoint)
-            else "https://api.ai.sakura.ad.jp/v1/chat/completions"
-        )
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": selected_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.0,
-        }
-        last_err = None
-        for _attempt in range(3):
-            try:
-                resp = requests.post(
-                    endpoint, json=payload, headers=headers, timeout=60, verify=False
-                )
-                if resp.status_code != 200:
-                    raise RuntimeError(
-                        f"Sakura API returned status {resp.status_code}: {resp.text}"
-                    )
-                data = resp.json()
-                return data["choices"][0]["message"]["content"]
-            except Exception as e:
-                last_err = e
-                time.sleep(2)
-        raise RuntimeError(f"Failed to call Sakura API after 3 attempts: {last_err}")
-
-    def _call_openrouter(self, prompt: str, model: str | None) -> str:
-        b_config = self.config.llm_judge.backends.get("openrouter")
-        api_key_env = b_config.api_key_env if b_config else "OPENROUTER_API_KEY"
-        api_key = os.environ.get(api_key_env, "")
-        if not api_key:
-            raise ValueError(f"OpenRouter API key environment variable '{api_key_env}' is not set.")
-        selected_model = model or (
-            b_config.model if (b_config and b_config.model) else "qwen/qwen3.8-27b"
-        )
-        endpoint = (
-            b_config.endpoint
-            if (b_config and b_config.endpoint)
-            else "https://openrouter.ai/api/v1/chat/completions"
-        )
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": getattr(
-                self.config.project, "url", "https://github.com/spec-integrator"
-            ),
-            "X-Title": f"{self.config.project.name} Spec Integrator",
-        }
-        payload = {
-            "model": selected_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.0,
-        }
-        last_err = None
-        for _attempt in range(3):
-            try:
-                resp = requests.post(
-                    endpoint, json=payload, headers=headers, timeout=90, verify=False
-                )
-                if resp.status_code != 200:
-                    raise RuntimeError(
-                        f"OpenRouter API returned status {resp.status_code}: {resp.text}"
-                    )
-                data = resp.json()
-                return data["choices"][0]["message"]["content"]
-            except Exception as e:
-                last_err = e
-                time.sleep(2)
-        raise RuntimeError(f"Failed to call OpenRouter API after 3 attempts: {last_err}")
-
-    def _call_ollama(self, prompt: str, model: str | None) -> str:
-        b_config = self.config.llm_judge.backends.get("ollama")
-        endpoint = (
-            b_config.endpoint if (b_config and b_config.endpoint) else "http://localhost:11434"
-        ) + "/api/generate"
-        selected_model = model or (b_config.model if (b_config and b_config.model) else "llama3")
-        payload = {
-            "model": selected_model,
-            "prompt": prompt,
-            "stream": False,
-            "format": "json",
-        }
-        resp = requests.post(endpoint, json=payload, timeout=60)
-        if resp.status_code != 200:
-            raise RuntimeError(f"Ollama API returned status {resp.status_code}: {resp.text}")
-        data = resp.json()
-        return data.get("response", "")
-
-    def _extract_json(self, raw_text: str) -> dict:
-        code_block = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw_text)
-        if code_block:
-            json_str = code_block.group(1)
-        else:
-            first_brace = raw_text.find("{")
-            last_brace = raw_text.rfind("}")
-            if first_brace != -1 and last_brace != -1:
-                json_str = raw_text[first_brace : last_brace + 1]
-            else:
-                json_str = raw_text
-        return json.loads(json_str)
-
-
-# Alias for backward compatibility
-LLMJudge = SemanticJudge
+__all__ = ["JudgeReport", "JudgeResult", "SemanticJudge"]

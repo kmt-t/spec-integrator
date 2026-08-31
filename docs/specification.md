@@ -147,7 +147,7 @@ llm_judge:
 - **`{VERIFY_FORMAL}`**:
   - 設計仕様書内に付与することで、該当コンポーネントの `formal/` フォルダ内に pyModelChecking モデルスクリプトが存在し、モデル検査が PASS することを義務付けます。
 - **`{VERIFY_LLM}`**:
-  - 設計仕様書内に付与することで、`spec-integrator judge` 実行時に対象サブグラフのセマンティック監査を実行します。
+  - 設計仕様書内に付与することで、`spec-integrator llm-judge` 実行時に対象サブグラフのセマンティック監査を実行します。
 
 ---
 
@@ -287,25 +287,56 @@ spec-integrator check [OPTIONS]
 ```
 - **オプション**:
   - `-c, --config PATH`: 設定ファイルパス（デフォルト: `spec-integrator.yaml`）
-  - `-r, --report PATH`: Markdown レポート出力先（デフォルト: `spec_report.md`）
-  - `-g, --graph-json PATH`: グラフ JSON 出力先（デフォルト: `graph.json`）
+  - `-r, --report PATH`: Markdown レポート出力先（デフォルト: `spec_report.md`）。リスク評価詳細・LLM 判定結果・3層一貫性監査結果もこの一枚に集約される。
   - `--clean`: キャッシュ DB を初期化してフルスキャン実行
   - `--verbose`: 詳細ログを出力
 
-### (2) `spec-integrator judge`
-`{VERIFY_LLM}` が指定されたサブグラフに対して LLM as a Judge を実行します。
+### (2) `spec-integrator llm-assess`
+各要求／設計キーワードの複雑度・設計リスクを LLM でスコアリングし、検証義務台帳をキャッシュ DB に記録します（`--document` 指定時はドキュメント単位のアドバイザリー評価に切り替わる）。
 
 ```bash
-spec-integrator judge [OPTIONS]
+spec-integrator llm-assess [OPTIONS]
 ```
 - **オプション**:
   - `-c, --config PATH`: 設定ファイルパス
-  - `--backend [sakura|ollama|mock]`: LLM バックエンド指定（デフォルト: 設定ファイルの値）
+  - `--backend [openrouter|sakura|ollama|mock]`: LLM バックエンド指定（デフォルト: 設定ファイルの値）
   - `--model TEXT`: モデル名の明示的オーバーライド
-  - `--max-subgraphs INT`: 評価する最大サブグラフ数
-  - `-o, --out PATH`: 判定結果 JSON 出力先
+  - `--document`: キーワード単位ではなくドキュメント単位で評価（アドバイザリーのみ。Obligation Gate には使われない）
+  - `--max-keywords INT`: 評価する最大キーワード数（`--document` 時は無視）
+  - `--max-documents INT`: `--document` 指定時の評価対象最大ドキュメント数
+  - `-a, --all, --exhaustive`: 全 Tier（Requirements/Meta 含む）を網羅的に評価
+  - `--min-references INT`: 評価対象に含める最小参照数（`--document` 時は無視）
+  - `--include-meta` / `--include-reqs`: Architecture/Meta Tier・Tier 0 (Requirements) を候補に含める
+  - `--tier TEXT`: 対象 Tier をカンマ区切りで指定（例: `0,1,2`）
+  - `-o, --out PATH` / `-r, --report PATH`: `--document` 時のみ使用する JSON/Markdown 出力先（既定: `reports/doc_level_risk_report.json`/`.md`）。キーワード単位の結果はキャッシュ DB に記録され `check` レポートに反映されるため、これらは無視される。
 
-### (3) `spec-integrator graph`
+### (3) `spec-integrator llm-judge`
+3つの監査を常にまとめて実行し、判定結果をキャッシュ DB に記録します。専用フラグでどれか一つだけを選ぶことはできません:
+1. `{VERIFY_LLM}` が指定されたサブグラフ（キーワードの定義セクション＋参照セクション）に対する意味監査。
+2. ドキュメント単位の自己一貫性監査（サブグラフをまたぐ矛盾ではなく、1文書内部の矛盾・未裏付け主張を検証）。
+3. Design → Test Spec → Test Code の 3 層トレーサビリティ監査。
+
+```bash
+spec-integrator llm-judge [OPTIONS]
+```
+- **オプション**:
+  - `-c, --config PATH`: 設定ファイルパス
+  - `--backend [openrouter|sakura|ollama|mock]`: LLM バックエンド指定（デフォルト: 設定ファイルの値）
+  - `--model TEXT`: モデル名の明示的オーバーライド
+  - `--component TEXT`: 3 層トレーサビリティ監査の対象を単一コンポーネントに限定
+  - `--max-subgraphs INT`: サブグラフ意味監査で評価する最大サブグラフ数
+  - `--max-documents INT`: ドキュメント単位監査で評価する最大文書数
+  - `--max-targets INT`: 3 層トレーサビリティ監査で評価する最大コンポーネント数
+  - `-a, --all, --exhaustive`: `{VERIFY_LLM}` タグの有無に関わらず全サブグラフ・全文書（Tier 0/Meta 含む全 Tier）を監査し、3 層トレーサビリティ監査も発見できる全コンポーネントを対象にする
+  - `--min-references INT`: サブグラフ意味監査の対象に含める最小参照数。ドキュメント単位監査の候補選定には影響しない
+  - `--include-meta` / `--include-reqs`: ドキュメント単位監査の候補選定に Architecture/Meta Tier・Tier 0 (Requirements) を含める
+  - `--tier TEXT`: ドキュメント単位監査の候補選定を対象 Tier に限定（カンマ区切り、例: `0,1,2`）
+  - `--changed-only`: `spec-consistency.lock` 以降に変更があったセクションに触れるサブグラフのみ意味監査（ドキュメント単位監査・3 層トレーサビリティ監査は常に全候補を対象にするため影響しない）
+  - `--baseline LOCKFILE`: `--changed-only` の差分対象にする lockfile（既定: 作業ツリーの `spec-consistency.lock`）
+
+判定結果はキャッシュ DB に記録され、`check` レポートの「LLM Judge Verdicts」節、「Whole-Document LLM Judge Verdicts」節、「Design -> Test Spec -> Test Code Chain Verdicts」節に反映される。
+
+### (4) `spec-integrator graph`
 DocGraph の抽出・可視化を行います。
 
 ```bash
@@ -313,11 +344,10 @@ spec-integrator graph [OPTIONS]
 ```
 - **オプション**:
   - `-c, --config PATH`: 設定ファイルパス
-  - `-f, --format [mermaid|json|dot]`: 出力フォーマット（デフォルト: `mermaid`）
+  - `-f, --format [mermaid|json]`: 出力フォーマット（デフォルト: `mermaid`）
   - `-o, --out PATH`: 出力先ファイルパス（未指定時は標準出力）
-  - `--subgraph KEYWORD`: 特定キーワードを中心とするサブグラフのみ出力
 
-### (4) `spec-integrator init`
+### (5) `spec-integrator init`
 カレントディレクトリに `spec-integrator.yaml` の雛形を生成します。
 
 ```bash

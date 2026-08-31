@@ -3,44 +3,21 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from spec_integrator.config import Config
-from spec_integrator.parser import ParsedDocument
-from spec_integrator.verifier.static import VerificationIssue
+from spec_integrator.models import (
+    FormalModelResult,
+    ParsedDocument,
+    PropertyResult,
+    VerificationIssue,
+)
 
-# Only a *universal* eventuality expresses progress: AF q means every path reaches q.
-# EF q merely means q is reachable, which an execution that loops forever without ever
-# taking that branch still satisfies. A liveness claim written with EF proves
-# possibility, not inevitability, and is not a progress guarantee.
-#
-# In pyModelChecking, AF/EF/AG/... are *functions*, not classes: at runtime AF(x)
-# is A(F(x)) and EF(x) is E(F(x)). The quantifier therefore has to be read from the
-# parent node, not from the operator's own type name.
+__all__ = ["FormalModelResult", "FormalVerifier", "ModelContractError", "PropertyResult"]
+
 PATH_QUANTIFIERS = ("A", "E")
 EVENTUALITY_OPERATORS = ("F", "U")
 LIVENESS_KINDS = ("liveness", "response", "deadlock_freedom", "progress")
-
-
-@dataclass
-class PropertyResult:
-    name: str
-    kind: str
-    status: str  # "PASS", "FAIL", "VACUOUS", "INVALID"
-    details: str = ""
-
-
-@dataclass
-class FormalModelResult:
-    component: str
-    model_file: str
-    status: str  # "PASS", "FAIL", "ERROR", "NOT_FOUND", "NO_CONTRACT", "VACUOUS"
-    details: str = ""
-    invariants: list[dict] = field(default_factory=list)
-    properties: list[PropertyResult] = field(default_factory=list)
-    backing_documents: list[str] = field(default_factory=list)
-    audit: dict = field(default_factory=dict)
 
 
 class ModelContractError(Exception):

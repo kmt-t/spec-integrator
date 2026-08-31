@@ -2,52 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import mistune
 
 from spec_integrator.config import Config
+from spec_integrator.models import ParsedDocument, ParsedLink, ParsedSection
 
-
-@dataclass
-class ParsedLink:
-    source_file: str
-    source_line: int
-    text: str
-    target_path: str
-    target_anchor: str
-
-
-@dataclass
-class ParsedSection:
-    section_id: str  # "sec:rel_path#Heading"
-    file_path: str
-    heading: str
-    level: int
-    line_start: int
-    line_end: int
-    body_text: str
-    keywords: list[str] = field(default_factory=list)
-    tags: list[str] = field(
-        default_factory=list
-    )  # e.g. {VERIFY_FORMAL}, {VERIFY_LLM}, {VERIFY_WIT}
-    links: list[ParsedLink] = field(default_factory=list)
-
-
-@dataclass
-class ParsedDocument:
-    file_path: str  # relative path POSIX style
-    full_path: Path
-    tier: int | str | None
-    component: str
-    content: str
-    content_hash: str
-    sections: list[ParsedSection] = field(default_factory=list)
-    all_keywords: list[str] = field(default_factory=list)
-    all_tags: list[str] = field(default_factory=list)
-    all_links: list[ParsedLink] = field(default_factory=list)
-    evidence: dict[str, str] = field(default_factory=dict)
+__all__ = ["MarkdownParser", "ParsedDocument", "ParsedLink", "ParsedSection"]
 
 
 class MarkdownParser:

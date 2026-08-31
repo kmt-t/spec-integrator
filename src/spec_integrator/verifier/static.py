@@ -1,22 +1,13 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from pathlib import Path
 
 from spec_integrator.config import Config
 from spec_integrator.graph import Graph
-from spec_integrator.parser import ParsedDocument
+from spec_integrator.models import ParsedDocument, VerificationIssue
 
-
-@dataclass
-class VerificationIssue:
-    gate: str  # "Format", "Traceability", "Hierarchy", "Formal"
-    severity: str  # "ERROR" or "WARNING"
-    file_path: str
-    line: int
-    rule_code: str
-    message: str
+__all__ = ["StaticVerifier", "VerificationIssue"]
 
 
 class StaticVerifier:

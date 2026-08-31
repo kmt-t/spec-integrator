@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import json
-import re
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from spec_integrator.config import Config
-from spec_integrator.judge.semantic_judge import LLMJudge
+from spec_integrator.judge.base import BaseJudge
+from spec_integrator.models import (
+    TestChainReport,
+    TestChainResult,
+    TestChainTarget,
+)
 
 TEST_CHAIN_PROMPT_TEMPLATE = """You are a strict, formal Software Verification and Specification Auditor.
 Your mission is to perform an exhaustive, end-to-end consistency audit across a 3-tier traceability chain:
@@ -69,106 +70,14 @@ Respond ONLY with a valid JSON object in English in the following format:
 """
 
 
-@dataclass
-class TestChainTarget:
+class TestChainJudge(BaseJudge):
     __test__ = False
-    component_name: str
-    design_doc_path: Path
-    test_spec_path: Path
-    test_code_paths: list[Path]
-
-
-@dataclass
-class TestChainResult:
-    __test__ = False
-    component_name: str
-    design_doc: str
-    test_spec: str
-    test_code_files: list[str]
-    status: str  # "PASS", "WARN", "FAIL", "SKIPPED"
-    summary: str
-    issues: list[dict] = field(default_factory=list)
-
-
-@dataclass
-class TestChainReport:
-    __test__ = False
-    results: list[TestChainResult] = field(default_factory=list)
-    total_evaluated: int = 0
-    pass_count: int = 0
-    warn_count: int = 0
-    fail_count: int = 0
-
-    def to_markdown(self, project_name: str = "System Specification") -> str:
-        lines = [
-            f"# {project_name} 設計仕様→テスト仕様→テストコード 一貫性監査レポート (LLM as a Judge)",
-            "",
-            f"- **監査コンポーネント総数**: {self.total_evaluated}",
-            f"- **合格 (PASS)**: {self.pass_count}",
-            f"- **警告 (WARN)**: {self.warn_count}",
-            f"- **不合格 (FAIL)**: {self.fail_count}",
-            "",
-            "---",
-            "",
-            "## 1. 検出された不一致・網羅性課題 (Issues Found)",
-            "",
-        ]
-        issues_found = False
-        for r in self.results:
-            if r.status in ("WARN", "FAIL") or r.issues:
-                issues_found = True
-                badge = "🔴 FAIL" if r.status == "FAIL" else "🟡 WARN"
-                lines.append(f"### {badge}: `{r.component_name}`")
-                lines.append(f"- **設計仕様書**: `{r.design_doc}`")
-                lines.append(f"- **テスト仕様書**: `{r.test_spec}`")
-                lines.append(
-                    f"- **テストコード**: {', '.join(f'`{f}`' for f in r.test_code_files) if r.test_code_files else 'なし'}"
-                )
-                lines.append(f"- **評価サマリー**: {r.summary}")
-                if r.issues:
-                    lines.append("- **検出項目**:")
-                    for iss in r.issues:
-                        sev = iss.get("severity", "WARNING")
-                        layer = iss.get("layer", "")
-                        loc = iss.get("location", "Unknown")
-                        desc = iss.get("description", "")
-                        lines.append(f"  - **[{sev}] [{layer}]** `{loc}`: {desc}")
-                lines.append("")
-
-        if not issues_found:
-            lines.append(
-                "✔ 評価されたすべてのコンポーネントにおいて、設計仕様 $\\to$ テスト仕様 $\\to$ テスト実装コード間の重大な不一致・欠落は検出されませんでした。\n"
-            )
-
-        lines.extend(
-            [
-                "---",
-                "",
-                "## 2. 全コンポーネント評価一覧",
-                "",
-                "| コンポーネント | 判定 | 評価サマリー | 検出Issue数 |",
-                "| :--- | :---: | :--- | :---: |",
-            ]
-        )
-        for r in self.results:
-            badge = (
-                "🟢 PASS"
-                if r.status == "PASS"
-                else ("🟡 WARN" if r.status == "WARN" else "🔴 FAIL")
-            )
-            lines.append(f"| `{r.component_name}` | {badge} | {r.summary} | {len(r.issues)} |")
-        return "\n".join(lines)
-
-
-class TestChainJudge:
-    __test__ = False
-    """
-Evaluates 3-tier end-to-end consistency between Design Spec -> Test Spec -> Test Code
+    """Evaluates 3-tier end-to-end consistency between Design Spec -> Test Spec -> Test Code
     using LLM as a Judge.
-"""
+    """
 
     def __init__(self, config: Config):
-        self.config = config
+        super().__init__(config)
 
     def auto_discover_targets(self, root_dir: Path | None = None) -> list[TestChainTarget]:
         """Automatically pairs design specifications with test specifications and test implementation files."""
@@ -176,11 +85,12 @@ Evaluates 3-tier end-to-end consistency between Design Spec -> Test Spec -> Test
         project_root = root.parent if root.name == "docs" else root
         targets: list[TestChainTarget] = []
         design_files = list(root.glob("components/**/*.md"))
-        # Component map
+
         for df in sorted(design_files):
             if "tests" in df.parts or df.name.endswith("_test_spec.md") or df.name == "FORMAT.md":
                 continue
             comp_stem = df.stem
+
             # Locate matching test specification
             test_spec_file = None
             for p in [df.parent / "tests", df.parent.parent / "tests"]:
@@ -199,22 +109,16 @@ Evaluates 3-tier end-to-end consistency between Design Spec -> Test Spec -> Test
                     test_spec_file = global_cands[0]
                 else:
                     continue
-            # Locate relevant test implementation code generically
-            test_code_files: list[Path] = []
-            tc_cfg = getattr(self.config, "test_chain", None)
-            test_dirs = (
-                tc_cfg.test_dirs
-                if (tc_cfg and tc_cfg.test_dirs)
-                else ["tests", "tests/**", "experiments/**", "scenarios", "scenarios/**"]
-            )
 
+            # Locate relevant test implementation code
+            test_code_files: list[Path] = []
+            test_dirs = self.config.test_chain.test_dirs
             words = [w for w in comp_stem.split("_") if len(w) >= 3]
             search_roots = [project_root] if project_root != root else [root.parent, root]
             for s_root in search_roots:
                 for t_dir_pat in test_dirs:
                     for cand_dir in s_root.glob(t_dir_pat):
                         if cand_dir.is_dir():
-                            # Direct match by component name stem or words
                             test_code_files.extend(list(cand_dir.glob(f"test*{comp_stem}*.py")))
                             test_code_files.extend(list(cand_dir.glob(f"*{comp_stem}*test*.py")))
                             test_code_files.extend(list(cand_dir.glob(f"*{comp_stem}*.py")))
@@ -300,7 +204,6 @@ Evaluates 3-tier end-to-end consistency between Design Spec -> Test Spec -> Test
         for code_path in target.test_code_paths:
             try:
                 code_text = code_path.read_text(encoding="utf-8", errors="replace")
-                # Truncate very long files to first 300 lines for prompt budget
                 lines = code_text.splitlines()
                 if len(lines) > 300:
                     code_text = (
@@ -320,6 +223,7 @@ Evaluates 3-tier end-to-end consistency between Design Spec -> Test Spec -> Test
             test_spec_text=test_spec_text[:8000],
             test_code_text=test_code_text[:8000],
         )
+
         if backend == "mock":
             return TestChainResult(
                 component_name=target.component_name,
@@ -330,21 +234,32 @@ Evaluates 3-tier end-to-end consistency between Design Spec -> Test Spec -> Test
                 summary=f"[MOCK] 3-tier chain (Design -> TestSpec -> TestCode) for '{target.component_name}' is fully verified and consistent.",
             )
 
-        judge_llm = LLMJudge(self.config)
-        try:
-            raw_response = judge_llm._query_llm(prompt, backend, model)
-            parsed = self._parse_json_response(raw_response)
-            status = parsed.get("status", "WARN")
-            summary = parsed.get("summary", "No summary provided by LLM.")
-            issues = parsed.get("issues", [])
+        if backend not in ("sakura", "openrouter", "ollama"):
             return TestChainResult(
                 component_name=target.component_name,
                 design_doc=str(target.design_doc_path),
                 test_spec=str(target.test_spec_path),
                 test_code_files=[str(p) for p in target.test_code_paths],
-                status=status,
-                summary=summary,
-                issues=issues,
+                status="SKIPPED",
+                summary=f"Unknown backend '{backend}'.",
+            )
+
+        try:
+            if backend == "sakura":
+                raw_response = self._call_sakura(prompt, model)
+            elif backend == "openrouter":
+                raw_response = self._call_openrouter(prompt, model)
+            else:
+                raw_response = self._call_ollama(prompt, model)
+            parsed = self._parse_json_response(raw_response)
+            return TestChainResult(
+                component_name=target.component_name,
+                design_doc=str(target.design_doc_path),
+                test_spec=str(target.test_spec_path),
+                test_code_files=[str(p) for p in target.test_code_paths],
+                status=parsed.get("status", "WARN"),
+                summary=parsed.get("summary", "No summary provided by LLM."),
+                issues=parsed.get("issues", []),
             )
         except Exception as e:
             return TestChainResult(
@@ -363,20 +278,16 @@ Evaluates 3-tier end-to-end consistency between Design Spec -> Test Spec -> Test
                 ],
             )
 
-    def _parse_json_response(self, raw_resp: str) -> dict[str, Any]:
-        cleaned = re.sub(r"^```(?:json)?", "", raw_resp.strip(), flags=re.MULTILINE)
-        cleaned = re.sub(r"```$", "", cleaned.strip(), flags=re.MULTILINE).strip()
+    def _parse_json_response(self, raw_resp: str) -> dict:
+        """Never raises: an unparsable response is a WARN result, not a crash."""
         try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError:
-            match = re.search(r"\{[\s\S]*\}", cleaned)
-            if match:
-                try:
-                    return json.loads(match.group(0))
-                except json.JSONDecodeError:
-                    pass
+            return self._extract_json(raw_resp)
+        except (ValueError, LookupError):
             return {
                 "status": "WARN",
                 "summary": f"Could not parse valid JSON from LLM response: {raw_resp[:150]}...",
                 "issues": [],
             }
+
+
+__all__ = ["TestChainJudge", "TestChainReport", "TestChainResult", "TestChainTarget"]

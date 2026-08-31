@@ -44,14 +44,11 @@ def test_reporter(tmp_path):
         )
     ]
     out_md = tmp_path / "report.md"
-    out_json = tmp_path / "graph.json"
     reporter = Reporter(cfg)
     report_text = reporter.generate_markdown_report(
         [doc], graph, issues, formal_res, wit_res, out_md
     )
-    reporter.export_graph_json(graph, out_json)
     assert out_md.exists()
-    assert out_json.exists()
     assert "Spec Verification Report" in report_text
     assert "FMT-01" in report_text
     assert "Formal Verification Results" in report_text

@@ -4,9 +4,9 @@ import re
 from pathlib import Path
 
 from spec_integrator.config import Config
-from spec_integrator.parser import ParsedDocument
-from spec_integrator.verifier.formal import FormalModelResult
-from spec_integrator.verifier.static import VerificationIssue
+from spec_integrator.models import FormalModelResult, ParsedDocument, VerificationIssue
+
+__all__ = ["EvidenceVerifier"]
 
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 URL_RE = re.compile(r"https?://\S+")
