@@ -264,6 +264,20 @@ class TerminologyConfig:
 
 
 @dataclass
+class SemanticTopicConfig:
+    """Configuration for semantic section topic embedding and duplicate/unlinked detection."""
+
+    enabled: bool = True
+    similarity_threshold: float = 0.80
+    unlinked_warning_threshold: float = 0.82
+    duplicate_warning_threshold: float = 0.90
+    embedding_model: str = "multilingual-e5-large"
+    backend: str = "sakura"
+    batch_size: int = 16
+    max_pairs: int = 1000
+
+
+@dataclass
 class TestChainConfig:
     """Configuration for 3-tier design-to-test chain verification."""
 
@@ -298,6 +312,7 @@ class Config:
     consistency: ConsistencyConfig = field(default_factory=ConsistencyConfig)
     test_chain: TestChainConfig = field(default_factory=TestChainConfig)
     terminology: TerminologyConfig = field(default_factory=TerminologyConfig)
+    semantic_topic: SemanticTopicConfig = field(default_factory=SemanticTopicConfig)
     config_dir: Path = field(default_factory=Path.cwd)
 
     def is_excluded(self, file_path: str | Path, docs_root: Path | None = None) -> bool:
@@ -408,6 +423,9 @@ class Config:
             consistency=consistency,
             test_chain=_load_dataclass_from_dict(TestChainConfig, data.get("test_chain")),
             terminology=_load_dataclass_from_dict(TerminologyConfig, data.get("terminology")),
+            semantic_topic=_load_dataclass_from_dict(
+                SemanticTopicConfig, data.get("semantic_topic")
+            ),
             config_dir=config_dir,
         )
 

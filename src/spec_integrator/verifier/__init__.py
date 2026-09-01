@@ -13,6 +13,7 @@ from spec_integrator.verifier.consistency import ConsistencyVerifier
 from spec_integrator.verifier.evidence import EvidenceVerifier
 from spec_integrator.verifier.formal import FormalVerifier
 from spec_integrator.verifier.obligation import ObligationVerifier
+from spec_integrator.verifier.section_verifier import SectionTopicVerifier
 from spec_integrator.verifier.static import StaticVerifier
 from spec_integrator.verifier.wit import WITVerifier
 
@@ -25,6 +26,7 @@ __all__ = [
     "ObligationSummary",
     "ObligationVerifier",
     "PropertyResult",
+    "SectionTopicVerifier",
     "StaticVerifier",
     "SymbolDrift",
     "VerificationIssue",

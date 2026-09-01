@@ -13,12 +13,18 @@ from spec_integrator.judge import RiskAssessor, SemanticJudge, TestChainJudge, T
 from spec_integrator.models import ParsedDocument
 from spec_integrator.parser import MarkdownParser
 from spec_integrator.reporter import Reporter
-from spec_integrator.terminology import TermExtractor, TermIndexer, TermVarianceJudge
+from spec_integrator.terminology import (
+    SectionTopicIndexer,
+    TermExtractor,
+    TermIndexer,
+    TermVarianceJudge,
+)
 from spec_integrator.verifier import (
     ConsistencyVerifier,
     EvidenceVerifier,
     FormalVerifier,
     ObligationVerifier,
+    SectionTopicVerifier,
     StaticVerifier,
     WITVerifier,
 )
@@ -273,6 +279,15 @@ def cmd_check(args):
             f"{len(term_issues)} term variance warning(s) detected."
         )
 
+    # 6.6 Semantic Topic & Duplicate Verification (Sakura AI Embeddings)
+    if getattr(config.semantic_topic, "enabled", True):
+        topic_issues = SectionTopicVerifier(config).verify(db)
+        issues.extend(topic_issues)
+        _log(
+            f"Semantic topic verification finished: "
+            f"{len(topic_issues)} topic alignment/duplicate warning(s) detected."
+        )
+
     # Persist all verification issues
     db.replace_verification_issues(issues)
     db.commit()
@@ -337,6 +352,15 @@ def cmd_sync(args):
         extractor = TermExtractor(config)
         extracted_count = extractor.extract_and_save(documents, db)
         _log(f"✔ Extracted {extracted_count} candidate term(s) into keyword database.")
+
+    if getattr(config.semantic_topic, "enabled", True):
+        _log("Indexing section topic embeddings via Sakura AI...")
+        topic_indexer = SectionTopicIndexer(config)
+        embedded_count = topic_indexer.index_section_embeddings(db)
+        _log(f"✔ Embedded {embedded_count} section(s) via Sakura AI.")
+        _log("Computing cross-document section topic similarities...")
+        sim_count = topic_indexer.compute_and_save_section_similarities(db)
+        _log(f"✔ Recorded {sim_count} semantic topic pair(s) in DB.")
 
     db.close()
     print("  Commit this file. `check` compares against it to find edits that did not propagate.")

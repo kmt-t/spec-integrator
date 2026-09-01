@@ -571,6 +571,33 @@ class DocAuditDB:
                     UNIQUE(term_a, term_b, file_a, file_b)
                 )
             """)
+            # 21. section_embeddings
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS section_embeddings (
+                    section_id TEXT,
+                    file_path TEXT,
+                    heading TEXT,
+                    content_hash TEXT,
+                    embedding_json TEXT,
+                    model TEXT,
+                    updated_at TEXT,
+                    PRIMARY KEY (section_id, model)
+                )
+            """)
+            # 22. section_similarities
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS section_similarities (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    section_a TEXT,
+                    section_b TEXT,
+                    file_a TEXT,
+                    file_b TEXT,
+                    similarity REAL,
+                    model TEXT,
+                    created_at TEXT,
+                    UNIQUE(section_a, section_b, model)
+                )
+            """)
 
     def _now(self) -> str:
         return datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -1255,6 +1282,131 @@ class DocAuditDB:
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM term_variance_judgments ORDER BY confidence DESC")
         return cursor.fetchall()
+
+    def get_unembedded_sections(self, model: str) -> list[tuple[str, str, str, str, str]]:
+        """Returns sections needing embeddings: (section_id, file_path, heading, body_text, content_hash)"""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT s.section_id, s.file_path, s.heading, s.body_text, s.content_hash
+            FROM sections s
+            LEFT JOIN section_embeddings se ON s.section_id = se.section_id AND se.model = ?
+            WHERE se.section_id IS NULL OR se.content_hash != s.content_hash
+            """,
+            (model,),
+        )
+        return [
+            (r["section_id"], r["file_path"], r["heading"], r["body_text"], r["content_hash"])
+            for r in cursor.fetchall()
+        ]
+
+    def insert_section_embeddings(
+        self, embeddings: list[tuple[str, str, str, str, list[float], str]]
+    ) -> None:
+        """(section_id, file_path, heading, content_hash, vector, model)"""
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        rows = [
+            (sec_id, fp, hd, ch, json.dumps(vec), model, now)
+            for sec_id, fp, hd, ch, vec, model in embeddings
+        ]
+        with self.conn:
+            self.conn.executemany(
+                """
+                INSERT OR REPLACE INTO section_embeddings
+                (section_id, file_path, heading, content_hash, embedding_json, model, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+
+    def get_all_section_embeddings(self, model: str) -> list[dict]:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT se.section_id, se.file_path, se.heading, s.line_start, se.embedding_json
+            FROM section_embeddings se
+            JOIN sections s ON se.section_id = s.section_id
+            WHERE se.model = ?
+            """,
+            (model,),
+        )
+        results = []
+        for r in cursor.fetchall():
+            results.append(
+                {
+                    "section_id": r["section_id"],
+                    "file_path": r["file_path"],
+                    "heading": r["heading"],
+                    "line_start": r["line_start"],
+                    "vector": json.loads(r["embedding_json"]),
+                }
+            )
+        return results
+
+    def replace_section_similarities(
+        self, similarities: list[tuple[str, str, str, str, float, str]]
+    ) -> None:
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        rows = [(a, b, fa, fb, sim, model, now) for a, b, fa, fb, sim, model in similarities]
+        with self.conn:
+            self.conn.execute("DELETE FROM section_similarities")
+            self.conn.executemany(
+                """
+                INSERT OR REPLACE INTO section_similarities
+                (section_a, section_b, file_a, file_b, similarity, model, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+
+    def get_section_similarities(
+        self, model: str | None = None, min_similarity: float = 0.80
+    ) -> list[dict]:
+        cursor = self.conn.cursor()
+        if model:
+            cursor.execute(
+                """
+                SELECT section_a, section_b, file_a, file_b, similarity, model
+                FROM section_similarities
+                WHERE model = ? AND similarity >= ?
+                ORDER BY similarity DESC
+                """,
+                (model, min_similarity),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT section_a, section_b, file_a, file_b, similarity, model
+                FROM section_similarities
+                WHERE similarity >= ?
+                ORDER BY similarity DESC
+                """,
+                (min_similarity,),
+            )
+        return [dict(r) for r in cursor.fetchall()]
+
+    def get_section_keywords_map(self) -> dict[str, set[str]]:
+        """Returns {section_id: set_of_keywords} for all sections."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT section_id, keyword FROM keyword_references WHERE section_id IS NOT NULL"
+        )
+        mapping: dict[str, set[str]] = {}
+        for r in cursor.fetchall():
+            mapping.setdefault(r["section_id"], set()).add(r["keyword"])
+        return mapping
+
+    def get_section_info(self, section_id: str) -> dict | None:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT section_id, file_path, heading, line_start, line_end, body_text
+            FROM sections WHERE section_id = ?
+            """,
+            (section_id,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
 
     def close(self):
         self.conn.close()
