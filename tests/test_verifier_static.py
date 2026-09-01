@@ -135,3 +135,36 @@ graph TB
     assert unavailable.severity == "ERROR", (
         "an unvalidatable diagram must fail the gate, not warn and pass"
     )
+
+
+def test_static_verifier_levenshtein_typos(tmp_path):
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    cfg = Config()
+    (docs_dir / "doc_a.md").write_text(
+        """# Doc A
+## セクションA
+ハイパーバイザーのスケジューリング。
+""",
+        encoding="utf-8",
+    )
+    (docs_dir / "doc_b.md").write_text(
+        """# Doc B
+## セクションB
+ハイパーバイザの初期化。
+""",
+        encoding="utf-8",
+    )
+    parser = MarkdownParser(cfg)
+    doc_a = parser.parse_file(docs_dir / "doc_a.md", docs_dir)
+    doc_b = parser.parse_file(docs_dir / "doc_b.md", docs_dir)
+    builder = DocGraphBuilder(cfg)
+    graph = builder.build([doc_a, doc_b], docs_dir)
+
+    verifier = StaticVerifier(cfg)
+    issues = verifier.verify([doc_a, doc_b], graph, docs_dir)
+    typo_issues = [i for i in issues if i.rule_code == "FMT-LEVENSHTEIN-TYPO"]
+    assert len(typo_issues) == 1
+    assert "ハイパーバイザー" in typo_issues[0].message
+    assert "ハイパーバイザ" in typo_issues[0].message
+    assert typo_issues[0].severity == "WARNING"

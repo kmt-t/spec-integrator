@@ -518,6 +518,59 @@ class DocAuditDB:
                     updated_at TEXT
                 )
             """)
+            # 17. term_keywords
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS term_keywords (
+                    term TEXT PRIMARY KEY,
+                    category TEXT,
+                    df INTEGER,
+                    total_occurrences INTEGER,
+                    tf_idf_score REAL,
+                    occurrences_json TEXT,
+                    updated_at TEXT
+                )
+            """)
+            # 18. term_embeddings
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS term_embeddings (
+                    term TEXT,
+                    embedding_json TEXT,
+                    model TEXT,
+                    updated_at TEXT,
+                    PRIMARY KEY (term, model)
+                )
+            """)
+            # 19. term_similarities
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS term_similarities (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    term_a TEXT,
+                    term_b TEXT,
+                    similarity REAL,
+                    status TEXT DEFAULT 'pending',
+                    created_at TEXT,
+                    UNIQUE(term_a, term_b)
+                )
+            """)
+            # 20. term_variance_judgments
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS term_variance_judgments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    term_a TEXT,
+                    term_b TEXT,
+                    file_a TEXT,
+                    file_b TEXT,
+                    line_a INTEGER,
+                    line_b INTEGER,
+                    is_variance INTEGER,
+                    confidence REAL,
+                    preferred_term TEXT,
+                    reason TEXT,
+                    judged_at TEXT,
+                    backend TEXT,
+                    UNIQUE(term_a, term_b, file_a, file_b)
+                )
+            """)
 
     def _now(self) -> str:
         return datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -1035,6 +1088,173 @@ class DocAuditDB:
         if row and row["data_json"]:
             return json.loads(row["data_json"])
         return None
+
+    # ---------------------------------------------------------------------------
+    # Terminology & Variance Persistence
+    # ---------------------------------------------------------------------------
+    def replace_term_keywords(self, terms: list[dict]) -> None:
+        now = self._now()
+        with self.conn:
+            self.conn.execute("DELETE FROM term_keywords")
+            self.conn.executemany(
+                """
+                INSERT INTO term_keywords
+                (term, category, df, total_occurrences, tf_idf_score, occurrences_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        t["term"],
+                        t.get("category", "general"),
+                        t.get("df", 1),
+                        t.get("total_occurrences", 1),
+                        t.get("tf_idf_score", 0.0),
+                        json.dumps(t.get("occurrences", []), ensure_ascii=False),
+                        now,
+                    )
+                    for t in terms
+                ],
+            )
+
+    def get_all_term_keywords(self) -> list[sqlite3.Row]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM term_keywords ORDER BY tf_idf_score DESC")
+        return cursor.fetchall()
+
+    def get_term_keyword(self, term: str) -> sqlite3.Row | None:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM term_keywords WHERE term = ?", (term,))
+        return cursor.fetchone()
+
+    def get_unembedded_terms(self, model: str) -> list[str]:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT tk.term FROM term_keywords tk
+            LEFT JOIN term_embeddings te ON tk.term = te.term AND te.model = ?
+            WHERE te.term IS NULL
+            ORDER BY tk.tf_idf_score DESC
+            """,
+            (model,),
+        )
+        return [row["term"] for row in cursor.fetchall()]
+
+    def insert_term_embeddings(self, embeddings: list[tuple[str, list[float], str]]) -> None:
+        now = self._now()
+        with self.conn:
+            self.conn.executemany(
+                """
+                INSERT OR REPLACE INTO term_embeddings (term, embedding_json, model, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                [(term, json.dumps(vec), model, now) for term, vec, model in embeddings],
+            )
+
+    def get_all_term_embeddings(self, model: str) -> dict[str, list[float]]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT term, embedding_json FROM term_embeddings WHERE model = ?", (model,))
+        result = {}
+        for row in cursor.fetchall():
+            try:
+                result[row["term"]] = json.loads(row["embedding_json"])
+            except Exception:
+                pass
+        return result
+
+    def replace_term_similarities(self, similarities: list[tuple[str, str, float]]) -> None:
+        now = self._now()
+        with self.conn:
+            self.conn.execute("DELETE FROM term_similarities")
+            self.conn.executemany(
+                """
+                INSERT OR IGNORE INTO term_similarities (term_a, term_b, similarity, status, created_at)
+                VALUES (?, ?, ?, 'pending', ?)
+                """,
+                [(a, b, sim, now) for a, b, sim in similarities],
+            )
+
+    def get_term_similarities(self, min_similarity: float = 0.0) -> list[sqlite3.Row]:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM term_similarities WHERE similarity >= ? ORDER BY similarity DESC",
+            (min_similarity,),
+        )
+        return cursor.fetchall()
+
+    def insert_term_variance_judgment(
+        self,
+        term_a: str,
+        term_b: str,
+        file_a: str,
+        file_b: str,
+        line_a: int,
+        line_b: int,
+        is_variance: bool,
+        confidence: float,
+        preferred_term: str,
+        reason: str,
+        backend: str,
+    ) -> None:
+        now = self._now()
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO term_variance_judgments
+                (term_a, term_b, file_a, file_b, line_a, line_b, is_variance, confidence, preferred_term, reason, judged_at, backend)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    term_a,
+                    term_b,
+                    file_a,
+                    file_b,
+                    line_a,
+                    line_b,
+                    1 if is_variance else 0,
+                    confidence,
+                    preferred_term,
+                    reason,
+                    now,
+                    backend,
+                ),
+            )
+            # Mark similarity status as judged
+            self.conn.execute(
+                """
+                UPDATE term_similarities SET status = 'judged'
+                WHERE (term_a = ? AND term_b = ?) OR (term_a = ? AND term_b = ?)
+                """,
+                (term_a, term_b, term_b, term_a),
+            )
+
+    def is_similarity_judged(self, term_a: str, term_b: str) -> bool:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT 1 FROM term_variance_judgments
+            WHERE (term_a = ? AND term_b = ?) OR (term_a = ? AND term_b = ?)
+            LIMIT 1
+            """,
+            (term_a, term_b, term_b, term_a),
+        )
+        return cursor.fetchone() is not None
+
+    def get_high_confidence_variances(self, min_confidence: float = 0.70) -> list[sqlite3.Row]:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM term_variance_judgments
+            WHERE is_variance = 1 AND confidence >= ?
+            ORDER BY confidence DESC
+            """,
+            (min_confidence,),
+        )
+        return cursor.fetchall()
+
+    def get_all_term_variance_judgments(self) -> list[sqlite3.Row]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM term_variance_judgments ORDER BY confidence DESC")
+        return cursor.fetchall()
 
     def close(self):
         self.conn.close()

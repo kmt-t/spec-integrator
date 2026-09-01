@@ -178,6 +178,91 @@ class ProjectConfig:
     exclude_patterns: list[str] = field(default_factory=lambda: ["**/FORMAT.md", "FORMAT.md"])
 
 
+DEFAULT_STOPWORDS = [
+    "これ",
+    "それ",
+    "あれ",
+    "どれ",
+    "ため",
+    "よう",
+    "こと",
+    "もの",
+    "場合",
+    "以下",
+    "以上",
+    "各",
+    "等",
+    "および",
+    "または",
+    "また",
+    "について",
+    "による",
+    "における",
+    "など",
+    "あり",
+    "ある",
+    "する",
+    "され",
+    "れる",
+    "行い",
+    "行う",
+    "定義",
+    "参照",
+    "仕様",
+    "設計",
+    "機能",
+    "概要",
+    "項目",
+    "詳細",
+    "注意",
+    "目的",
+    "構成",
+    "一覧",
+    "全体",
+    "本ドキュメント",
+    "ドキュメント",
+    "ファイル",
+    "セクション",
+    "true",
+    "false",
+    "none",
+    "null",
+    "type",
+    "name",
+    "desc",
+    "note",
+    "図",
+    "表",
+    "値",
+    "型",
+    "例",
+    "下記",
+    "上記",
+    "必須",
+    "任意",
+    "要求",
+    "実装",
+    "確認",
+    "検証",
+    "管理",
+    "処理",
+    "方式",
+    "状態",
+]
+
+
+@dataclass
+class TerminologyConfig:
+    """Configuration for terminology variance detection."""
+
+    enabled: bool = True
+    embedding_model: str = "multilingual-e5-large"
+    similarity_threshold: float = 0.90
+    confidence_threshold: float = 0.70
+    max_terms: int = 500
+    stopwords: list[str] = field(default_factory=lambda: list(DEFAULT_STOPWORDS))
+
+
 @dataclass
 class TestChainConfig:
     """Configuration for 3-tier design-to-test chain verification."""
@@ -212,6 +297,7 @@ class Config:
     obligation: ObligationConfig = field(default_factory=ObligationConfig)
     consistency: ConsistencyConfig = field(default_factory=ConsistencyConfig)
     test_chain: TestChainConfig = field(default_factory=TestChainConfig)
+    terminology: TerminologyConfig = field(default_factory=TerminologyConfig)
     config_dir: Path = field(default_factory=Path.cwd)
 
     def is_excluded(self, file_path: str | Path, docs_root: Path | None = None) -> bool:
@@ -321,6 +407,7 @@ class Config:
             obligation=_load_dataclass_from_dict(ObligationConfig, data.get("obligation")),
             consistency=consistency,
             test_chain=_load_dataclass_from_dict(TestChainConfig, data.get("test_chain")),
+            terminology=_load_dataclass_from_dict(TerminologyConfig, data.get("terminology")),
             config_dir=config_dir,
         )
 

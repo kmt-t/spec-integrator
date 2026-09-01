@@ -13,6 +13,7 @@ from spec_integrator.judge import RiskAssessor, SemanticJudge, TestChainJudge, T
 from spec_integrator.models import ParsedDocument
 from spec_integrator.parser import MarkdownParser
 from spec_integrator.reporter import Reporter
+from spec_integrator.terminology import TermExtractor, TermIndexer, TermVarianceJudge
 from spec_integrator.verifier import (
     ConsistencyVerifier,
     EvidenceVerifier,
@@ -261,6 +262,17 @@ def cmd_check(args):
     issues.extend(consistency_issues)
     _log(f"Consistency verification finished. Found {len(consistency_issues)} issue(s).")
 
+    # 6.5 Terminology Variance Verification
+    if getattr(config.terminology, "enabled", True):
+        term_issues = TermVarianceJudge(config).generate_verification_issues(
+            db, min_confidence=config.terminology.confidence_threshold
+        )
+        issues.extend(term_issues)
+        _log(
+            f"Terminology verification finished: "
+            f"{len(term_issues)} term variance warning(s) detected."
+        )
+
     # Persist all verification issues
     db.replace_verification_issues(issues)
     db.commit()
@@ -313,13 +325,20 @@ def cmd_sync(args):
     lock_path = verifier.write_baseline(documents)
     db.replace_consistency_baseline(baseline)
     db.commit()
-    db.close()
     print(f"✔ Consistency baseline recorded in DB and {_rel_path(lock_path)}")
     print(
         f"  {len(baseline['sections'])} section(s), "
         f"{len(baseline['definitions'])} keyword definition(s), "
         f"{sum(len(v) for v in baseline['references'].values())} reference edge(s)."
     )
+
+    if getattr(config.terminology, "enabled", True):
+        _log("Extracting terminology keywords via TF-IDF...")
+        extractor = TermExtractor(config)
+        extracted_count = extractor.extract_and_save(documents, db)
+        _log(f"✔ Extracted {extracted_count} candidate term(s) into keyword database.")
+
+    db.close()
     print("  Commit this file. `check` compares against it to find edits that did not propagate.")
     sys.exit(0)
 
@@ -415,10 +434,107 @@ def cmd_judge(args):
     # 3-tier traceability chain audit
     tc_report = _run_test_chain_audit(config, db, args)
 
+    # 4. Terminology variance audit (Level 2)
+    if getattr(config.terminology, "enabled", True):
+        term_judge = TermVarianceJudge(config)
+        _log(f"Judging term variance via LLM (backend: {used_backend})...")
+        judged_terms = term_judge.judge_similar_pairs(
+            db,
+            backend=args.backend,
+            model=args.model,
+            max_pairs=getattr(args, "max_term_pairs", 20),
+        )
+        _log(f"Terminology judge finished. {judged_terms} pair(s) evaluated.")
+
     db.close()
     sys.exit(
         1 if (report.fail_count > 0 or doc_report.fail_count > 0 or tc_report.fail_count > 0) else 0
     )
+
+
+def cmd_term_index(args):
+    """Indexes candidate terms with embeddings and calculates pairwise similarities."""
+    config = Config.load(args.config)
+    _documents, _graph, db, _docs_root = _load_and_parse_all(config)
+    indexer = TermIndexer(config)
+    _log("Generating term embeddings via Sakura AI...")
+    new_embeddings = indexer.index_embeddings(db, model=args.model)
+    _log(f"✔ Indexed {new_embeddings} new term embedding(s).")
+    _log("Calculating pairwise similarities for terminology...")
+    sim_pairs = indexer.compute_and_save_similarities(
+        db, model=args.model, min_similarity=args.threshold
+    )
+    _log(f"✔ Identified {sim_pairs} high-similarity term pair(s).")
+    db.close()
+    sys.exit(0)
+
+
+def cmd_term_judge(args):
+    """Judges candidate term pairs for undesirable variance using LLM."""
+    config = Config.load(args.config)
+    _documents, _graph, db, _docs_root = _load_and_parse_all(config)
+    judge = TermVarianceJudge(config)
+    used_backend = args.backend or config.llm_judge.default_backend
+    _log(f"Judging term variance via LLM (backend: {used_backend})...")
+    judged_count = judge.judge_similar_pairs(
+        db, backend=args.backend, model=args.model, max_pairs=args.max_pairs
+    )
+    _log(f"✔ Judged {judged_count} term pair(s) for undesirable variance.")
+    db.close()
+    sys.exit(0)
+
+
+def cmd_term_report(args):
+    """Prints a consolidated report of all detected term variances and typos."""
+    config = Config.load(args.config)
+    documents, _graph, db, _docs_root = _load_and_parse_all(config)
+
+    print("\n" + "=" * 80)
+    print(" Fireball Terminology & Spelling Variance Report")
+    print("=" * 80)
+
+    # 1. Levenshtein static typos (Format Gate)
+    static_verifier = StaticVerifier(config)
+    lev_issues = static_verifier._verify_levenshtein_typos(documents)
+
+    print(
+        f"\n### 1. Static Levenshtein Typos & Variances (Format Gate: {len(lev_issues)} detected)"
+    )
+    if lev_issues:
+        print("-" * 80)
+        for issue in lev_issues:
+            print(f"  [WARN] {issue.file_path}:{issue.line} - {issue.message}")
+    else:
+        print("  ✔ No Levenshtein typos found.")
+
+    # 2. LLM Semantic Variance Judgments
+    variances = db.get_high_confidence_variances(
+        min_confidence=config.terminology.confidence_threshold
+    )
+    conf_thresh = int(config.terminology.confidence_threshold * 100)
+    print(
+        f"\n### 2. LLM Contextual Term Variances (Confidence >= {conf_thresh}%: {len(variances)} detected)"
+    )
+    if variances:
+        print("-" * 80)
+        for r in variances:
+            conf_pct = int(r["confidence"] * 100)
+            pref = r["preferred_term"] or "N/A"
+            print(f"  [WARN] '{r['term_a']}' vs '{r['term_b']}' (Confidence: {conf_pct}%)")
+            print(f"         Location: {r['file_a']}:{r['line_a']} vs {r['file_b']}:{r['line_b']}")
+            print(f"         Preferred: '{pref}'")
+            print(f"         Reason: {r['reason']}\n")
+    else:
+        print("  ✔ No high-confidence contextual term variances recorded in DB.")
+
+    print("=" * 80)
+    total = len(lev_issues) + len(variances)
+    print(
+        f" Total Terminology Warnings: {total} (Static: {len(lev_issues)}, LLM: {len(variances)})"
+    )
+    print("=" * 80 + "\n")
+    db.close()
+    sys.exit(0)
 
 
 def _run_test_chain_audit(config: Config, db: DocAuditDB, args) -> TestChainReport:
@@ -612,6 +728,50 @@ def _add_assess_subparser(subparsers) -> None:
     p.set_defaults(func=cmd_assess)
 
 
+def _add_term_index_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "term-index",
+        help="Index candidate terms with Sakura AI embeddings and link similar terms",
+    )
+    _add_config_arg(p)
+    p.add_argument("--model", help="Embedding model name override")
+    p.add_argument(
+        "--threshold",
+        type=float,
+        default=0.80,
+        help="Cosine similarity threshold for term linking (default: 0.80)",
+    )
+    p.set_defaults(func=cmd_term_index)
+
+
+def _add_term_judge_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "term-judge",
+        help="Judge similar term pairs for undesirable variance using LLM in context",
+    )
+    _add_config_arg(p)
+    p.add_argument(
+        "--backend", choices=["openrouter", "sakura", "ollama", "mock"], help="LLM backend"
+    )
+    p.add_argument("--model", help="LLM model name override")
+    p.add_argument(
+        "--max-pairs",
+        type=int,
+        default=20,
+        help="Max candidate pairs to judge (0 for unlimited).",
+    )
+    p.set_defaults(func=cmd_term_judge)
+
+
+def _add_term_report_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "term-report",
+        help="Print a consolidated report of all static typos and LLM term variances",
+    )
+    _add_config_arg(p)
+    p.set_defaults(func=cmd_term_report)
+
+
 _SUBPARSER_BUILDERS = (
     _add_init_subparser,
     _add_check_subparser,
@@ -619,6 +779,9 @@ _SUBPARSER_BUILDERS = (
     _add_graph_subparser,
     _add_judge_subparser,
     _add_assess_subparser,
+    _add_term_index_subparser,
+    _add_term_judge_subparser,
+    _add_term_report_subparser,
 )
 
 
