@@ -182,9 +182,9 @@ class StaticVerifier:
                             f"'{target_word}' vs '{other_word}' ({other_occ[0]}:{other_occ[1]}).",
                         )
                     )
-                    if len(kata_issues) >= 20:
+                    if len(kata_issues) >= 50:
                         break
-            if len(kata_issues) >= 20:
+            if len(kata_issues) >= 50:
                 break
         issues.extend(kata_issues)
 
@@ -230,9 +230,9 @@ class StaticVerifier:
                             f"'{target_word}' vs '{other_word}' ({other_occ[0]}:{other_occ[1]}).",
                         )
                     )
-                    if len(eng_issues) >= 20:
+                    if len(eng_issues) >= 50:
                         break
-            if len(eng_issues) >= 20:
+            if len(eng_issues) >= 50:
                 break
         issues.extend(eng_issues)
 
