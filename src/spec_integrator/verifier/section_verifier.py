@@ -28,6 +28,25 @@ class SectionTopicVerifier:
         unlinked_threshold = getattr(st_config, "unlinked_warning_threshold", 0.82)
         duplicate_threshold = getattr(st_config, "duplicate_warning_threshold", 0.90)
         model = getattr(st_config, "embedding_model", "multilingual-e5-large")
+        ignored_headings: set[str] = set(
+            getattr(
+                st_config,
+                "ignored_headings",
+                [
+                    "1. 目的と対象範囲",
+                    "2. アーキテクチャ分類",
+                    "3.2 内部ブロック図",
+                    "6.1 性能制約と方策",
+                    "6.2 メモリ制約と方策",
+                    "6.3 安全性制約と方策",
+                    "7.1 性能制約と方策",
+                    "7.2 安全性制約と方策",
+                    "4.1 アルゴリズム",
+                    "4.3 内部シーケンス",
+                    "4.4 内部シーケンス図",
+                ],
+            )
+        )
 
         pairs = db.get_section_similarities(model=model, min_similarity=min_sim)
         if not pairs:
@@ -58,6 +77,15 @@ class SectionTopicVerifier:
             heading_a = info_a["heading"]
             line_a = info_a["line_start"]
             heading_b = info_b["heading"]
+
+            clean_heading_a = heading_a.split("{")[0].strip()
+            clean_heading_b = heading_b.split("{")[0].strip()
+            if clean_heading_a in ignored_headings and clean_heading_b in ignored_headings:
+                continue
+
+            # Skip root document title comparison
+            if info_a.get("level") == 1 and info_b.get("level") == 1:
+                continue
 
             kws_a = keywords_map.get(sec_a_id, set())
             kws_b = keywords_map.get(sec_b_id, set())
