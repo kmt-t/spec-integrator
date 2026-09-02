@@ -334,7 +334,7 @@ def cmd_check(args):
 def cmd_sync(args):
     """Records the current specification state as the consistency baseline in DB."""
     config = Config.load(args.config)
-    documents, _graph, db, _docs_root = _load_and_parse_all(config)
+    documents, _graph, db, _docs_root = _load_and_parse_all(config, clean=True)
     verifier = ConsistencyVerifier(config)
     baseline = verifier.build_baseline(documents)
     lock_path = verifier.write_baseline(documents)
