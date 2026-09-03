@@ -166,7 +166,10 @@ keywords:
     pattern: '^GLOBAL_[A-Za-z0-9_]+$'
     defined_in: 'architecture/document_structure\.md'
   local:
-    pattern: '^[A-Za-z0-9_]+$'
+    # Allows hyphens: hyphenated per-component GOTCHA-ID keywords
+    # (SCHED-GOTCHA-01, DBG-GOTCHA-01, ...) are a common convention and must
+    # be classifiable as local keywords to ever resolve as "defined".
+    pattern: '^[A-Za-z0-9_-]+$'
     defined_in: 'requires/.*\.md'
 
 formal_verification:
