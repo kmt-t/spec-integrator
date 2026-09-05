@@ -8,14 +8,14 @@
 
 - **設定駆動型（Configuration-Driven）**: `spec-integrator.yaml` により、プロジェクト固有のドキュメント階層（Tier 0〜3）やキーワード定義元を明示的に宣言。
 - **トポロジカル・ドキュメント空間（DocGraph）**: ファイル・見出しセクション・要求キーワードを有向グラフ（DAG）としてモデル化し、トレーサビリティや局所サブグラフ（$G_r$）を抽出。
-- **8段階の厳格な品質ゲート (`check` コマンド)**:
-  1. **Format Gate**: Markdown 相対リンクおよび見出しアンカーの存在検証、および `mermaidx`（QuickJS 組み込み JS エンジン）による Mermaid ダイアグラム構文・レンダリング検証
+- **8段階の厳格な品質ゲート (`check-doc` コマンド)**:
+  1. **Format Gate**: Markdown 相対リンクおよび見出しアンカーの存在検証、ファイルリンク形式（ベースネーム表記・プロジェクトルート相対パス強制）、レーベンシュタイン距離による静的タイポ、および `mermaidx`（QuickJS 組み込み JS エンジン）による Mermaid ダイアグラム構文・レンダリング検証
   2. **Traceability Gate**: 未定義キーワード参照・未参照要件の検証
   3. **Hierarchy Gate**: 上位 Tier から下位 Tier への逆流依存（カプセル化違反）の防止
   4. **Formal Gate**: `{VERIFY_FORMAL}` に連動して pyModelChecking モデルを実行し、空虚な命題の排除、および**変異検査（Mutation Testing: `guards=False` で違反状態到達可能の実証による省略偽証明の排除）**
   5. **WIT Gate**: `{VERIFY_WIT}` に連動した WIT (WebAssembly Interface Types) インターフェイス定義の構文・整合性検証
   6. **Evidence Gate**: 「検証済み」「証明完了」「実測値」等の主張が実際の成果物に裏付けられているかの検証
-  7. **Obligation Gate**: リスク評価（`llm-assess`）が要求した検証義務が実施されずに放置されていないかの検証
+  7. **Obligation Gate**: リスク評価（`risk`）が要求した検証義務が実施されずに放置されていないかの検証
   8. **Consistency Gate**: 修正漏れ（値のドリフト・定義変更が参照側へ未伝播）の検知（一貫性ベースライン連動）
 
 ### 検証のサボりを検出する (Anti-Sabotage)
@@ -36,6 +36,8 @@
 | :--- | :--- | :--- | :--- |
 | Format | リンク先の欠落 | `FMT-BROKEN-LINK` | Markdown の相対リンクが指すファイルが実際に存在するかをファイルシステムで確認する。 |
 | Format | 見出しアンカーの欠落 | `FMT-BROKEN-ANCHOR` | リンク先の見出しアンカーが対象ドキュメント内に実在するかを確認する。 |
+| Format | ファイルリンク形式の不備 | `FMT-FILE-LINK-FORMAT` | ファイルリンクの表示テキストがファイル名（basename）であり、リンク先がプロジェクトルート相対パス形式（`../` や絶対パス禁止）であるか、未リンクの生ファイルパスが残存していないかを確認する。 |
+| Format | 静的タイポ・表記揺れの残存 | `FMT-LEVENSHTEIN-TYPO` | 定義済みキーワードや見出しに対するレーベンシュタイン距離に基づく類似度チェックにより、静的な打ち間違いや誤字・脱字を検出する。 |
 | Format | Mermaid 構文のエラー | `FMT-INVALID-MERMAID` | `mermaidx`（組み込み QuickJS）で実際にダイアグラムをパース・レンダリングし、失敗したら ERROR とする（目視ではなく実行結果で判定）。 |
 | Format | Mermaid 検証エンジンの欠落 | `FMT-MERMAID-VALIDATOR-UNAVAILABLE` | `mermaidx` が import できない場合、検証を素通りさせず ERROR にする（ツール不備による無検査状態の禁止）。 |
 | Formal | 形式モデルの欠落 | `FORMAL-MODEL-NOT-FOUND` | `{VERIFY_FORMAL}` を宣言しているのに、対応する `formal/*.py` モデルが存在せず `BACKS` でも紐付いていない。 |
@@ -90,13 +92,14 @@ spec-integrator sync    # 全て伝播・修正したら基準を更新（キャ
 `sync` を `check` に組み込んでいないのは意図的です。自動更新すると、漏れを暴くための記録そのものが消えます。
 co-change の依存関係は `{Keyword}` の既存トレーサビリティから自動導出されるため、宣言の手書きは不要です。
 
-- **リスク評価・検証義務導出 (`llm-assess` コマンド)**:
+- **リスク評価・検証義務導出 (`risk` コマンド)**:
   - 各要求／設計キーワードの複雑度・設計リスクをスコアリングし、リスクが閾値以上のキーワードに `{VERIFY_LLM}` 義務を課す（Obligation Gate が読む）。結果はすべて SQLite DB に永続化。
-- **LLM as a Judge セマンティック監査 (`llm-judge` コマンド)**:
-  - `{VERIFY_LLM}` 指定サブグラフの仕様矛盾・記述漏れ、ドキュメント単位の自己一貫性、設計仕様→テスト仕様→テストコードの
-    3層トレーサビリティを、Sakura / OpenRouter / Ollama バックエンドで常にまとめて診断。
+- **用語表記揺れ検査 (`llm-word` コマンド)**:
+  - TF-IDF による抽出キーワードとエンベディング類似度・LLM による文脈判定を組み合わせ、用語表記揺れやタイポを高精度に検出。
+- **LLM as a Judge セマンティック監査 (`llm-single-review`, `llm-keyword-review` コマンド)**:
+  - 単一ドキュメント・セクションの自己一貫性監査、または高リスクキーワードが連結するドキュメント島全体のトレーサビリティ・意味的矛盾を Sakura / OpenRouter / Ollama バックエンドで診断。
 - **SQLite データベース・監査キャッシュ (`DocAuditDB`)**:
-  - ドキュメント構造の高速クエリ、ハッシュ値による差分検証キャッシュに加え、`llm-assess`/`llm-judge` の判定結果そのもの（中間 JSON レポートは生成しない）を記録する唯一の正本。
+  - ドキュメント構造の高速クエリ、ハッシュ値による差分検証キャッシュに加え、`risk`/`llm-single-review`/`llm-keyword-review` の判定結果そのもの（中間 JSON レポートは生成しない）を記録する唯一の正本。
   - `.spec-integrator/doc_cache.db` は git 管理対象（`.gitattributes` で `*.db binary` 指定）。フレッシュチェックアウトや CI でも、課金を伴う LLM 監査を再実行せずに直近の監査結果を参照できる。
 - **CI / GitHub Actions ファースト**:
   - 検査器リビジョン刻印（Rule R9 準拠）、サマリー表、違反詳細、トレーサビリティマトリクス、リスク評価・LLM 判定結果を集約した単一 Markdown レポートを出力。
@@ -117,26 +120,31 @@ spec-integrator init
 ```
 カレントディレクトリに `spec-integrator.yaml` の雛形が生成されます。
 
-### 3. ドキュメント検証の実行 (CI 標準)
+### 3. ドキュメントDB構築・用語インデックス作成 (`build`)
 ```bash
-# 全 8 ゲートのクリーン検証
-spec-integrator check --config spec-integrator.yaml --report report.md --clean
+spec-integrator build --config spec-integrator.yaml
+```
+
+### 4. ドキュメント自動フォーマット & 静的品質ゲート検証 (`format-doc`, `check-doc`)
+```bash
+# Markdown ドキュメントのフォーマット整形
+spec-integrator format-doc --config spec-integrator.yaml
+
+# 全 8 ゲートの静的クリーン検証 (CI 標準)
+spec-integrator check-doc --config spec-integrator.yaml --report report.md --clean
 ```
 全 8 ゲートがパスすれば終了コード `0`、エラーがあれば `1` となり、`report.md` に詳細レポートが出力されます。
 
-### 4. リスク評価と検証義務の導出
+### 5. ソースコード自動フォーマット & 静的規約・サボり検査 (`format-src`, `check-src`)
 ```bash
-# --backend を省略すると spec-integrator.yaml の llm_judge.default_backend が使われる
-# 結果はキャッシュ DB に記録され、check レポートの Risk Assessment Detail 節に反映される
-spec-integrator llm-assess --config spec-integrator.yaml
+# ソースコード自動整形 (Python: Ruff / C++: clang-format)
+spec-integrator format-src --group all
+
+# ソースコード規約・サボり検証 (TODO放置、空関数、typing.Any完全禁止、変異検査等)
+spec-integrator check-src --group all
 ```
 
-### 5. 一貫性ベースラインの更新
-```bash
-spec-integrator sync --config spec-integrator.yaml
-```
-
-### 6. DocGraph の可視化
+### 6. DocGraph の可視化 (`graph`)
 ```bash
 # Mermaid 形式で標準出力
 spec-integrator graph
@@ -145,12 +153,29 @@ spec-integrator graph
 spec-integrator graph -f json -o graph.json
 ```
 
-### 7. LLM as a Judge 監査の実行
+### 7. リスク評価と検証義務の導出 (`risk`)
 ```bash
 # --backend を省略すると spec-integrator.yaml の llm_judge.default_backend が使われる
-# 要求サブグラフの意味監査、ドキュメント単位の自己一貫性監査、設計仕様→テスト仕様→テストコードの
-# 3層一貫性監査を常に3つとも実行する（どれか一つだけ選ぶオプションは無い）
-spec-integrator llm-judge
+# 結果はキャッシュ DB に記録され、check-doc レポートの Risk Assessment Detail 節に反映される
+spec-integrator risk --config spec-integrator.yaml
+```
+
+### 8. 用語表記揺れチェック (`llm-word`)
+```bash
+# 静的チェックのみ (高速・0コスト)
+spec-integrator llm-word --quick
+
+# エンベディング + LLM 文脈判定込み
+spec-integrator llm-word --backend sakura
+```
+
+### 9. LLM as a Judge セマンティック監査 (`llm-single-review`, `llm-keyword-review`)
+```bash
+# 単一ドキュメント／セクション監査
+spec-integrator llm-single-review --file docs/components/tier1_core/os_scheduler.md
+
+# 高リスクキーワード連結島監査
+spec-integrator llm-keyword-review --keyword SCHED_DISPATCH_TIMEOUT
 ```
 
 ---
