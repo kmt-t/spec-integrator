@@ -212,12 +212,6 @@ class Reporter:
                 f"- Symbols tracked: **{consistency_summary.symbols_tracked}** / "
                 f"drifting: **{len(consistency_summary.drifting_symbols)}**"
             )
-            lines.append(
-                f"- Co-change edges tracked: **{consistency_summary.cochange_tracked}** / "
-                f"stale: **{len(consistency_summary.cochange_stale)}**"
-            )
-            if not consistency_summary.baseline_present:
-                lines.append("- ⚠️ No baseline recorded — run `spec-integrator sync`.")
             lines.append("")
             if consistency_summary.drifting_symbols:
                 lines.append("### 3.6.1 Symbols With Conflicting Values\n")
@@ -227,18 +221,6 @@ class Reporter:
                     for value, locs in sorted(d.values.items()):
                         shown = ", ".join(f"`{l}`" for l in sorted(set(locs))[:4])
                         lines.append(f"| `{d.symbol}` | **{value}** | {shown} |")
-                lines.append("")
-
-            if consistency_summary.cochange_stale:
-                lines.append("### 3.6.2 References Left Behind by an Edit\n")
-                lines.append("| Keyword | Changed Definition | Not Updated |")
-                lines.append("| :--- | :--- | :--- |")
-                for s in consistency_summary.cochange_stale:
-                    definer = s["definer"].replace("sec:", "")
-                    lines.append(
-                        f"| `{{{s['keyword']}}}` | `{definer}` | "
-                        f"`{s['file_path']}` — {s['heading']} |"
-                    )
                 lines.append("")
 
         # 6. WIT Interface Verification Details

@@ -1,0 +1,5 @@
+Identify all factual, safety, or empirical claims made in the prose (e.g., "formally verified", "proven deadlock-free", "zero overhead", specific cycle counts).
+- If a section claims a property is "proven", "verified", or "measured", check whether the text explicitly cites a concrete artifact (formal model file, concept test, WIT interface, or benchmark script).
+- An assertion of a verification without citing the backing artifact is an ERROR (Unbacked Verification Claim).
+- A bare empirical measurement stated as an accomplished fact without an environment or artifact reference is a WARNING (Unsourced Metric / Measurement).
+- Valid design estimates, aspirations, or budgeted targets ("目標", "想定", "target", "budgeted") are acceptable and must not be flagged.

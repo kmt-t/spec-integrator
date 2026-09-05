@@ -27,6 +27,19 @@ class Edge:
 
 
 @dataclass
+class DocumentIsland:
+    """A connected component (island) of documents and sections mutually linked or sharing keywords."""
+
+    island_id: str
+    name: str
+    file_paths: list[str]
+    section_ids: list[str]
+    keywords: list[str]
+    total_sections: int = 0
+    total_docs: int = 0
+
+
+@dataclass
 class Graph:
     nodes: dict[str, Node] = field(default_factory=dict)
     edges: list[Edge] = field(default_factory=list)
@@ -41,6 +54,143 @@ class Graph:
             if e.source == edge.source and e.target == edge.target and e.relation == edge.relation:
                 return
         self.edges.append(edge)
+
+    def extract_document_islands(
+        self, min_size: int = 1, max_cluster_docs: int = 6
+    ) -> list[DocumentIsland]:
+        """Extracts connected clusters (islands) of mutually referencing documents and sections.
+
+        Uses bidirectional links ('links_to') and shared keyword bindings ('defines', 'refers_to')
+        to identify tightly coupled clusters.
+        """
+        # 1. Build adjacency list between file paths
+        doc_files = [n.file_path for n in self.nodes.values() if n.type == "file" and n.file_path]
+        file_adj: dict[str, set[str]] = {f: set() for f in doc_files}
+        file_keywords: dict[str, set[str]] = {f: set() for f in doc_files}
+        file_sections: dict[str, list[str]] = {f: [] for f in doc_files}
+
+        # Index sections by file
+        for n in self.nodes.values():
+            if n.type == "section" and n.file_path in file_sections:
+                file_sections[n.file_path].append(n.id)
+
+        # Keyword to defining/referring files
+        kw_files: dict[str, set[str]] = {}
+        for e in self.edges:
+            if e.relation in ("defines", "refers_to"):
+                kw = e.target.removeprefix("item:")
+                src_node = self.nodes.get(e.source)
+                if src_node and src_node.file_path:
+                    kw_files.setdefault(kw, set()).add(src_node.file_path)
+                    if src_node.file_path in file_keywords:
+                        file_keywords[src_node.file_path].add(kw)
+
+            elif e.relation == "links_to":
+                src_node = self.nodes.get(e.source)
+                tgt_node = self.nodes.get(e.target)
+                if (
+                    src_node
+                    and tgt_node
+                    and src_node.file_path
+                    and tgt_node.file_path
+                    and src_node.file_path != tgt_node.file_path
+                ):
+                    if src_node.file_path in file_adj and tgt_node.file_path in file_adj:
+                        file_adj[src_node.file_path].add(tgt_node.file_path)
+                        file_adj[tgt_node.file_path].add(src_node.file_path)
+
+        # Direct links ('links_to') are strong architectural connections
+        # Keywords are only used to cluster if the keyword connects 2..max_cluster_docs files
+        # Exclude ubiquitous top-level keywords defined in meta documents
+        meta_docs = {
+            "architecture/document_structure.md",
+            "architecture/keyword_dictionary.md",
+            "requires/requirement_list.md",
+        }
+        for _kw, files in kw_files.items():
+            non_meta = {f for f in files if f not in meta_docs}
+            if 2 <= len(non_meta) <= max_cluster_docs:
+                flist = list(non_meta)
+                for i in range(len(flist)):
+                    for j in range(i + 1, len(flist)):
+                        f1, f2 = flist[i], flist[j]
+                        if f1 in file_adj and f2 in file_adj:
+                            file_adj[f1].add(f2)
+                            file_adj[f2].add(f1)
+
+        # 2. Find connected components (BFS/DFS)
+        visited: set[str] = set()
+        islands: list[DocumentIsland] = []
+        island_counter = 1
+
+        # Sort files prioritizing component documents first, then others
+        sorted_files = sorted(
+            doc_files,
+            key=lambda f: (
+                0 if f.startswith("components/") else (1 if f.startswith("specs/") else 2),
+                f,
+            ),
+        )
+
+        for f in sorted_files:
+            if f in visited:
+                continue
+
+            # Traverse cluster up to max_cluster_docs
+            cluster: list[str] = []
+            queue = [f]
+            visited.add(f)
+
+            while queue:
+                curr = queue.pop(0)
+                cluster.append(curr)
+                if len(cluster) >= max_cluster_docs:
+                    break
+
+                # Prioritize neighbors in the same component directory
+                curr_dir = Path(curr).parent
+                neighbors = sorted(
+                    file_adj.get(curr, set()),
+                    key=lambda n: (0 if Path(n).parent == curr_dir else 1, n),
+                )
+                for neighbor in neighbors:
+                    if neighbor not in visited and len(cluster) + len(queue) < max_cluster_docs:
+                        visited.add(neighbor)
+                        queue.append(neighbor)
+
+            if len(cluster) < min_size:
+                continue
+
+            cluster_sorted = sorted(cluster)
+            cluster_sections: list[str] = []
+            cluster_kws: set[str] = set()
+
+            for doc_path in cluster_sorted:
+                cluster_sections.extend(file_sections.get(doc_path, []))
+                cluster_kws.update(file_keywords.get(doc_path, set()))
+
+            # Derive a meaningful island name
+            base_names = [Path(p).stem for p in cluster_sorted]
+            name = (
+                base_names[0]
+                if len(base_names) == 1
+                else f"{base_names[0]} + {len(base_names) - 1} related"
+            )
+
+            islands.append(
+                DocumentIsland(
+                    island_id=f"island_{island_counter:02d}",
+                    name=name,
+                    file_paths=cluster_sorted,
+                    section_ids=cluster_sections,
+                    keywords=sorted(cluster_kws),
+                    total_sections=len(cluster_sections),
+                    total_docs=len(cluster_sorted),
+                )
+            )
+            island_counter += 1
+
+        return sorted(islands, key=lambda isl: isl.total_docs, reverse=True)
 
     def extract_item_subgraphs(self) -> list[dict]:
         """Extracts subgraphs centered around Item/Keyword nodes for LLM Judge or analysis."""

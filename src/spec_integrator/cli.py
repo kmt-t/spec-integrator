@@ -6,15 +6,19 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
+from spec_integrator.anti_sabotage.base import AntiSabotageContext
+from spec_integrator.anti_sabotage.checks import LevenshteinTypoCheck
 from spec_integrator.config import Config
 from spec_integrator.db import DocAuditDB
 from spec_integrator.graph import DocGraphBuilder
-from spec_integrator.judge import RiskAssessor, SemanticJudge, TestChainJudge, TestChainReport
+from spec_integrator.judge import (
+    RiskAssessor,
+    UnifiedReviewEngine,
+)
 from spec_integrator.models import ParsedDocument
 from spec_integrator.parser import MarkdownParser
 from spec_integrator.reporter import Reporter
 from spec_integrator.terminology import (
-    SectionTopicIndexer,
     TermExtractor,
     TermIndexer,
     TermVarianceJudge,
@@ -59,7 +63,9 @@ def _write_text(path: str, content: str) -> Path:
     return out_p
 
 
-def _load_and_parse_all(config: Config, clean: bool = False):
+def _load_and_parse_all(
+    config: Config, clean: bool = False, file_paths: list[str | Path] | None = None
+):
     docs_root = config.get_docs_dir()
     if not docs_root.exists():
         print(f"[Error] Docs directory not found: {docs_root}", flush=True)
@@ -71,8 +77,15 @@ def _load_and_parse_all(config: Config, clean: bool = False):
         db.clear_all()
 
     parser = MarkdownParser(config)
-    all_md = sorted(docs_root.rglob("*.md"))
-    md_files = [f for f in all_md if not config.is_excluded(f, docs_root)]
+    if file_paths:
+        md_files = [
+            Path(f).resolve()
+            for f in file_paths
+            if Path(f).is_file() and not config.is_excluded(f, docs_root)
+        ]
+    else:
+        all_md = sorted(docs_root.rglob("*.md"))
+        md_files = [f for f in all_md if not config.is_excluded(f, docs_root)]
     _log(f"Scanning {len(md_files)} markdown files in {_rel_path(docs_root)}...")
     documents: list[ParsedDocument] = []
     for md_file in md_files:
@@ -210,12 +223,130 @@ obligation:
     sys.exit(0)
 
 
-def cmd_check(args):
+def cmd_build(args):
+    """Parses documents, builds DocGraph, and generates the TF-IDF keyword/term list."""
+    config = Config.load(args.config)
+    _log("=" * 80)
+    _log(f" Spec-Integrator: Building Document Database [{config.project.name}]")
+    _log("=" * 80)
+    clean = getattr(args, "clean", False)
+    files = getattr(args, "files", None)
+    documents, graph, db, docs_root = _load_and_parse_all(
+        config, clean=clean, file_paths=files
+    )
+    _log(f"✔ Parsed {len(documents)} document(s), {len(graph.nodes)} node(s).")
+
+    # TF-IDF Terminology & Keyword Extraction
+    _log("Extracting terminology & keywords via TF-IDF...")
+    extractor = TermExtractor(config)
+    terms_count = extractor.extract_and_save(documents, db)
+    _log(f"✔ Extracted and indexed {terms_count} terms via TF-IDF.")
+
+    db.close()
+    _log("=" * 80)
+    _log(f"✔ Database build complete: {config.get_db_path()}")
+    _log("=" * 80)
+    sys.exit(0)
+
+
+def cmd_format_doc(args):
+    """Applies static formatting (normalizing trailing spaces, newlines) to markdown documents."""
+    config = Config.load(args.config)
+    _log("=" * 80)
+    _log(" Spec-Integrator: Document Formatter (Markdown)")
+    _log("=" * 80)
+    docs_root = config.get_docs_dir()
+    if getattr(args, "files", None):
+        target_files = [Path(f).resolve() for f in args.files if Path(f).is_file()]
+    else:
+        target_files = [
+            f
+            for f in sorted(docs_root.rglob("*.md"))
+            if not config.is_excluded(f, docs_root)
+        ]
+
+    formatted_count = 0
+    for f in target_files:
+        try:
+            content = f.read_text(encoding="utf-8")
+            lines = [line.rstrip() for line in content.splitlines()]
+            new_content = "\n".join(lines) + "\n" if lines else ""
+            if new_content != content:
+                f.write_text(new_content, encoding="utf-8")
+                formatted_count += 1
+        except Exception as e:
+            _log(f"  [Warning] Failed to format {f.name}: {e}")
+
+    _log(
+        f"✔ Document formatting complete. Normalized {formatted_count}/{len(target_files)} file(s)."
+    )
+    sys.exit(0)
+
+
+def cmd_format_src(args):
+    """Applies static formatters (Ruff for Python, clang-format for C++) to source code."""
+    import shutil
+    import subprocess
+    from spec_integrator.source_verifier import SourceVerifier
+
+    config = Config.load(args.config)
+    _log("=" * 80)
+    _log(" Spec-Integrator: Source Formatter")
+    _log("=" * 80)
+
+    verifier = SourceVerifier(config)
+    group = getattr(args, "group", None)
+    group_names = verifier.resolve_group_names(group)
+    explicit_files = getattr(args, "files", None)
+
+    total_formatted = 0
+    for gname in group_names:
+        files = verifier.collect_files_for_group(gname, explicit_files)
+        if not files:
+            continue
+
+        g_cfg = config.source_verification.groups.get(gname)
+        formatters = g_cfg.formatters if g_cfg else ["ruff"]
+
+        for fmt in formatters:
+            if fmt == "ruff":
+                py_files = [str(f) for f in files if f.suffix.lower() == ".py"]
+                if py_files:
+                    _log(f"[{gname}] Formatting {len(py_files)} Python file(s) with Ruff...")
+                    ruff_bin = shutil.which("ruff")
+                    base_cmd = (
+                        [ruff_bin]
+                        if ruff_bin
+                        else ["uv", "run", "--system-certs", "--with", "ruff", "ruff"]
+                    )
+                    subprocess.run([*base_cmd, "check", "--fix", *py_files], check=False)
+                    subprocess.run([*base_cmd, "format", *py_files], check=False)
+                    total_formatted += len(py_files)
+            elif fmt == "clang-format":
+                cpp_files = [
+                    str(f)
+                    for f in files
+                    if f.suffix.lower() in (".hxx", ".cxx", ".c", ".h", ".cpp")
+                ]
+                cf_bin = shutil.which("clang-format")
+                if cpp_files and cf_bin:
+                    _log(f"[{gname}] Formatting {len(cpp_files)} C/C++ file(s) with clang-format...")
+                    subprocess.run([cf_bin, "-i", *cpp_files], check=False)
+                    total_formatted += len(cpp_files)
+
+    _log(f"✔ Source formatting complete across {len(group_names)} group(s).")
+    sys.exit(0)
+
+
+def cmd_check_doc(args):
     config = Config.load(args.config)
     _log("=" * 80)
     _log(f" Spec-Integrator: Document Verification Pipeline [{config.project.name}]")
     _log("=" * 80)
-    documents, graph, db, docs_root = _load_and_parse_all(config, clean=args.clean)
+    files = getattr(args, "files", None)
+    documents, graph, db, docs_root = _load_and_parse_all(
+        config, clean=args.clean, file_paths=files
+    )
     _log(f"✔ Parsed {len(documents)} document(s), {len(graph.nodes)} graph node(s).")
 
     # 1. Static Verifications (Format, Traceability, Hierarchy)
@@ -334,40 +465,44 @@ def cmd_check(args):
     sys.exit(0)
 
 
-def cmd_sync(args):
-    """Records the current specification state as the consistency baseline in DB."""
+def cmd_check_src(args):
+    """Verifies source code against rules, anti-sabotage checks, and group configurations."""
+    from spec_integrator.source_verifier import SourceVerifier
+
     config = Config.load(args.config)
-    documents, _graph, db, _docs_root = _load_and_parse_all(config, clean=True)
-    verifier = ConsistencyVerifier(config)
-    baseline = verifier.build_baseline(documents)
-    lock_path = verifier.write_baseline(documents)
-    db.replace_consistency_baseline(baseline)
-    db.commit()
-    print(f"✔ Consistency baseline recorded in DB and {_rel_path(lock_path)}")
-    print(
-        f"  {len(baseline['sections'])} section(s), "
-        f"{len(baseline['definitions'])} keyword definition(s), "
-        f"{sum(len(v) for v in baseline['references'].values())} reference edge(s)."
-    )
+    _log("=" * 80)
+    _log(" Spec-Integrator: Source Verification (Anti-Sabotage & Language Rules)")
+    _log("=" * 80)
 
-    if getattr(config.terminology, "enabled", True):
-        _log("Extracting terminology keywords via TF-IDF...")
-        extractor = TermExtractor(config)
-        extracted_count = extractor.extract_and_save(documents, db)
-        _log(f"✔ Extracted {extracted_count} candidate term(s) into keyword database.")
+    verifier = SourceVerifier(config)
+    group = getattr(args, "group", None)
+    group_names = verifier.resolve_group_names(group)
+    explicit_files = getattr(args, "files", None)
 
-    if getattr(config.semantic_topic, "enabled", True):
-        _log("Indexing section topic embeddings via Sakura AI...")
-        topic_indexer = SectionTopicIndexer(config)
-        embedded_count = topic_indexer.index_section_embeddings(db)
-        _log(f"✔ Embedded {embedded_count} section(s) via Sakura AI.")
-        _log("Computing cross-document section topic similarities...")
-        sim_count = topic_indexer.compute_and_save_section_similarities(db)
-        _log(f"✔ Recorded {sim_count} semantic topic pair(s) in DB.")
+    has_errors = False
+    total_issues = 0
 
-    db.close()
-    print("  Commit this file. `check` compares against it to find edits that did not propagate.")
-    sys.exit(0)
+    for gname in group_names:
+        files = verifier.collect_files_for_group(gname, explicit_files)
+        _log(f"\n>>> Checking group '{gname}' ({len(files)} file(s))...")
+        res = verifier.verify_group(gname, files)
+        total_issues += len(res.issues)
+        if res.issues:
+            for iss in res.issues:
+                prefix = "❌" if iss.severity == "ERROR" else "⚠️"
+                print(f"  {prefix} [{iss.rule}] {iss.file_path}:{iss.line} - {iss.message}")
+            if res.status == "FAIL":
+                has_errors = True
+        else:
+            print(f"  ✔ Group '{gname}': All checks passed.")
+
+    print("\n" + "=" * 80)
+    if has_errors:
+        print("❌ SOURCE VERIFICATION FAILED.")
+        sys.exit(1)
+    else:
+        print(f"✅ ALL SOURCE CHECKS PASSED ({total_issues} warnings).")
+        sys.exit(0)
 
 
 def cmd_graph(args):
@@ -389,141 +524,260 @@ def cmd_graph(args):
     sys.exit(0)
 
 
-def _resolve_changed_sections(config: Config, documents, args, db) -> set[str]:
-    cv = ConsistencyVerifier(config)
-    lock_path = (
-        Path(args.baseline) if args.baseline else config.resolve_path(config.consistency.lockfile)
-    )
-    baseline = cv.load_lock(lock_path)
-    if baseline is None:
-        print(
-            f"❌ --changed-only requires a consistency baseline. "
-            f"Run 'spec-integrator sync' first to create {lock_path}, "
-            f"or pass --baseline pointing at one."
-        )
-        db.close()
-        sys.exit(2)
-
-    old_secs = baseline.get("sections", {})
-    new_secs = cv.build_baseline(documents)["sections"]
-    changed_sections = {sid for sid, h in new_secs.items() if old_secs.get(sid) != h}
-    print(f"  ({len(changed_sections)} section(s) changed vs. {lock_path})")
-    return changed_sections
-
-
-def cmd_judge(args):
+def cmd_risk(args):
+    """Evaluates requirement/design keywords complexity and design risk via LLM."""
     config = Config.load(args.config)
     documents, graph, db, _docs_root = _load_and_parse_all(config)
     subgraphs = graph.extract_item_subgraphs()
-    judge = SemanticJudge(config)
-    changed_sections = (
-        _resolve_changed_sections(config, documents, args, db) if args.changed_only else None
-    )
-
+    assessor = RiskAssessor(config)
     used_backend = args.backend or config.llm_judge.default_backend
-    print(f"Running LLM as a Judge on candidate subgraphs (backend: {used_backend})...")
-    report = judge.judge_subgraphs(
+    print(f"Running Content Complexity & Risk Assessment (backend: {used_backend})...")
+    report = assessor.assess_subgraphs(
         subgraphs,
         documents,
         backend=args.backend,
         model=args.model,
-        max_subgraphs=args.max_subgraphs,
-        exhaustive=args.exhaustive or args.changed_only,
-        min_references=args.min_references,
-        changed_sections=changed_sections,
-    )
-    db.replace_judge_results([asdict(r) for r in report.results], used_backend)
-    db.set_assessed_doc_hashes("judge", {d.file_path: d.content_hash for d in documents})
-    db.commit()
-
-    print(
-        f"Judge finished. {report.total_evaluated} evaluated. "
-        f"PASS: {report.pass_count}, WARN: {report.warn_count}, FAIL: {report.fail_count}"
-    )
-
-    # Whole-document self-consistency audit
-    print(f"Running LLM as a Judge on whole documents (backend: {used_backend})...")
-    doc_report = judge.judge_documents(
-        documents,
-        backend=args.backend,
-        model=args.model,
-        max_documents=args.max_documents,
+        max_keywords=args.max_keywords,
         exhaustive=args.exhaustive,
+        min_references=args.min_references,
     )
-    db.replace_document_judge_results([asdict(r) for r in doc_report.results], used_backend)
-    db.set_assessed_doc_hashes("document_judge", {d.file_path: d.content_hash for d in documents})
+
+    db.replace_risk_assessments([asdict(a) for a in report.assessments], used_backend)
+    db.set_assessed_doc_hashes("risk_assessment", {d.file_path: d.content_hash for d in documents})
     db.commit()
-    print(
-        f"Document judge finished. {doc_report.total_evaluated} evaluated. "
-        f"PASS: {doc_report.pass_count}, WARN: {doc_report.warn_count}, FAIL: {doc_report.fail_count}"
-    )
+    db.close()
 
-    # 3-tier traceability chain audit
-    tc_report = _run_test_chain_audit(config, db, args)
+    print(f"\nAssessment finished. Evaluated {report.total_evaluated} keyword(s).")
+    print(f"  - High risk (>= {config.obligation.risk_threshold}/5): {report.high_risk_count}")
+    print("Scores recorded in the cache DB; see 'check' report § Risk Assessment Detail.")
+    sys.exit(0)
 
-    # 4. Terminology variance audit (Level 2)
-    if getattr(config.terminology, "enabled", True):
-        term_judge = TermVarianceJudge(config)
-        _log(f"Judging term variance via LLM (backend: {used_backend})...")
-        judged_terms = term_judge.judge_similar_pairs(
-            db,
-            backend=args.backend,
-            model=args.model,
-            max_pairs=getattr(args, "max_term_pairs", 20),
+
+def cmd_llm_single_review(args):
+    """Reviews single documents section-by-section and the connected islands of their high-risk keywords."""
+    config = Config.load(args.config)
+    reviewer = UnifiedReviewEngine(config)
+
+    if args.list_checks:
+        all_checks = reviewer.get_effective_checks("single", include_disabled=True)
+        print("=" * 80)
+        print(" Available LLM Single Review Checks")
+        print("=" * 80)
+        for c in all_checks:
+            status = "ENABLED " if c.enabled else "DISABLED"
+            print(f"  [{status}] {c.id:<26} ({c.severity:<7}) - {c.name}")
+        sys.exit(0)
+
+    documents, graph, db, _docs_root = _load_and_parse_all(config)
+    backend = args.backend or config.llm_judge.default_backend
+    model = args.model
+    selected_checks = [args.check] if args.check else None
+    high_risk_threshold = getattr(args, "risk_threshold", None) or config.obligation.risk_threshold
+
+    if args.file:
+        target_norm = str(args.file).replace("\\", "/").removeprefix("./").removeprefix("docs/")
+        target_docs = [
+            d for d in documents if d.file_path == target_norm or d.file_path.endswith(target_norm)
+        ]
+        if not target_docs:
+            print(f"[Error] Document not found: {args.file}")
+            db.close()
+            sys.exit(1)
+    elif args.all:
+        target_docs = documents
+    else:
+        print("Please specify a document target: --file <path> or --all.")
+        db.close()
+        sys.exit(1)
+
+    risk_records = {r["keyword"]: r.get("risk_score", 0) for r in db.get_risk_assessments()}
+    islands = graph.extract_document_islands(min_size=1)
+
+    has_failures = False
+    for doc in target_docs:
+        print("\n" + "=" * 80)
+        print(f" Auditing Document: '{doc.file_path}' (backend: {backend})")
+        print("=" * 80)
+
+        # 1. Section-by-section review
+        print(f"\n>>> [1/2] Reviewing sections of '{doc.file_path}'...", flush=True)
+        res_single = reviewer.review_single_document(
+            doc, backend=backend, model=model, check_ids=selected_checks, dry_run=args.dry_run
         )
-        _log(f"Terminology judge finished. {judged_terms} pair(s) evaluated.")
+        print(f"Result: {res_single.status} - {res_single.summary}")
+        if res_single.issues:
+            for iss in res_single.issues:
+                cid = iss.get("check_id", "CHECK")
+                print(
+                    f"  [{iss.get('severity', 'WARNING')}] [{cid}] {iss.get('location', '')}: {iss.get('description', '')}"
+                )
+        if res_single.status == "FAIL":
+            has_failures = True
+
+        # 2. Island review for related high-risk keywords
+        doc_kws = set(doc.all_keywords)
+        high_risk_kws = [kw for kw in doc_kws if risk_records.get(kw, 0) >= high_risk_threshold]
+
+        related_islands = []
+        for isl in islands:
+            if doc.file_path in isl.file_paths and isl.total_docs >= 2:
+                if isl not in related_islands:
+                    related_islands.append(isl)
+
+        if related_islands:
+            print(
+                f"\n>>> [2/2] Reviewing {len(related_islands)} connected island(s) related to '{doc.file_path}' (high-risk kws: {len(high_risk_kws)})...",
+                flush=True,
+            )
+            for idx, isl in enumerate(related_islands, start=1):
+                print(
+                    f"  [{idx}/{len(related_islands)}] Auditing Island '{isl.name}' ({isl.total_docs} docs)...",
+                    flush=True,
+                )
+                res_isl = reviewer.review_document_island(
+                    isl,
+                    documents,
+                    backend=backend,
+                    model=model,
+                    check_ids=selected_checks,
+                    dry_run=args.dry_run,
+                )
+                print(f"       -> Status: {res_isl.status} ({res_isl.summary[:70]})")
+                if res_isl.issues:
+                    for iss in res_isl.issues:
+                        cid = iss.get("check_id", "CHECK")
+                        print(
+                            f"          [{iss.get('severity', 'WARNING')}] [{cid}] {iss.get('location', '')}: {iss.get('description', '')}"
+                        )
+                if res_isl.status == "FAIL":
+                    has_failures = True
+        else:
+            print("\n>>> [2/2] No connected multi-document islands found for this document.")
 
     db.close()
-    sys.exit(
-        1 if (report.fail_count > 0 or doc_report.fail_count > 0 or tc_report.fail_count > 0) else 0
+    sys.exit(1 if has_failures else 0)
+
+
+def cmd_llm_keyword_review(args):
+    """Reviews connected document islands containing high-risk keywords."""
+    config = Config.load(args.config)
+    reviewer = UnifiedReviewEngine(config)
+
+    if args.list_checks:
+        all_checks = reviewer.get_effective_checks("cluster", include_disabled=True)
+        print("=" * 80)
+        print(" Available LLM Keyword Island Review Checks")
+        print("=" * 80)
+        for c in all_checks:
+            status = "ENABLED " if c.enabled else "DISABLED"
+            print(f"  [{status}] {c.id:<26} ({c.severity:<7}) - {c.name}")
+        sys.exit(0)
+
+    documents, graph, db, _docs_root = _load_and_parse_all(config)
+    backend = args.backend or config.llm_judge.default_backend
+    model = args.model
+    selected_checks = [args.check] if args.check else None
+    min_risk = args.min_risk if args.min_risk is not None else config.obligation.risk_threshold
+
+    if args.keyword:
+        target_keywords = [args.keyword]
+        print(f"Targeting specified keyword: '{args.keyword}'")
+    else:
+        risk_records = db.get_risk_assessments()
+        target_keywords = [r["keyword"] for r in risk_records if r.get("risk_score", 0) >= min_risk]
+        print(
+            f"Found {len(target_keywords)} high-risk keyword(s) with risk >= {min_risk} in cache DB."
+        )
+
+    if not target_keywords:
+        print(
+            "No high-risk keywords found to review. Run 'spec-integrator risk' first, or specify '--keyword <KW>'."
+        )
+        db.close()
+        sys.exit(0)
+
+    islands = graph.extract_document_islands(min_size=2)
+    kw_files = set()
+    for kw in target_keywords:
+        for doc in documents:
+            if kw in doc.all_keywords:
+                kw_files.add(doc.file_path)
+
+    target_islands = [isl for isl in islands if any(f in kw_files for f in isl.file_paths)]
+    print(
+        f"Found {len(target_islands)} connected document island(s) associated with target keywords."
     )
 
+    has_failures = False
+    for idx, isl in enumerate(target_islands, start=1):
+        print(
+            f"\n[{idx}/{len(target_islands)}] Auditing Island '{isl.name}' ({isl.total_docs} docs, {isl.total_sections} sections)...",
+            flush=True,
+        )
+        res = reviewer.review_document_island(
+            isl,
+            documents,
+            backend=backend,
+            model=model,
+            check_ids=selected_checks,
+            dry_run=args.dry_run,
+        )
+        print(f"       -> Status: {res.status} ({res.summary[:70]})")
+        if res.issues:
+            for iss in res.issues:
+                cid = iss.get("check_id", "CHECK")
+                print(
+                    f"          [{iss.get('severity', 'WARNING')}] [{cid}] {iss.get('location', '')}: {iss.get('description', '')}"
+                )
+        if res.status == "FAIL":
+            has_failures = True
 
-def cmd_term_index(args):
-    """Indexes candidate terms with embeddings and calculates pairwise similarities."""
+    db.close()
+    sys.exit(1 if has_failures else 0)
+
+
+def cmd_llm_word(args):
+    """Executes terminology embedding, pairwise similarity indexing, LLM variance judgment, and report."""
     config = Config.load(args.config)
-    _documents, _graph, db, _docs_root = _load_and_parse_all(config)
+    documents, _graph, db, _docs_root = _load_and_parse_all(config)
+
     indexer = TermIndexer(config)
-    _log("Generating term embeddings via Sakura AI...")
+    _log(">>> [1/3] Generating term embeddings via Sakura AI...")
     new_embeddings = indexer.index_embeddings(db, model=args.model)
     _log(f"✔ Indexed {new_embeddings} new term embedding(s).")
-    _log("Calculating pairwise similarities for terminology...")
+
+    _log(">>> [2/3] Calculating pairwise similarities for terminology...")
     sim_pairs = indexer.compute_and_save_similarities(
         db, model=args.model, min_similarity=args.threshold
     )
     _log(f"✔ Identified {sim_pairs} high-similarity term pair(s).")
-    db.close()
-    sys.exit(0)
 
-
-def cmd_term_judge(args):
-    """Judges candidate term pairs for undesirable variance using LLM."""
-    config = Config.load(args.config)
-    _documents, _graph, db, _docs_root = _load_and_parse_all(config)
-    judge = TermVarianceJudge(config)
-    used_backend = args.backend or config.llm_judge.default_backend
-    _log(f"Judging term variance via LLM (backend: {used_backend})...")
-    judged_count = judge.judge_similar_pairs(
-        db, backend=args.backend, model=args.model, max_pairs=args.max_pairs
-    )
-    _log(f"✔ Judged {judged_count} term pair(s) for undesirable variance.")
-    db.close()
-    sys.exit(0)
-
-
-def cmd_term_report(args):
-    """Prints a consolidated report of all detected term variances and typos."""
-    config = Config.load(args.config)
-    documents, _graph, db, _docs_root = _load_and_parse_all(config)
+    if not args.quick:
+        judge = TermVarianceJudge(config)
+        used_backend = args.backend or config.llm_judge.default_backend
+        _log(
+            f">>> [3/3] Judging term variance via LLM (backend: {used_backend}, max: {args.max_pairs} pairs)..."
+        )
+        judged_count = judge.judge_similar_pairs(
+            db, backend=args.backend, model=args.model, max_pairs=args.max_pairs
+        )
+        _log(f"✔ Judged {judged_count} term pair(s) for undesirable variance.")
+    else:
+        _log(">>> [3/3] Skipping LLM variance judgment (--quick specified).")
 
     print("\n" + "=" * 80)
     print(" Fireball Terminology & Spelling Variance Report")
     print("=" * 80)
 
     # 1. Levenshtein static typos (Format Gate)
-    static_verifier = StaticVerifier(config)
-    lev_issues = static_verifier._verify_levenshtein_typos(documents)
-
+    ctx = AntiSabotageContext(
+        documents=documents,
+        graph=_graph,
+        docs_root=_docs_root,
+        config=config,
+        db=db,
+    )
+    lev_issues = LevenshteinTypoCheck().check(ctx)
     print(
         f"\n### 1. Static Levenshtein Typos & Variances (Format Gate: {len(lev_issues)} detected)"
     )
@@ -564,67 +818,6 @@ def cmd_term_report(args):
     sys.exit(0)
 
 
-def _run_test_chain_audit(config: Config, db: DocAuditDB, args) -> TestChainReport:
-    test_judge = TestChainJudge(config)
-    all_targets = test_judge.auto_discover_targets()
-    if args.component:
-        targets = [
-            t
-            for t in all_targets
-            if t.component_name == args.component or args.component in t.component_name
-        ]
-        if not targets:
-            print(
-                f"[Error] No matching component found for '{args.component}'. "
-                f"Available: {', '.join(t.component_name for t in all_targets)}"
-            )
-            db.close()
-            sys.exit(1)
-    else:
-        targets = all_targets
-
-    max_targets = 0 if args.exhaustive else args.max_targets
-    backend = args.backend or config.llm_judge.default_backend
-    report = test_judge.judge_targets(
-        targets, backend=backend, model=args.model, max_targets=max_targets
-    )
-
-    db.replace_test_chain_results([asdict(r) for r in report.results], backend)
-    db.commit()
-
-    print("\n" + report.to_markdown(project_name=config.project.name or "System Specification"))
-    print("Verdicts recorded in the cache DB; see 'check' report § Test Chain Verdicts.")
-    return report
-
-
-def cmd_assess(args):
-    config = Config.load(args.config)
-    documents, graph, db, _docs_root = _load_and_parse_all(config)
-    subgraphs = graph.extract_item_subgraphs()
-    assessor = RiskAssessor(config)
-    used_backend = args.backend or config.llm_judge.default_backend
-    print(f"Running Content Complexity & Risk Assessment (backend: {used_backend})...")
-    report = assessor.assess_subgraphs(
-        subgraphs,
-        documents,
-        backend=args.backend,
-        model=args.model,
-        max_keywords=args.max_keywords,
-        exhaustive=args.exhaustive,
-        min_references=args.min_references,
-    )
-
-    db.replace_risk_assessments([asdict(a) for a in report.assessments], used_backend)
-    db.set_assessed_doc_hashes("risk_assessment", {d.file_path: d.content_hash for d in documents})
-    db.commit()
-    db.close()
-
-    print(f"\nAssessment finished. Evaluated {report.total_evaluated} keyword(s).")
-    print(f"  - High risk (>= {config.obligation.risk_threshold}/5): {report.high_risk_count}")
-    print("Scores recorded in the cache DB; see 'check' report § Risk Assessment Detail.")
-    sys.exit(0)
-
-
 # ---------------------------------------------------------------------------
 # CLI Argument Parsers
 # ---------------------------------------------------------------------------
@@ -639,20 +832,58 @@ def _add_init_subparser(subparsers) -> None:
     p.set_defaults(func=cmd_init)
 
 
-def _add_check_subparser(subparsers) -> None:
-    p = subparsers.add_parser("check", help="Run static & formal document verification pipeline")
-    _add_config_arg(p)
-    p.add_argument("-r", "--report", default="spec_report.md", help="Markdown report output path")
-    p.add_argument("--clean", action="store_true", help="Clear cache DB and run clean audit")
-    p.set_defaults(func=cmd_check)
-
-
-def _add_sync_subparser(subparsers) -> None:
+def _add_build_subparser(subparsers) -> None:
     p = subparsers.add_parser(
-        "sync", help="Record the current spec state as the consistency baseline (lockfile)"
+        "build", help="Build document database and TF-IDF keyword/terminology index"
     )
     _add_config_arg(p)
-    p.set_defaults(func=cmd_sync)
+    p.add_argument("--clean", action="store_true", help="Clear cache DB and rebuild cleanly")
+    p.add_argument("files", nargs="*", help="Optional list of markdown documents to index")
+    p.set_defaults(func=cmd_build)
+
+
+def _add_format_doc_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "format-doc", help="Format markdown documents (trailing whitespace, newlines)"
+    )
+    _add_config_arg(p)
+    p.add_argument("files", nargs="*", help="Optional list of markdown documents to format")
+    p.set_defaults(func=cmd_format_doc)
+
+
+def _add_check_doc_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "check-doc", help="Run static document verification & 8 quality gates"
+    )
+    _add_config_arg(p)
+    p.add_argument("-r", "--report", default="reports/doc_report.md", help="Markdown report output path")
+    p.add_argument("--clean", action="store_true", help="Clear cache DB and run clean audit")
+    p.add_argument("files", nargs="*", help="Optional list of markdown documents to verify")
+    p.set_defaults(func=cmd_check_doc)
+
+
+def _add_format_src_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "format-src", help="Format source code (Ruff for Python, clang-format for C++)"
+    )
+    _add_config_arg(p)
+    p.add_argument(
+        "-g", "--group", help="Source group to format (cpp, python, concepts, formal, pysim, all)"
+    )
+    p.add_argument("files", nargs="*", help="Optional list of source files to format")
+    p.set_defaults(func=cmd_format_src)
+
+
+def _add_check_src_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "check-src", help="Verify source code (anti-sabotage, language rules, test execution)"
+    )
+    _add_config_arg(p)
+    p.add_argument(
+        "-g", "--group", help="Source group to verify (cpp, python, concepts, formal, pysim, all)"
+    )
+    p.add_argument("files", nargs="*", help="Optional list of source files to verify")
+    p.set_defaults(func=cmd_check_src)
 
 
 def _add_graph_subparser(subparsers) -> None:
@@ -665,66 +896,9 @@ def _add_graph_subparser(subparsers) -> None:
     p.set_defaults(func=cmd_graph)
 
 
-def _add_judge_subparser(subparsers) -> None:
+def _add_risk_subparser(subparsers) -> None:
     p = subparsers.add_parser(
-        "llm-judge",
-        help="Run LLM as a Judge on semantic subgraphs, whole documents, and 3-tier test chain",
-    )
-    _add_config_arg(p)
-    p.add_argument(
-        "--backend", choices=["openrouter", "sakura", "ollama", "mock"], help="LLM backend"
-    )
-    p.add_argument("--model", help="LLM model name override")
-    p.add_argument(
-        "--component",
-        help="Limit 3-tier chain audit to one component (e.g. 'jit_compiler').",
-    )
-    p.add_argument(
-        "--max-subgraphs",
-        type=int,
-        default=10,
-        help="Max requirement subgraphs to evaluate (0 for unlimited).",
-    )
-    p.add_argument(
-        "--max-documents",
-        type=int,
-        default=15,
-        help="Max whole documents to evaluate (0 for unlimited).",
-    )
-    p.add_argument(
-        "--max-targets",
-        type=int,
-        default=10,
-        help="Max components in 3-tier test chain audit (0 for unlimited).",
-    )
-    p.add_argument(
-        "-a",
-        "--exhaustive",
-        action="store_true",
-        help="Exhaustive audit across all subgraphs, documents, and test chains.",
-    )
-    p.add_argument(
-        "--min-references",
-        type=int,
-        default=1,
-        help="Minimum referencing sections required to include a subgraph (default: 1).",
-    )
-    p.add_argument(
-        "--changed-only",
-        action="store_true",
-        help="Only audit subgraphs touching a section that changed since last sync.",
-    )
-    p.add_argument(
-        "--baseline",
-        metavar="LOCKFILE",
-        help="Lockfile to diff against for --changed-only.",
-    )
-    p.set_defaults(func=cmd_judge)
-
-
-def _add_assess_subparser(subparsers) -> None:
-    p = subparsers.add_parser(
-        "llm-assess",
+        "risk",
         help="Score requirement/design keywords complexity and design risk via LLM",
     )
     _add_config_arg(p)
@@ -752,63 +926,132 @@ def _add_assess_subparser(subparsers) -> None:
         default=0,
         help="Minimum referencing sections required to include a keyword (default: 0).",
     )
-    p.set_defaults(func=cmd_assess)
+    p.set_defaults(func=cmd_risk)
 
 
-def _add_term_index_subparser(subparsers) -> None:
+def _add_llm_word_subparser(subparsers) -> None:
     p = subparsers.add_parser(
-        "term-index",
-        help="Index candidate terms with Sakura AI embeddings and link similar terms",
+        "llm-word",
+        help="Index embeddings, link similar terms, judge variance via LLM, and output report",
     )
     _add_config_arg(p)
-    p.add_argument("--model", help="Embedding model name override")
+    p.add_argument(
+        "--backend", choices=["openrouter", "sakura", "ollama", "mock"], help="LLM backend"
+    )
+    p.add_argument("--model", help="LLM or embedding model name override")
     p.add_argument(
         "--threshold",
         type=float,
         default=0.80,
         help="Cosine similarity threshold for term linking (default: 0.80)",
     )
-    p.set_defaults(func=cmd_term_index)
-
-
-def _add_term_judge_subparser(subparsers) -> None:
-    p = subparsers.add_parser(
-        "term-judge",
-        help="Judge similar term pairs for undesirable variance using LLM in context",
-    )
-    _add_config_arg(p)
-    p.add_argument(
-        "--backend", choices=["openrouter", "sakura", "ollama", "mock"], help="LLM backend"
-    )
-    p.add_argument("--model", help="LLM model name override")
     p.add_argument(
         "--max-pairs",
         type=int,
         default=20,
         help="Max candidate pairs to judge (0 for unlimited).",
     )
-    p.set_defaults(func=cmd_term_judge)
+    p.add_argument(
+        "--quick",
+        action="store_true",
+        help="Skip LLM variance judgment and run static report",
+    )
+    p.set_defaults(func=cmd_llm_word)
 
 
-def _add_term_report_subparser(subparsers) -> None:
+def _add_llm_single_review_subparser(subparsers) -> None:
     p = subparsers.add_parser(
-        "term-report",
-        help="Print a consolidated report of all static typos and LLM term variances",
+        "llm-single-review",
+        help="LLM review for single documents (section-by-section) and related high-risk keyword islands",
     )
     _add_config_arg(p)
-    p.set_defaults(func=cmd_term_report)
+    p.add_argument(
+        "--file",
+        help="Path to markdown document to review",
+    )
+    p.add_argument(
+        "--all",
+        action="store_true",
+        help="Review all documents in the project",
+    )
+    p.add_argument(
+        "--risk-threshold",
+        type=int,
+        help="Override high risk threshold for keyword islands",
+    )
+    p.add_argument(
+        "--check",
+        help="Run only a specific check ID",
+    )
+    p.add_argument(
+        "--list-checks",
+        action="store_true",
+        help="List all configured review checks and exit",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Assemble and display prompt without calling LLM backend",
+    )
+    p.add_argument(
+        "--backend",
+        choices=["openrouter", "sakura", "ollama", "mock"],
+        help="LLM backend override",
+    )
+    p.add_argument("--model", help="LLM model name override")
+    p.set_defaults(func=cmd_llm_single_review)
+
+
+def _add_llm_keyword_review_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "llm-keyword-review",
+        help="LLM review for connected document islands containing high-risk keywords",
+    )
+    _add_config_arg(p)
+    p.add_argument(
+        "--keyword",
+        help="Specific high-risk keyword to target",
+    )
+    p.add_argument(
+        "--min-risk",
+        type=int,
+        help="Minimum risk score to filter keywords (default from config)",
+    )
+    p.add_argument(
+        "--check",
+        help="Run only a specific check ID",
+    )
+    p.add_argument(
+        "--list-checks",
+        action="store_true",
+        help="List all configured review checks and exit",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Assemble and display prompt without calling LLM backend",
+    )
+    p.add_argument(
+        "--backend",
+        choices=["openrouter", "sakura", "ollama", "mock"],
+        help="LLM backend override",
+    )
+    p.add_argument("--model", help="LLM model name override")
+    p.set_defaults(func=cmd_llm_keyword_review)
 
 
 _SUBPARSER_BUILDERS = (
     _add_init_subparser,
-    _add_check_subparser,
-    _add_sync_subparser,
+    _add_build_subparser,
+    _add_format_doc_subparser,
+    _add_check_doc_subparser,
+    _add_format_src_subparser,
+    _add_check_src_subparser,
     _add_graph_subparser,
-    _add_judge_subparser,
-    _add_assess_subparser,
-    _add_term_index_subparser,
-    _add_term_judge_subparser,
-    _add_term_report_subparser,
+    _add_risk_subparser,
+    _add_llm_word_subparser,
+    _add_llm_single_review_subparser,
+    _add_llm_keyword_review_subparser,
 )
 
 

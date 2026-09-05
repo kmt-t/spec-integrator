@@ -1,0 +1,4 @@
+Audit prose to ensure it documents the technical *rationale* (Why, technical trade-offs, constraints, architecture choices) rather than chronological *history* or work logs.
+- Detect historical narratives, meeting minutes style logs, or chronological story-telling (e.g., "当初はA案だったがB案に変更した", "検討の過程で〜", "過去のバージョンでは〜").
+- In specifications, history is noise. Focus strictly on why the current design is chosen and optimal over alternatives.
+- Flag excessive chronological narrative as a WARNING (Unnecessary History/Narrative).

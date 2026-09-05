@@ -17,6 +17,9 @@ from spec_integrator.judge.test_chain_judge import (
     TestChainResult,
     TestChainTarget,
 )
+from spec_integrator.judge.unified_reviewer import (
+    UnifiedReviewEngine,
+)
 
 __all__ = [
     "BaseJudge",
@@ -30,4 +33,5 @@ __all__ = [
     "TestChainReport",
     "TestChainResult",
     "TestChainTarget",
+    "UnifiedReviewEngine",
 ]

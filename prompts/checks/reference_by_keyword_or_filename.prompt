@@ -1,0 +1,4 @@
+Verify that all cross-document references use valid file paths (relative path or filename) or explicit metadata keywords ({Keyword}).
+- Prohibit Fragile Section Numbers: Referencing sections by chapter/section/subsection numbers (e.g., "第3章", "セクション2.1", "3.4項", "Chapter 3", "Section 2.4") is strictly prohibited because section numbers change during document refactoring and become stale.
+- Detect any reference relying on section numbers or vague heading titles instead of registered {Keyword} or file links.
+- Flag any chapter/section number references as an ERROR (Fragile Section Number Reference).

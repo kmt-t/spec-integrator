@@ -1,0 +1,5 @@
+Verify architectural diagram rules:
+- Responsibilities across components / actors MUST use Sequence Diagrams (`sequenceDiagram`).
+- Sequential procedural logic inside a single component MUST use Flowcharts (`flowchart TD`).
+- State machines MUST use `stateDiagram-v2`.
+- Node labels with special characters (parentheses, brackets) must be properly quoted.

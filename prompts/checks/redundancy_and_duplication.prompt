@@ -1,0 +1,11 @@
+Redundancy & Duplication Audit (Avoid Stale Duplication, Permit Layered Perspectives):
+Audit the texts for copy-pasted, redundant, or multi-location duplication of concrete specifications.
+- PERMITTED AND ENCOURAGED (Legitimate Layered / Multi-perspective Descriptions):
+  Describing the same design subject from DIFFERENT architectural abstraction layers or complementary viewpoints is valid and must NOT be flagged as duplication:
+  * Tier 1 (Architecture): High-level system goals, 6 pillars summary, end-to-end rationale.
+  * Tier 2 (Subsystem/Manager): Component lifecycle, state machines, API integration, fallback policies.
+  * Tier 3 (Leaf Component): Exact byte/bitfield layouts, physical offsets, register assignments, stencils.
+  * Formal/Verifier: Mathematical properties, invariants, proof assertions, empirical benchmarks.
+- FLAGGED AS REDUNDANT (WARNING / ERROR):
+  * If two or more sections duplicate the SAME level of detailed technical specification (e.g., verbatim copy-pasted struct tables, duplicated binary layouts, identical step-by-step algorithm lists) instead of establishing a single Source of Truth and referencing it via link, flag as a WARNING (Redundant Specification Duplication).
+  * If duplicated descriptions have drifted, mismatched parameters, or conflicting details between copies, flag as an ERROR (Drifted Duplicate / Inconsistency).

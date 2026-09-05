@@ -1,7 +1,8 @@
 import pytest
+from spec_integrator.anti_sabotage.checks.consist_symbol_drift import normalize_value
 from spec_integrator.config import Config, KeywordRule
 from spec_integrator.parser import MarkdownParser
-from spec_integrator.verifier.consistency import ConsistencyVerifier, _normalize_value
+from spec_integrator.verifier.consistency import ConsistencyVerifier
 
 
 def _docs(tmp_path, files: dict[str, str]):
@@ -37,7 +38,7 @@ def _docs(tmp_path, files: dict[str, str]):
     ],
 )
 def test_value_spellings_collapse(raw, expected):
-    assert _normalize_value(raw) == expected
+    assert normalize_value(raw) == expected
 
 
 # --------------------------------------------------------------------------- #
@@ -163,7 +164,6 @@ def test_superseded_value_is_rejected(tmp_path):
             "architecture/FORMAT.md": "# T\n## Ex\n| JIT | vSoC | 4 KB (2KB x 2) | ダブルバッファ |\n",
         },
     )
-    cfg.consistency.cochange = False
     cfg.consistency.invariants = [
         {
             "id": "jit_banks",
@@ -179,84 +179,13 @@ def test_superseded_value_is_rejected(tmp_path):
     assert summary.invariants_checked == 1
 
 
-# --------------------------------------------------------------------------- #
-# C. Co-change
-# --------------------------------------------------------------------------- #
-REQ = """# Requirements
-## Functional
-| `{JIT_MultiBuffer_Cache}` | 3面バッファ管理を行う。 | 高 |
-| `{ROMParsing}` | ROM を直接解析する。 | 高 |
-"""
-COMP_A = "# JIT\n## Design\nマルチバッファを用いる。 `{JIT_MultiBuffer_Cache}`\n"
-COMP_B = "# Loader\n## Design\nROM を直接読む。 `{ROMParsing}`\n"
-
-
-def _cochange_setup(tmp_path):
+def test_gate_can_be_disabled(tmp_path):
     cfg, docs, docs_root = _docs(
         tmp_path,
         {
-            "requires/requirement_list.md": REQ,
-            "components/tier2_jit/jit.md": COMP_A,
-            "components/tier2_runtime/loader.md": COMP_B,
+            "architecture/FORMAT.md": "# T\n## Ex\n| JIT | vSoC | 4 KB (2KB x 2) | ダブルバッファ |\n",
         },
     )
-    return cfg, docs, docs_root
-
-
-def test_baseline_missing_is_a_warning_not_a_pass(tmp_path):
-    cfg, docs, docs_root = _cochange_setup(tmp_path)
-    issues, summary = ConsistencyVerifier(cfg).verify(docs, docs_root)
-    assert any(i.rule_code == "CONSIST-BASELINE-MISSING" for i in issues)
-    assert summary.baseline_present is False
-
-
-def test_changed_definition_flags_only_its_own_references(tmp_path):
-    cfg, docs, docs_root = _cochange_setup(tmp_path)
-    v = ConsistencyVerifier(cfg)
-    v.write_baseline(docs)
-    # Edit one requirement row; neighbours in the same table must stay unaffected.
-    req = docs_root / "requires" / "requirement_list.md"
-    req.write_text(
-        REQ.replace("3面バッファ管理を行う。", "4面バッファ管理を行う。"),
-        encoding="utf-8",
-    )
-    parser = MarkdownParser(cfg)
-    reparsed = [parser.parse_file(p, docs_root) for p in sorted(docs_root.rglob("*.md"))]
-    issues, summary = ConsistencyVerifier(cfg).verify(reparsed, docs_root)
-    stale = [i for i in issues if i.rule_code == "CONSIST-COCHANGE-STALE"]
-    assert len(stale) == 1
-    assert stale[0].file_path == "components/tier2_jit/jit.md"
-    assert summary.cochange_stale[0]["keyword"] == "JIT_MultiBuffer_Cache"
-
-
-def test_reference_updated_in_the_same_edit_is_not_flagged(tmp_path):
-    cfg, docs, docs_root = _cochange_setup(tmp_path)
-    v = ConsistencyVerifier(cfg)
-    v.write_baseline(docs)
-    (docs_root / "requires" / "requirement_list.md").write_text(
-        REQ.replace("3面バッファ管理を行う。", "4面バッファ管理を行う。"),
-        encoding="utf-8",
-    )
-    (docs_root / "components" / "tier2_jit" / "jit.md").write_text(
-        "# JIT\n## Design\n4面マルチバッファを用いる。 `{JIT_MultiBuffer_Cache}`\n",
-        encoding="utf-8",
-    )
-    parser = MarkdownParser(cfg)
-    reparsed = [parser.parse_file(p, docs_root) for p in sorted(docs_root.rglob("*.md"))]
-    issues, _ = ConsistencyVerifier(cfg).verify(reparsed, docs_root)
-    assert [i for i in issues if i.rule_code == "CONSIST-COCHANGE-STALE"] == []
-
-
-def test_sync_accepts_the_current_state(tmp_path):
-    cfg, docs, docs_root = _cochange_setup(tmp_path)
-    v = ConsistencyVerifier(cfg)
-    v.write_baseline(docs)
-    issues, _ = v.verify(docs, docs_root)
-    assert [i for i in issues if i.rule_code.startswith("CONSIST-COCHANGE")] == []
-
-
-def test_gate_can_be_disabled(tmp_path):
-    cfg, docs, docs_root = _cochange_setup(tmp_path)
     cfg.consistency.enabled = False
     issues, _ = ConsistencyVerifier(cfg).verify(docs, docs_root)
     assert issues == []

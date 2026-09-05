@@ -1,0 +1,3 @@
+Verify compliance with specification documentation standards (.agents/rules/documentation-standards.md):
+- Prose, section headings, and table column names must be written in clean Japanese natural language.
+- Flag any leakage of low-level C++ or Python internal implementation class names, types (e.g. `bytearray`, raw struct pointers), or temporary internal terms (e.g. `(AoS)`) appearing where conceptual specification terms belong.

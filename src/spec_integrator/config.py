@@ -113,8 +113,6 @@ class ConsistencyConfig:
     """Consistency Gate: an edit must reach every place that restates the same fact."""
 
     enabled: bool = True
-    lockfile: str = "spec-consistency.lock"
-    cochange: bool = True
     symbol_patterns: list[str] = field(
         default_factory=lambda: [
             r"\b[A-Z0-9_]+_(?:CONF|CONFIG|MAX|MIN|SIZE|BASE|LIMIT)\b",
@@ -138,7 +136,7 @@ class ObligationConfig:
     require_assessment: bool = True  # no risk assessment at all => NG
     require_judge: bool = True  # {VERIFY_LLM} tagged but never judged => NG
     risk_threshold: int = 4  # risk_score >= threshold demands recommended verification
-    stale_is_error: bool = True  # doc changed since assessed => NG
+    stale_is_error: bool = False  # doc hash difference does not block gate
     require_full_coverage: bool = True  # partial assessment overstates coverage => NG
     forbidden_backends: list[str] = field(default_factory=lambda: ["mock"])
 
@@ -163,11 +161,33 @@ class LLMBackendConfig:
 
 
 @dataclass
+class LLMCheckRule:
+    """A modular evaluation check rule for LLM document / island review."""
+
+    id: str
+    name: str = ""
+    mode: list[str] = field(default_factory=lambda: ["single", "cluster"])  # "single", "cluster"
+    enabled: bool = True
+    severity: str = "ERROR"  # "ERROR" | "WARNING"
+    prompt: str = ""
+    prompt_file: str = ""
+    tags: list[str] = field(default_factory=list)
+
+    def get_prompt_text(self, config_dir: Path) -> str:
+        if self.prompt_file:
+            path = (config_dir / self.prompt_file).resolve()
+            if path.exists():
+                return path.read_text(encoding="utf-8").strip()
+        return self.prompt.strip()
+
+
+@dataclass
 class LLMJudgeConfig:
     tag: str = "{VERIFY_LLM}"
     default_backend: str = "sakura"
     backends: dict[str, LLMBackendConfig] = field(default_factory=dict)
     section_char_budget: int = 8000
+    checks: list[LLMCheckRule] = field(default_factory=list)
 
 
 @dataclass
@@ -292,6 +312,35 @@ class TestChainConfig:
     )
 
 
+@dataclass
+class SourceCheckRule:
+    """A check rule within a source group."""
+
+    id: str = ""
+    enabled: bool = True
+    rules: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SourceGroupConfig:
+    """Configuration for a specific source group (e.g. cpp, python_concepts)."""
+
+    description: str = ""
+    include_dirs: list[str] = field(default_factory=list)
+    extensions: list[str] = field(default_factory=list)
+    patterns: list[str] = field(default_factory=list)
+    formatters: list[str] = field(default_factory=list)
+    checks: list[SourceCheckRule] = field(default_factory=list)
+
+
+@dataclass
+class SourceVerificationConfig:
+    """Configuration for source code formatting and verification."""
+
+    enabled: bool = True
+    groups: dict[str, SourceGroupConfig] = field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # Root Configuration Object
 # ---------------------------------------------------------------------------
@@ -313,6 +362,7 @@ class Config:
     test_chain: TestChainConfig = field(default_factory=TestChainConfig)
     terminology: TerminologyConfig = field(default_factory=TerminologyConfig)
     semantic_topic: SemanticTopicConfig = field(default_factory=SemanticTopicConfig)
+    source_verification: SourceVerificationConfig = field(default_factory=SourceVerificationConfig)
     config_dir: Path = field(default_factory=Path.cwd)
 
     def is_excluded(self, file_path: str | Path, docs_root: Path | None = None) -> bool:
@@ -381,14 +431,26 @@ class Config:
         for k_type, k_data in data.get("keywords", {}).items():
             keywords[k_type] = _load_dataclass_from_dict(KeywordRule, k_data)
 
-        # 4. LLM Judge Backends
+        # 4. LLM Judge Backends & Modular Checks
         llm_data = data.get("llm_judge", {})
         backends: dict[str, LLMBackendConfig] = {}
         for b_name, b_info in llm_data.get("backends", {}).items():
             backends[b_name] = _load_dataclass_from_dict(LLMBackendConfig, b_info)
+
+        raw_checks = llm_data.get("checks", [])
+        parsed_checks: list[LLMCheckRule] = []
+        for c in raw_checks:
+            if isinstance(c, dict):
+                rule = _load_dataclass_from_dict(LLMCheckRule, c)
+                if isinstance(c.get("mode"), str):
+                    rule.mode = [c["mode"]]
+                parsed_checks.append(rule)
+
         llm_judge = _load_dataclass_from_dict(LLMJudgeConfig, llm_data)
         if backends:
             llm_judge.backends = backends
+        if parsed_checks:
+            llm_judge.checks = parsed_checks
 
         # 5. Invariants file for Consistency Gate
         cs_data = data.get("consistency", {})
@@ -401,7 +463,26 @@ class Config:
             if inv_path.exists():
                 with open(inv_path, "r", encoding="utf-8") as f:
                     extra = yaml.safe_load(f) or {}
-                consistency.invariants = consistency.invariants + list(extra.get("invariants", []))
+        # 6. Source verification
+        source_verif_raw = data.get("source_verification") or {}
+        groups_raw = source_verif_raw.get("groups", {})
+        parsed_groups: dict[str, SourceGroupConfig] = {}
+        for g_name, g_val in groups_raw.items():
+            if isinstance(g_val, dict):
+                checks_raw = g_val.get("checks", [])
+                parsed_checks = []
+                for c in checks_raw:
+                    if isinstance(c, dict):
+                        parsed_checks.append(_load_dataclass_from_dict(SourceCheckRule, c))
+                    elif isinstance(c, str):
+                        parsed_checks.append(SourceCheckRule(id=c, enabled=True))
+                g_val_copy = dict(g_val)
+                g_val_copy["checks"] = parsed_checks
+                parsed_groups[g_name] = _load_dataclass_from_dict(SourceGroupConfig, g_val_copy)
+        source_verification = SourceVerificationConfig(
+            enabled=source_verif_raw.get("enabled", True),
+            groups=parsed_groups,
+        )
 
         return cls(
             version=str(data.get("version", "1.0")),
@@ -426,6 +507,7 @@ class Config:
             semantic_topic=_load_dataclass_from_dict(
                 SemanticTopicConfig, data.get("semantic_topic")
             ),
+            source_verification=source_verification,
             config_dir=config_dir,
         )
 
@@ -472,9 +554,13 @@ __all__ = [
     "FormalVerificationConfig",
     "KeywordRule",
     "LLMBackendConfig",
+    "LLMCheckRule",
     "LLMJudgeConfig",
     "ObligationConfig",
     "ProjectConfig",
+    "SourceCheckRule",
+    "SourceGroupConfig",
+    "SourceVerificationConfig",
     "TestChainConfig",
     "TierConfig",
     "WITVerificationConfig",

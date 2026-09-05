@@ -125,6 +125,7 @@ def test_low_risk_keyword_creates_no_obligation(tmp_path):
 
 def test_stale_assessment_is_an_error(tmp_path):
     cfg, doc, db = _setup(tmp_path, DOC_BODY)
+    cfg.obligation.stale_is_error = True
     _write_risk_assessment(
         db,
         [
@@ -140,6 +141,26 @@ def test_stale_assessment_is_an_error(tmp_path):
     )
     issues, summary = ObligationVerifier(cfg).verify([doc], db=db)
     assert any(i.rule_code == "OBLIG-ASSESSMENT-STALE" for i in issues)
+    assert summary.stale_documents == [doc.file_path]
+
+
+def test_stale_assessment_not_error_by_default(tmp_path):
+    cfg, doc, db = _setup(tmp_path, DOC_BODY)
+    _write_risk_assessment(
+        db,
+        [
+            {
+                "item_id": "item:RoundRobinScheduling",
+                "keyword": "RoundRobinScheduling",
+                "file_path": doc.file_path,
+                "risk_score": 1,
+                "covered_files": [doc.file_path],
+            }
+        ],
+        doc_hashes={doc.file_path: "0000deadbeef"},
+    )
+    issues, summary = ObligationVerifier(cfg).verify([doc], db=db)
+    assert not any(i.rule_code == "OBLIG-ASSESSMENT-STALE" for i in issues)
     assert summary.stale_documents == [doc.file_path]
 
 
@@ -271,6 +292,7 @@ def test_document_judge_verdict_on_an_edited_document_is_rejected_as_stale(tmp_p
 Text.
 """,
     )
+    cfg.obligation.stale_is_error = True
     _write_risk_assessment(db, [], doc_hashes={doc.file_path: doc.content_hash})
     _write_judge_results(
         db,
@@ -461,6 +483,7 @@ def test_judge_verdict_on_an_edited_document_is_rejected_as_stale(tmp_path):
 Text about {LowOverheadSwitch}.
 """,
     )
+    cfg.obligation.stale_is_error = True
     _write_risk_assessment(db, [], doc_hashes={doc.file_path: doc.content_hash})
     _write_judge_results(
         db,

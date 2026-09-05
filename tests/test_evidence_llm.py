@@ -1,43 +1,31 @@
+from pathlib import Path
+
 from spec_integrator.config import Config
-from spec_integrator.judge.semantic_judge import JUDGE_PROMPT_TEMPLATE, SemanticJudge
+from spec_integrator.judge.unified_reviewer import UnifiedReviewEngine
 
 
-def _capture_prompt(judge: SemanticJudge) -> list[str]:
-    captured: list[str] = []
-
-    def fake_call(prompt: str, model: str | None):
-        captured.append(prompt)
-        return '{"status": "PASS", "summary": "ok", "issues": []}'
-
-    judge._call_sakura = fake_call
-    return captured
-
-
-def _evaluate_empty_subgraph(judge: SemanticJudge):
-    sg = {
-        "item_id": "item:{K}",
-        "item_label": "{K}",
-        "defined_in": [],
-        "referenced_in": [],
-    }
-    return judge._evaluate_single_subgraph(sg, [], backend="sakura", model=None)
-
-
-def test_claim_evidence_criterion_is_always_included_in_prompt_template():
-    """Verify that Claim-Evidence Substantiation is an inherent part of JUDGE_PROMPT_TEMPLATE."""
-    assert "Claim-Evidence Substantiation & Unbacked Assertions" in JUDGE_PROMPT_TEMPLATE
-    assert "Unbacked Verification Claim" in JUDGE_PROMPT_TEMPLATE
-    assert "Unsourced Metric / Measurement" in JUDGE_PROMPT_TEMPLATE
+def test_claim_evidence_criterion_is_configured():
+    """Verify that Claim-Evidence Substantiation is defined in project configuration."""
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    yaml_path = repo_root / "spec-integrator.yaml"
+    config = Config.load(yaml_path)
+    rule = next((r for r in config.llm_judge.checks if r.id == "claim_substantiation"), None)
+    assert rule is not None
+    prompt_text = rule.get_prompt_text(config.config_dir)
+    assert "Unbacked Verification Claim" in prompt_text
+    assert "Unsourced Metric / Measurement" in prompt_text
 
 
 def test_claim_evidence_criterion_reaches_the_prompt():
-    """Verify that the criterion actually reaches the LLM backend call."""
-    config = Config()
-    judge = SemanticJudge(config)
-    captured = _capture_prompt(judge)
-    _evaluate_empty_subgraph(judge)
-    assert len(captured) == 1
-    assert "Claim-Evidence Substantiation & Unbacked Assertions" in captured[0]
-    assert "Unbacked Verification Claim" in captured[0]
-    assert "6. Redundancy & Duplication Audit" in captured[0]
-    assert "=== OUTPUT FORMAT ===" in captured[0]
+    """Verify that the criterion actually reaches the review prompt."""
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    yaml_path = repo_root / "spec-integrator.yaml"
+    config = Config.load(yaml_path)
+    reviewer = UnifiedReviewEngine(config)
+
+    checks = reviewer.get_effective_checks("cluster", check_ids=["claim_substantiation"])
+    assert len(checks) == 1
+    prompt = reviewer.assemble_prompt("cluster", "Test Island", "Some section context", checks)
+    assert "Claim-Evidence Substantiation" in prompt
+    assert "Unbacked Verification Claim" in prompt
+    assert "=== OUTPUT FORMAT ===" in prompt
