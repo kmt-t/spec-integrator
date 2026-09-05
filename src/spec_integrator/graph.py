@@ -336,12 +336,14 @@ class DocGraphBuilder:
                     # Same file anchor link
                     target_file = doc.file_path
                 else:
-                    # Relative path resolution
-                    src_dir = Path(doc.file_path).parent
-                    resolved_target = (src_dir / link.target_path).as_posix()
                     import os
-
-                    target_file = os.path.normpath(resolved_target).replace("\\", "/")
+                    norm_root = os.path.normpath(link.target_path).replace("\\", "/")
+                    if f"file:{norm_root}" in graph.nodes:
+                        target_file = norm_root
+                    else:
+                        src_dir = Path(doc.file_path).parent
+                        resolved_target = (src_dir / link.target_path).as_posix()
+                        target_file = os.path.normpath(resolved_target).replace("\\", "/")
 
                 target_file_id = f"file:{target_file}"
                 target_node_id = target_file_id

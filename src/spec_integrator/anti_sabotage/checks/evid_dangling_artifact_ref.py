@@ -46,6 +46,13 @@ class DanglingArtifactRefCheck(AntiSabotageCheck):
                     if (ref, line_no) in seen:
                         continue
                     seen.add((ref, line_no))
+                    # If this ref is part of a markdown link [ref](target), check if target resolves
+                    link_m = re.search(rf"\[\s*`?{re.escape(ref)}`?\s*\]\(([^)#]+)", line)
+                    if link_m:
+                        link_target = link_m.group(1).strip()
+                        if self._resolves(link_target, doc, ctx.docs_root, repo_root):
+                            continue
+
                     if self._resolves(ref, doc, ctx.docs_root, repo_root):
                         continue
                     issues.append(
@@ -82,6 +89,8 @@ class DanglingArtifactRefCheck(AntiSabotageCheck):
         if name == ref:
             try:
                 if next(docs_root.rglob(name), None) is not None:
+                    return True
+                if next(repo_root.rglob(name), None) is not None:
                     return True
             except OSError:
                 pass

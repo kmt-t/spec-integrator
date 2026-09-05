@@ -5,6 +5,7 @@ from pathlib import Path
 from spec_integrator.anti_sabotage.base import AntiSabotageContext
 from spec_integrator.anti_sabotage.checks.fmt_broken_anchor import BrokenAnchorCheck
 from spec_integrator.anti_sabotage.checks.fmt_broken_link import BrokenLinkCheck
+from spec_integrator.anti_sabotage.checks.fmt_file_link import FileLinkFormatCheck
 from spec_integrator.anti_sabotage.checks.fmt_hierarchy import HierarchyCheck
 from spec_integrator.anti_sabotage.checks.fmt_invalid_mermaid import MermaidSyntaxCheck
 from spec_integrator.anti_sabotage.checks.fmt_traceability import TraceabilityCheck
@@ -26,6 +27,7 @@ class StaticVerifier:
             checks=[
                 BrokenLinkCheck(),
                 BrokenAnchorCheck(),
+                FileLinkFormatCheck(),
                 MermaidSyntaxCheck(),
                 LevenshteinTypoCheck(),
                 TraceabilityCheck(),

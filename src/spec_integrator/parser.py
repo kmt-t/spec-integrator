@@ -191,12 +191,17 @@ class MarkdownParser:
             # Match AST-extracted links with their line number in section
             for link_text, link_url in extracted_links:
                 target_file, target_anchor = self._split_link_target(link_url)
-                if (
-                    (link_url in line)
-                    or (target_file and target_file in line)
-                    or (target_anchor and target_anchor in line)
-                    or (link_text and link_text in line)
+                matched = False
+                if link_url and f"]({link_url})" in line:
+                    matched = True
+                elif link_url and (link_url in line) and (f"[{link_text}]" in line):
+                    matched = True
+                elif f"[{link_text}]" in line and (
+                    (target_file and target_file in line) or (target_anchor and target_anchor in line)
                 ):
+                    matched = True
+
+                if matched:
                     parsed_link = ParsedLink(
                         source_file=rel_path,
                         source_line=curr_line_num,
@@ -228,7 +233,11 @@ class MarkdownParser:
                 if t.get("type") == "link":
                     url = t.get("attrs", {}).get("url", "")
                     text = self._extract_text_from_children(t.get("children", []))
-                    if url and (url.endswith(".md") or ".md#" in url or url.startswith("#")):
+                    if url and not (
+                        url.startswith("http://")
+                        or url.startswith("https://")
+                        or url.startswith("mailto:")
+                    ):
                         links.append((text, url))
                 if "children" in t:
                     walk(t["children"])

@@ -19,15 +19,32 @@ class BrokenLinkCheck(AntiSabotageCheck):
     def check(self, ctx: AntiSabotageContext) -> list[VerificationIssue]:
         issues: list[VerificationIssue] = []
         doc_map = ctx.doc_map
+        repo_root = ctx.config.config_dir
         for doc in ctx.documents:
             for link in doc.all_links:
                 if not link.target_path:
                     continue  # 同一ファイル内アンカーリンク
-                src_dir = Path(doc.file_path).parent
-                resolved_target = (src_dir / link.target_path).as_posix()
-                target_file = os.path.normpath(resolved_target).replace("\\", "/")
 
-                if target_file not in doc_map:
+                target_raw = link.target_path
+                if target_raw.startswith("file:///"):
+                    # file:// absolute URL
+                    file_path = target_raw[8:]
+                    if Path(file_path).exists():
+                        continue
+
+                # 1. Project-root relative resolution
+                norm_root = os.path.normpath(target_raw).replace("\\", "/")
+                # 2. Document-relative resolution
+                src_dir = Path(doc.file_path).parent
+                norm_doc = os.path.normpath((src_dir / target_raw).as_posix()).replace("\\", "/")
+
+                exists = False
+                if norm_root in doc_map or (repo_root / norm_root).exists():
+                    exists = True
+                elif norm_doc in doc_map or (ctx.docs_root / norm_doc).exists() or (repo_root / norm_doc).exists():
+                    exists = True
+
+                if not exists:
                     issues.append(
                         VerificationIssue(
                             gate=self.gate,

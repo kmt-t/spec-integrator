@@ -36,9 +36,13 @@ class BrokenAnchorCheck(AntiSabotageCheck):
                 if not link.target_path:
                     target_file = doc.file_path
                 else:
-                    src_dir = Path(doc.file_path).parent
-                    resolved_target = (src_dir / link.target_path).as_posix()
-                    target_file = os.path.normpath(resolved_target).replace("\\", "/")
+                    norm_root = os.path.normpath(link.target_path).replace("\\", "/")
+                    if norm_root in doc_map:
+                        target_file = norm_root
+                    else:
+                        src_dir = Path(doc.file_path).parent
+                        resolved_target = (src_dir / link.target_path).as_posix()
+                        target_file = os.path.normpath(resolved_target).replace("\\", "/")
 
                 if target_file not in doc_map:
                     continue  # target file 欠落は BrokenLinkCheck 側で検出
