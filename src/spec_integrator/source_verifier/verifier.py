@@ -492,6 +492,8 @@ class SourceVerifier:
                 "tools/spec-integrator",
                 "--with",
                 "wasmtime",
+                "--with",
+                "cython",
                 "python",
                 str(tr),
             ]
