@@ -2,7 +2,7 @@ from pathlib import Path
 
 from spec_integrator.config import Config
 from spec_integrator.graph import DocumentIsland
-from spec_integrator.judge import SemanticJudge, UnifiedReviewEngine
+from spec_integrator.judge import UnifiedReviewEngine
 from spec_integrator.parser import ParsedDocument, ParsedSection
 
 
@@ -30,11 +30,11 @@ def _create_sample_doc(file_path: str = "components/test.md") -> ParsedDocument:
     )
 
 
-def test_semantic_judge_islands_mock():
+def test_unified_reviewer_islands_mock():
     repo_root = Path(__file__).resolve().parent.parent.parent.parent
     yaml_path = repo_root / "spec-integrator.yaml"
     config = Config.load(yaml_path)
-    judge = SemanticJudge(config)
+    reviewer = UnifiedReviewEngine(config)
     doc = _create_sample_doc()
     island = DocumentIsland(
         island_id="island_01",
@@ -46,23 +46,21 @@ def test_semantic_judge_islands_mock():
         total_docs=1,
     )
 
-    report = judge.judge_islands([island], [doc], backend="mock")
-    assert report.total_evaluated == 1
-    assert report.results[0].status == "PASS"
-    assert report.results[0].item_label == "Test Island"
+    res = reviewer.review_document_island(island, [doc], backend="mock")
+    assert res.status == "PASS"
+    assert res.item_label == "Test Island"
 
 
-def test_semantic_judge_documents_mock():
+def test_unified_reviewer_documents_mock():
     repo_root = Path(__file__).resolve().parent.parent.parent.parent
     yaml_path = repo_root / "spec-integrator.yaml"
     config = Config.load(yaml_path)
-    judge = SemanticJudge(config)
+    reviewer = UnifiedReviewEngine(config)
     doc = _create_sample_doc()
 
-    report = judge.judge_documents([doc], backend="mock", exhaustive=True)
-    assert report.total_evaluated == 1
-    assert report.results[0].status == "PASS"
-    assert report.results[0].item_label == doc.file_path
+    res = reviewer.review_single_document(doc, backend="mock")
+    assert res.status == "PASS"
+    assert res.item_label == doc.file_path
 
 
 def _judge_with_raw_response(raw_response: str):

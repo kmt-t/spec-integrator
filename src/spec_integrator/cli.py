@@ -583,10 +583,18 @@ def cmd_llm_single_review(args):
             print(f"[Error] Document not found: {args.file}")
             db.close()
             sys.exit(1)
+    elif args.tagged:
+        llm_tag = config.llm_judge.tag
+        target_docs = [d for d in documents if llm_tag in d.all_tags]
+        if not target_docs:
+            print(f"No documents found tagged with '{llm_tag}'.")
+            db.close()
+            sys.exit(0)
+        print(f"Targeting {len(target_docs)} document(s) tagged with '{llm_tag}'...")
     elif args.all:
         target_docs = documents
     else:
-        print("Please specify a document target: --file <path> or --all.")
+        print("Please specify a document target: --file <path>, --tagged, or --all.")
         db.close()
         sys.exit(1)
 
@@ -966,8 +974,15 @@ def _add_llm_single_review_subparser(subparsers) -> None:
     )
     _add_config_arg(p)
     p.add_argument(
+        "-f",
         "--file",
         help="Path to markdown document to review",
+    )
+    p.add_argument(
+        "-t",
+        "--tagged",
+        action="store_true",
+        help="Review only documents tagged with {VERIFY_LLM}",
     )
     p.add_argument(
         "--all",

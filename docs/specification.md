@@ -147,20 +147,24 @@ llm_judge:
 - **`{VERIFY_FORMAL}`**:
   - 設計仕様書内に付与することで、該当コンポーネントの `formal/` フォルダ内に pyModelChecking モデルスクリプトが存在し、モデル検査が PASS することを義務付けます。
 - **`{VERIFY_LLM}`**:
-  - 設計仕様書内に付与することで、`spec-integrator llm-judge` 実行時に対象サブグラフのセマンティック監査を実行します。
+  - 設計仕様書内に付与することで、LLM 監査（`llm-single-review` / `llm-keyword-review`）実行時に対象ドキュメントや関連サブグラフのセマンティック監査を実行します。
 
 ---
 
 ## 5. 品質ゲート（Quality Gates）と合否判定
 
-`spec-integrator check` は以下の 4 つのゲートを順に検証し、**エラー 0 件**の場合のみ終了コード `0`（PASS）を返します。1 件でもエラーがあれば終了コード `1`（FAIL）となります。
+`spec-integrator check-doc` は以下の 8 つのゲートを順に検証し、**エラー 0 件**の場合のみ終了コード `0`（PASS）を返します。1 件でもエラーがあれば終了コード `1`（FAIL）となります。
 
 | ゲート | 検証内容 | FAIL となる条件 |
 | :--- | :--- | :--- |
-| **Format Gate** | Markdown 相対リンクおよび見出しアンカーの存在検証 | リンク先ファイルが存在しない、または見出し `#anchor` が存在しない |
+| **Format Gate** | Markdown 相対リンク、見出しアンカー、ファイルリンク形式（ベースネーム強制）、Mermaid 構文（QuickJS 実行）の存在検証 | リンク先ファイルが存在しない、アンカー不達、Mermaid 構文破綻 |
 | **Traceability Gate** | キーワードの未定義参照および要件未参照の検証 | 定義元にない `{KEYWORD}` が参照されている、または Tier 0 要件が下位で 1 度も参照されていない |
 | **Hierarchy Gate** | Tier 階層依存（上位から下位への詳細化原則）の検証 | 上位 Tier (N) が下位 Tier (N+1, N+2) の具象定義を直接参照（逆流依存）している |
-| **Formal Gate** | `{VERIFY_FORMAL}` 対象の形式モデル検査 | モデルファイルが存在しない、構文エラー、または CTL 不変条件の検証失敗 |
+| **Formal Gate** | `{VERIFY_FORMAL}` 対象の形式モデル検査（pyModelChecking / 変異検査） | モデルファイルが存在しない、構文エラー、CTL 不変条件の検証失敗、空虚な命題の検出 |
+| **WIT Gate** | `{VERIFY_WIT}` 対象の WebAssembly Interface Types 定義の構文・整合性検証 | WIT ファイルの構文エラーや型不整合 |
+| **Evidence Gate** | 主張と成果物（証跡ファイル、ベンチマーク）の裏付け検証 | 宣言された形式モデルやベンチマークコードが存在しない |
+| **Obligation Gate** | リスク評価（`risk`）によって課された `{VERIFY_LLM}` 検証義務の履行状況検証 | リスクスコア閾値以上のキーワードに検証タグが付与されていない、または監査未実施 |
+| **Consistency Gate** | 連動修正の未伝播、シンボル値の不一致、旧値の残存検証 | 同一シンボルの不一致や禁止パターンの残存 |
 
 ---
 
@@ -279,64 +283,88 @@ CREATE TABLE audit_cache (
 
 ## 8. CLI コマンドリファレンス
 
-### (1) `spec-integrator check`
-ドキュメントの静的整合性・トレーサビリティ・Tier 依存関係および形式検証を一括実行します。
+### (1) `spec-integrator check-doc`
+ドキュメントの静的整合性・トレーサビリティ・Tier 依存関係、WIT 定義、および形式検証（8大ゲート）を一括実行します。
 
 ```bash
-spec-integrator check [OPTIONS]
+spec-integrator check-doc [OPTIONS] [FILES...]
 ```
 - **オプション**:
   - `-c, --config PATH`: 設定ファイルパス（デフォルト: `spec-integrator.yaml`）
-  - `-r, --report PATH`: Markdown レポート出力先（デフォルト: `spec_report.md`）。リスク評価詳細・LLM 判定結果・3層一貫性監査結果もこの一枚に集約される。
+  - `-r, --report PATH`: Markdown レポート出力先（デフォルト: `reports/doc_report.md`）
   - `--clean`: キャッシュ DB を初期化してフルスキャン実行
-  - `--verbose`: 詳細ログを出力
 
-### (2) `spec-integrator llm-assess`
-各要求／設計キーワードの複雑度・設計リスクを LLM でスコアリングし、検証義務台帳をキャッシュ DB に記録します（`--document` 指定時はドキュメント単位のアドバイザリー評価に切り替わる）。
+### (2) `spec-integrator build`
+ドキュメント群の DocGraph 構造を走査し、SQLite データベースおよび TF-IDF 用語インデックスを構築します。
 
 ```bash
-spec-integrator llm-assess [OPTIONS]
+spec-integrator build [OPTIONS] [FILES...]
 ```
 - **オプション**:
   - `-c, --config PATH`: 設定ファイルパス
-  - `--backend [openrouter|sakura|ollama|mock]`: LLM バックエンド指定（デフォルト: 設定ファイルの値）
-  - `--model TEXT`: モデル名の明示的オーバーライド
-  - `--document`: キーワード単位ではなくドキュメント単位で評価（アドバイザリーのみ。Obligation Gate には使われない）
-  - `--max-keywords INT`: 評価する最大キーワード数（`--document` 時は無視）
-  - `--max-documents INT`: `--document` 指定時の評価対象最大ドキュメント数
-  - `-a, --all, --exhaustive`: 全 Tier（Requirements/Meta 含む）を網羅的に評価
-  - `--min-references INT`: 評価対象に含める最小参照数（`--document` 時は無視）
-  - `--include-meta` / `--include-reqs`: Architecture/Meta Tier・Tier 0 (Requirements) を候補に含める
-  - `--tier TEXT`: 対象 Tier をカンマ区切りで指定（例: `0,1,2`）
-  - `-o, --out PATH` / `-r, --report PATH`: `--document` 時のみ使用する JSON/Markdown 出力先（既定: `reports/doc_level_risk_report.json`/`.md`）。キーワード単位の結果はキャッシュ DB に記録され `check` レポートに反映されるため、これらは無視される。
+  - `--clean`: キャッシュ DB を初期化して再構築
 
-### (3) `spec-integrator llm-judge`
-3つの監査を常にまとめて実行し、判定結果をキャッシュ DB に記録します。専用フラグでどれか一つだけを選ぶことはできません:
-1. `{VERIFY_LLM}` が指定されたサブグラフ（キーワードの定義セクション＋参照セクション）に対する意味監査。
-2. ドキュメント単位の自己一貫性監査（サブグラフをまたぐ矛盾ではなく、1文書内部の矛盾・未裏付け主張を検証）。
-3. Design → Test Spec → Test Code の 3 層トレーサビリティ監査。
+### (3) `spec-integrator format-doc`
+Markdown ドキュメントの末尾空白除去や改行コード正規化を行います。
 
 ```bash
-spec-integrator llm-judge [OPTIONS]
+spec-integrator format-doc [OPTIONS] [FILES...]
+```
+
+### (4) `spec-integrator format-src` / `check-src`
+ソースコード（C++: clang-format / Python: Ruff）の自動フォーマットおよびサボり検証・単体テストを実行します。
+
+```bash
+spec-integrator format-src --group <cpp|python|concepts|formal|pysim|all>
+spec-integrator check-src --group <cpp|python|concepts|formal|pysim|all>
+```
+
+### (5) `spec-integrator risk`
+各要求／設計キーワードの複雑度・設計リスクを LLM でスコアリングし、検証義務台帳をキャッシュ DB に記録します。
+
+```bash
+spec-integrator risk [OPTIONS]
 ```
 - **オプション**:
   - `-c, --config PATH`: 設定ファイルパス
-  - `--backend [openrouter|sakura|ollama|mock]`: LLM バックエンド指定（デフォルト: 設定ファイルの値）
+  - `--backend [sakura|openrouter|ollama|mock]`: LLM バックエンド指定
   - `--model TEXT`: モデル名の明示的オーバーライド
-  - `--component TEXT`: 3 層トレーサビリティ監査の対象を単一コンポーネントに限定
-  - `--max-subgraphs INT`: サブグラフ意味監査で評価する最大サブグラフ数
-  - `--max-documents INT`: ドキュメント単位監査で評価する最大文書数
-  - `--max-targets INT`: 3 層トレーサビリティ監査で評価する最大コンポーネント数
-  - `-a, --all, --exhaustive`: `{VERIFY_LLM}` タグの有無に関わらず全サブグラフ・全文書（Tier 0/Meta 含む全 Tier）を監査し、3 層トレーサビリティ監査も発見できる全コンポーネントを対象にする
-  - `--min-references INT`: サブグラフ意味監査の対象に含める最小参照数。ドキュメント単位監査の候補選定には影響しない
-  - `--include-meta` / `--include-reqs`: ドキュメント単位監査の候補選定に Architecture/Meta Tier・Tier 0 (Requirements) を含める
-  - `--tier TEXT`: ドキュメント単位監査の候補選定を対象 Tier に限定（カンマ区切り、例: `0,1,2`）
-  - `--changed-only`: `spec-consistency.lock` 以降に変更があったセクションに触れるサブグラフのみ意味監査（ドキュメント単位監査・3 層トレーサビリティ監査は常に全候補を対象にするため影響しない）
-  - `--baseline LOCKFILE`: `--changed-only` の差分対象にする lockfile（既定: 作業ツリーの `spec-consistency.lock`）
+  - `-r, --report PATH`: リスクレポート出力先
 
-判定結果はキャッシュ DB に記録され、`check` レポートの「LLM Judge Verdicts」節、「Whole-Document LLM Judge Verdicts」節、「Design -> Test Spec -> Test Code Chain Verdicts」節に反映される。
+### (6) `spec-integrator llm-word`
+TF-IDF 抽出キーワードのエンベディング類似度および LLM による文脈判定で、用語表記揺れ・タイポを検出します。
 
-### (4) `spec-integrator graph`
+```bash
+spec-integrator llm-word [OPTIONS]
+```
+- **オプション**:
+  - `--quick`: LLM 呼び出しをスキップし、レーベンシュタイン距離による静的タイポ・表記揺れのみ検出（API 課金 0 円）
+  - `--threshold FLOAT`: 類似度判定閾値
+
+### (7) `spec-integrator llm-single-review`
+単一ドキュメント内の全セクションまたは指定ファイルの内部一貫性・未裏付け主張を LLM でセマンティック監査します。
+
+```bash
+spec-integrator llm-single-review [OPTIONS]
+```
+- **オプション**:
+  - `-f, --file PATH`: 監査対象のドキュメントファイルパス
+  - `--check CHECK_ID`: 実行する監査チェック ID を限定
+  - `--list-checks`: 有効な監査チェック一覧を表示
+  - `--dry-run`: LLM を呼び出さずにプロンプトを標準出力
+
+### (8) `spec-integrator llm-keyword-review`
+高リスクキーワードが連結するドキュメント島（Cluster）全体のトレーサビリティ・意味的矛盾を LLM で監査します。
+
+```bash
+spec-integrator llm-keyword-review [OPTIONS]
+```
+- **オプション**:
+  - `--keyword KEYWORD`: 監査対象の高リスクキーワードを明示指定
+  - `--min-risk INT`: 監査対象とする最小リスクスコア閾値
+  - `--check CHECK_ID`: 実行する監査チェック ID を限定
+
+### (9) `spec-integrator graph`
 DocGraph の抽出・可視化を行います。
 
 ```bash
@@ -347,7 +375,7 @@ spec-integrator graph [OPTIONS]
   - `-f, --format [mermaid|json]`: 出力フォーマット（デフォルト: `mermaid`）
   - `-o, --out PATH`: 出力先ファイルパス（未指定時は標準出力）
 
-### (5) `spec-integrator init`
+### (10) `spec-integrator init`
 カレントディレクトリに `spec-integrator.yaml` の雛形を生成します。
 
 ```bash
@@ -370,7 +398,7 @@ on:
     branches: [ main, develop ]
 
 jobs:
-  verify-docs:
+  spec-audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -388,10 +416,10 @@ jobs:
 
       - name: Run Spec Verification & Generate Report
         run: |
-          spec-integrator check --config spec-integrator.yaml --report report.md
+          spec-integrator check-doc --config spec-integrator.yaml --report reports/doc_report.md
 
       - name: Add Report to GitHub Actions Step Summary
         if: always()
         run: |
-          cat report.md >> $GITHUB_STEP_SUMMARY
+          cat reports/doc_report.md >> $GITHUB_STEP_SUMMARY
 ```

@@ -25,7 +25,7 @@
 
 以下は全て、ファイルの存在・ハッシュ一致・タグの有無・状態空間の構造など、
 **実行結果だけで機械的に真偽が決まる**確認項目である。LLM の意味判断
-（`llm-judge` の PASS/FAIL 自体）に依存する項目はここに含めない —— その正否は
+（LLM 監査の PASS/FAIL 自体）に依存する項目はここに含めない —— その正否は
 アルゴリズムで形式的に確認できないため、Anti-Sabotage の対象から意図的に外している。
 
 確認項目名は全行「〔対象〕の〔問題種別〕」の形に正規化し、問題種別は
@@ -52,20 +52,20 @@
 | Evidence | ベンチマーク証跡の不一致 | `EVID-BENCHMARK-UNDECLARED` | `{VERIFY_BENCHMARK}` を宣言しているのに `evidence:` ブロックに `benchmark:` エントリが無い。 |
 | Evidence | ベンチマーク実装の欠落 | `EVID-BENCHMARK-MISSING` | `{VERIFY_BENCHMARK}` を宣言しているのに、対応する `benchmarks/*.py` が 1 本も存在しない（実測を主張するなら実行可能な計測コードが要る）。 |
 | Evidence | 参照アーティファクトの欠落 | `EVID-DANGLING-ARTIFACT-REF` | 本文中で言及されているファイルパス（モデル・レポート・設計書）が実在するかを確認する。 |
-| Obligation | リスク評価の未実施 | `OBLIG-ASSESSMENT-MISSING` | `llm-assess` を一度も実行しておらず、キャッシュ DB の `risk_assessments` テーブルが空である。 |
+| Obligation | リスク評価の未実施 | `OBLIG-ASSESSMENT-MISSING` | `risk` を一度も実行しておらず、キャッシュ DB の `risk_assessments` テーブルが空である。 |
 | Obligation | 評価エンジン記録の欠落 | `OBLIG-ASSESSMENT-PROVENANCE-UNKNOWN` | `run_metadata` テーブルに `backend` が記録されておらず、評価が文書から独立した判断かを確認できない。 |
 | Obligation | 評価エンジンの自己参照 | `OBLIG-ASSESSMENT-NOT-INDEPENDENT` | 評価が「文書自身のタグから義務を機械的に逆算するだけの backend（禁止リスト登録済み）」で行われており、達成率が定義上 100% になる自己証明状態を検出する。 |
-| Obligation | 評価カバレッジの不足 | `OBLIG-ASSESSMENT-PARTIAL` | 評価済みキーワード数が現在の全キーワード数（`llm-judge` が監査するのと同じ母集団）より少ない（未評価のキーワードが残っている）。 |
+| Obligation | 評価カバレッジの不足 | `OBLIG-ASSESSMENT-PARTIAL` | 評価済みキーワード数が現在の全キーワード数（LLM 監査が対象とするのと同じ母集団）より少ない（未評価のキーワードが残っている）。 |
 | Obligation | リスク評価の陳腐化 | `OBLIG-ASSESSMENT-STALE` | 評価後に文書が変更され、記録されたハッシュと現在の内容が一致しない。 |
 | Obligation | 検証タグの欠落 | `OBLIG-VERIFICATION-SKIPPED` | risk_score が閾値以上なのに、対応する `{VERIFY_LLM}` タグが文書に付いていない。 |
-| Obligation | 意味監査結果の欠落 | `OBLIG-JUDGE-MISSING` | `{VERIFY_LLM}` を宣言しているのに、キャッシュ DB の `judge_results` テーブルに `llm-judge` の判定結果が存在しない。 |
+| Obligation | 意味監査結果の欠落 | `OBLIG-JUDGE-MISSING` | `{VERIFY_LLM}` を宣言しているのに、キャッシュ DB の `judge_results` テーブルに LLM 監査（`llm-keyword-review`）の判定結果が存在しない。 |
 | Obligation | 意味監査結果の未固定 | `OBLIG-JUDGE-UNANCHORED` | `judge_results` に文書ハッシュが記録されておらず、どの版を監査した結果かを特定できない。 |
-| Obligation | 意味監査結果の陳腐化 | `OBLIG-JUDGE-STALE` | `llm-judge` 実行後に文書が変更され、記録されたハッシュと現在の内容が一致しない。 |
+| Obligation | 意味監査結果の陳腐化 | `OBLIG-JUDGE-STALE` | LLM 監査実行後に文書が変更され、記録されたハッシュと現在の内容が一致しない。 |
 | Obligation | 意味監査対象の漏れ | `OBLIG-JUDGE-SKIPPED` | `{VERIFY_LLM}` を宣言しているのに、判定結果の監査対象一覧（covered_files）に含まれていない。 |
 | Obligation | 意味監査の不合格 | `OBLIG-JUDGE-FAILED` | この文書が引用するキーワードについて、記録済みの判定結果が FAIL を報告している。 |
 | Obligation | 文書単位監査結果の欠落 | `OBLIG-DOC-JUDGE-MISSING` | `{VERIFY_LLM}` を宣言している文書があるのに、キャッシュ DB の `document_judge_results` テーブルが空である。サブグラフ監査でのカバレッジとは独立に判定する。 |
 | Obligation | 文書単位監査結果の未固定 | `OBLIG-DOC-JUDGE-UNANCHORED` | `document_judge_results` に文書ハッシュが記録されておらず、どの版を監査した結果かを特定できない。 |
-| Obligation | 文書単位監査結果の陳腐化 | `OBLIG-DOC-JUDGE-STALE` | `llm-judge` の文書単位監査後に文書が変更され、記録されたハッシュと現在の内容が一致しない。 |
+| Obligation | 文書単位監査結果の陳腐化 | `OBLIG-DOC-JUDGE-STALE` | `llm-single-review` の文書単位監査後に文書が変更され、記録されたハッシュと現在の内容が一致しない。 |
 | Obligation | 文書単位監査対象の漏れ | `OBLIG-DOC-JUDGE-SKIPPED` | `{VERIFY_LLM}` を宣言しているのに、その文書自体が `document_judge_results` に一度も現れていない（サブグラフ経由のカバレッジでは代替できない）。 |
 | Obligation | 文書単位監査の不合格 | `OBLIG-DOC-JUDGE-FAILED` | この文書自体について、記録済みの文書単位判定結果が FAIL を報告している。 |
 | Consistency | キーワード定義の重複 | `CONSIST-DUPLICATE-DEFINITION` | 同じ `{Keyword}` が要求仕様テーブルの複数行で定義されている。 |
@@ -75,21 +75,20 @@
 
 `EVID-UNBACKED-CLAIM` / `EVID-UNSOURCED-MEASUREMENT` は本表から削除した。実装が
 存在せず README にのみ記載されていた名称であり、コード上の後継である「検証済み」
-等の主張チェックは LLM (`llm-judge`) のプロンプト内だけで行われる —— アルゴリズムでは
+等の主張チェックは LLM 監査（`llm-single-review` / `llm-keyword-review`）のプロンプト内だけで行われる —— アルゴリズムでは
 正否を確認できないため、Anti-Sabotage の確認項目としては扱わない。
 
 形式検証モデルが満たすべき契約は **[docs/formal_model_contract.md](docs/formal_model_contract.md)** を参照。
 
-### 修正漏れの検知 (`sync`)
+### 修正漏れの検知
 
-`check` は一貫性ベースライン（キャッシュ DB 記録値）を基準に「伝播しなかった編集」を検出します。
+`check-doc` は一貫性ベースライン（キャッシュ DB 記録値）を基準に「伝播しなかった編集」を検出します。
 
 ```bash
-spec-integrator check   # 検査実行 → 伝播漏れが列挙される
-spec-integrator sync    # 全て伝播・修正したら基準を更新（キャッシュ DB に記録）
+spec-integrator check-doc   # 検査実行 → 伝播漏れが列挙される
+spec-integrator build       # 全て伝播・修正したらドキュメントDBとインデックスを更新
 ```
 
-`sync` を `check` に組み込んでいないのは意図的です。自動更新すると、漏れを暴くための記録そのものが消えます。
 co-change の依存関係は `{Keyword}` の既存トレーサビリティから自動導出されるため、宣言の手書きは不要です。
 
 - **リスク評価・検証義務導出 (`risk` コマンド)**:

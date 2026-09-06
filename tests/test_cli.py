@@ -287,6 +287,13 @@ def test_cli_subparsers_args():
     assert args_single.all is True
     assert args_single.dry_run is True
 
+    args_single_tagged = parser.parse_args(["llm-single-review", "--tagged"])
+    assert args_single_tagged.tagged is True
+
+    args_single_t = parser.parse_args(["llm-single-review", "-t", "-f", "docs/test.md"])
+    assert args_single_t.tagged is True
+    assert args_single_t.file == "docs/test.md"
+
     args_keyword = parser.parse_args(["llm-keyword-review", "--keyword", "JIT", "--dry-run"])
     assert args_keyword.subcommand == "llm-keyword-review"
     assert args_keyword.keyword == "JIT"

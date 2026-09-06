@@ -6,13 +6,12 @@ from spec_integrator.judge.risk_assessor import (
     RiskAssessmentReport,
     RiskAssessor,
 )
-from spec_integrator.judge.semantic_judge import (
-    JudgeReport,
-    JudgeResult,
-    SemanticJudge,
-)
 from spec_integrator.judge.unified_reviewer import (
     UnifiedReviewEngine,
+)
+from spec_integrator.models import (
+    JudgeReport,
+    JudgeResult,
 )
 
 __all__ = [
@@ -22,6 +21,5 @@ __all__ = [
     "KeywordRiskAssessment",
     "RiskAssessmentReport",
     "RiskAssessor",
-    "SemanticJudge",
     "UnifiedReviewEngine",
 ]
