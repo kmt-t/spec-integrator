@@ -168,7 +168,7 @@ llm_judge:
 
 各コンポーネント配下の `formal/` ディレクトリに、`pyModelChecking` を用いた検証スクリプトを配置します。
 
-### スクリプト記述例 (`docs/components/tier1_core/formal/mutex_model.py`)
+### スクリプト記述例 (`docs/components/tier1_core/formal/coos_channel_model.py`)
 ```python
 from pyModelChecking import Kripke
 from pyModelChecking.CTL import modelcheck, AG, Not, And, AtomicProposition
