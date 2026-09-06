@@ -222,97 +222,6 @@ class RiskAssessmentReport:
         return "\n".join(lines)
 
 
-@dataclass
-class TestChainTarget:
-    __test__ = False
-    component_name: str
-    design_doc_path: Path
-    test_spec_path: Path
-    test_code_paths: list[Path]
-
-
-@dataclass
-class TestChainResult:
-    __test__ = False
-    component_name: str
-    design_doc: str
-    test_spec: str
-    test_code_files: list[str]
-    status: str  # "PASS", "WARN", "FAIL", "SKIPPED"
-    summary: str
-    issues: list[dict] = field(default_factory=list)
-
-
-@dataclass
-class TestChainReport:
-    __test__ = False
-    results: list[TestChainResult] = field(default_factory=list)
-    total_evaluated: int = 0
-    pass_count: int = 0
-    warn_count: int = 0
-    fail_count: int = 0
-
-    def to_markdown(self, project_name: str = "System Specification") -> str:
-        lines = [
-            f"# {project_name} 設計仕様→テスト仕様→テストコード 一貫性監査レポート (LLM as a Judge)",
-            "",
-            f"- **監査コンポーネント総数**: {self.total_evaluated}",
-            f"- **合格 (PASS)**: {self.pass_count}",
-            f"- **警告 (WARN)**: {self.warn_count}",
-            f"- **不合格 (FAIL)**: {self.fail_count}",
-            "",
-            "---",
-            "",
-            "## 1. 検出された不一致・網羅性課題 (Issues Found)",
-            "",
-        ]
-        issues_found = False
-        for r in self.results:
-            if r.status in ("WARN", "FAIL") or r.issues:
-                issues_found = True
-                badge = "🔴 FAIL" if r.status == "FAIL" else "🟡 WARN"
-                lines.append(f"### {badge}: `{r.component_name}`")
-                lines.append(f"- **設計仕様書**: `{r.design_doc}`")
-                lines.append(f"- **テスト仕様書**: `{r.test_spec}`")
-                lines.append(
-                    f"- **テストコード**: {', '.join(f'`{f}`' for f in r.test_code_files) if r.test_code_files else 'なし'}"
-                )
-                lines.append(f"- **評価サマリー**: {r.summary}")
-                if r.issues:
-                    lines.append("- **検出項目**:")
-                    for iss in r.issues:
-                        sev = iss.get("severity", "WARNING")
-                        layer = iss.get("layer", "")
-                        loc = iss.get("location", "Unknown")
-                        desc = iss.get("description", "")
-                        lines.append(f"  - **[{sev}] [{layer}]** `{loc}`: {desc}")
-                lines.append("")
-
-        if not issues_found:
-            lines.append(
-                "✔ 評価されたすべてのコンポーネントにおいて、設計仕様 $\\to$ テスト仕様 $\\to$ テスト実装コード間の重大な不一致・欠落は検出されませんでした。\n"
-            )
-
-        lines.extend(
-            [
-                "---",
-                "",
-                "## 2. 全コンポーネント評価一覧",
-                "",
-                "| コンポーネント | 判定 | 評価サマリー | 検出Issue数 |",
-                "| :--- | :---: | :--- | :---: |",
-            ]
-        )
-        for r in self.results:
-            badge = (
-                "🟢 PASS"
-                if r.status == "PASS"
-                else ("🟡 WARN" if r.status == "WARN" else "🔴 FAIL")
-            )
-            lines.append(f"| `{r.component_name}` | {badge} | {r.summary} | {len(r.issues)} |")
-        return "\n".join(lines)
-
-
 __all__ = [
     "ConsistencySummary",
     "FormalModelResult",
@@ -326,9 +235,6 @@ __all__ = [
     "PropertyResult",
     "RiskAssessmentReport",
     "SymbolDrift",
-    "TestChainReport",
-    "TestChainResult",
-    "TestChainTarget",
     "VerificationIssue",
     "WITFileResult",
 ]

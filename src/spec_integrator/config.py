@@ -298,21 +298,6 @@ class SemanticTopicConfig:
 
 
 @dataclass
-class TestChainConfig:
-    """Configuration for 3-tier design-to-test chain verification."""
-
-    test_dirs: list[str] = field(
-        default_factory=lambda: [
-            "tests",
-            "tests/**",
-            "experiments/**",
-            "scenarios",
-            "scenarios/**",
-        ]
-    )
-
-
-@dataclass
 class SourceCheckRule:
     """A check rule within a source group."""
 
@@ -359,7 +344,6 @@ class Config:
     evidence: EvidenceConfig = field(default_factory=EvidenceConfig)
     obligation: ObligationConfig = field(default_factory=ObligationConfig)
     consistency: ConsistencyConfig = field(default_factory=ConsistencyConfig)
-    test_chain: TestChainConfig = field(default_factory=TestChainConfig)
     terminology: TerminologyConfig = field(default_factory=TerminologyConfig)
     semantic_topic: SemanticTopicConfig = field(default_factory=SemanticTopicConfig)
     source_verification: SourceVerificationConfig = field(default_factory=SourceVerificationConfig)
@@ -502,7 +486,6 @@ class Config:
             evidence=_load_dataclass_from_dict(EvidenceConfig, data.get("evidence")),
             obligation=_load_dataclass_from_dict(ObligationConfig, data.get("obligation")),
             consistency=consistency,
-            test_chain=_load_dataclass_from_dict(TestChainConfig, data.get("test_chain")),
             terminology=_load_dataclass_from_dict(TerminologyConfig, data.get("terminology")),
             semantic_topic=_load_dataclass_from_dict(
                 SemanticTopicConfig, data.get("semantic_topic")

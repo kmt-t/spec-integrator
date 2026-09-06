@@ -18,9 +18,6 @@ from spec_integrator.models import (
     PropertyResult,
     RiskAssessmentReport,
     SymbolDrift,
-    TestChainReport,
-    TestChainResult,
-    TestChainTarget,
     VerificationIssue,
     WITFileResult,
 )
@@ -190,16 +187,7 @@ class DocAuditDB:
                     generated_at TEXT
                 )
             """)
-            # 13. test_chain_results
-            self.conn.execute("""
-                CREATE TABLE IF NOT EXISTS test_chain_results (
-                    component_name TEXT PRIMARY KEY,
-                    status TEXT,
-                    summary TEXT,
-                    generated_at TEXT
-                )
-            """)
-            # 14. run_metadata
+            # 13. run_metadata
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS run_metadata (
                     run_type TEXT PRIMARY KEY,
@@ -333,7 +321,6 @@ class DocAuditDB:
                 "risk_assessments",
                 "judge_results",
                 "document_judge_results",
-                "test_chain_results",
                 "run_metadata",
                 "assessed_doc_hashes",
             ]
@@ -733,39 +720,6 @@ class DocAuditDB:
         cursor.execute("SELECT * FROM document_judge_results ORDER BY item_label")
         return self._unpack_covered_files(cursor.fetchall())
 
-    # ------------------------------------------------------------------ #
-    # Test-chain results (`llm-judge`)
-    # ------------------------------------------------------------------ #
-    def replace_test_chain_results(self, rows: list[dict | TestChainResult], backend: str) -> None:
-        now = self._now()
-        with self.conn:
-            self.conn.execute("DELETE FROM test_chain_results")
-            for r in rows:
-                if isinstance(r, TestChainResult):
-                    comp_name = r.component_name
-                    status = r.status
-                    summary = r.summary
-                else:
-                    comp_name = r["component_name"]
-                    status = r["status"]
-                    summary = r.get("summary", "")
-
-                self.conn.execute(
-                    """
-                    INSERT OR REPLACE INTO test_chain_results
-                    (component_name, status, summary, generated_at)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (comp_name, status, summary, now),
-                )
-            self._set_run_metadata("test_chain", backend, now)
-
-    def get_test_chain_results(self) -> list[dict]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM test_chain_results ORDER BY component_name")
-        return [dict(row) for row in cursor.fetchall()]
-
-    # ------------------------------------------------------------------ #
     # Run provenance & staleness tracking
     # ------------------------------------------------------------------ #
     def get_run_metadata(self, run_type: str) -> dict | None:

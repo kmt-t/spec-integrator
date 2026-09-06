@@ -193,18 +193,6 @@ class Reporter:
                     lines.append(f"| `{r['item_label']}` | {icon} {r['status']} | {r['summary']} |")
                 lines.append("")
 
-            chain_rows = db.get_test_chain_results()
-            if chain_rows:
-                lines.append("### 3.5.4 Design -> Test Spec -> Test Code Chain Verdicts\n")
-                lines.append("| Component | Status | Summary |")
-                lines.append("| :--- | :---: | :--- |")
-                for r in chain_rows:
-                    icon = {"PASS": "🟢", "WARN": "🟠", "FAIL": "🔴"}.get(r["status"], "🔴")
-                    lines.append(
-                        f"| `{r['component_name']}` | {icon} {r['status']} | {r['summary']} |"
-                    )
-                lines.append("")
-
         # 5c. Consistency / propagation
         if consistency_summary is not None:
             lines.append("## 3.6 Change Propagation (Consistency)\n")

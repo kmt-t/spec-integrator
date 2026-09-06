@@ -11,12 +11,6 @@ from spec_integrator.judge.semantic_judge import (
     JudgeResult,
     SemanticJudge,
 )
-from spec_integrator.judge.test_chain_judge import (
-    TestChainJudge,
-    TestChainReport,
-    TestChainResult,
-    TestChainTarget,
-)
 from spec_integrator.judge.unified_reviewer import (
     UnifiedReviewEngine,
 )
@@ -29,9 +23,5 @@ __all__ = [
     "RiskAssessmentReport",
     "RiskAssessor",
     "SemanticJudge",
-    "TestChainJudge",
-    "TestChainReport",
-    "TestChainResult",
-    "TestChainTarget",
     "UnifiedReviewEngine",
 ]
