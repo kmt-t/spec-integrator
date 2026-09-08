@@ -744,6 +744,144 @@ def cmd_llm_keyword_review(args):
     sys.exit(1 if has_failures else 0)
 
 
+def cmd_llm_judge(args):
+    """Runs the anchored LLM semantic judge across all {VERIFY_LLM}-tagged documents.
+
+    Persists results into `document_judge_results` (whole-document self-consistency,
+    checked by DocumentJudgeCoverageCheck) and `judge_results` (cross-document island
+    review, checked by JudgeCoverageCheck), anchored to the current document hashes so
+    the Obligation Verifier can detect staleness. This is the command that discharges
+    the OBLIG-JUDGE-* / OBLIG-DOC-JUDGE-* obligations.
+    """
+    config = Config.load(args.config)
+    reviewer = UnifiedReviewEngine(config)
+
+    if args.list_checks:
+        print("=" * 80)
+        print(" Available LLM Judge Checks")
+        print("=" * 80)
+        print("-- Single Document Mode (-> document_judge_results) --")
+        for c in reviewer.get_effective_checks("single", include_disabled=True):
+            status = "ENABLED " if c.enabled else "DISABLED"
+            print(f"  [{status}] {c.id:<26} ({c.severity:<7}) - {c.name}")
+        print("-- Cluster Island Mode (-> judge_results) --")
+        for c in reviewer.get_effective_checks("cluster", include_disabled=True):
+            status = "ENABLED " if c.enabled else "DISABLED"
+            print(f"  [{status}] {c.id:<26} ({c.severity:<7}) - {c.name}")
+        sys.exit(0)
+
+    documents, graph, db, _docs_root = _load_and_parse_all(config)
+    backend = args.backend or config.llm_judge.default_backend
+    model = args.model
+    selected_checks = [args.check] if args.check else None
+
+    llm_tag = config.llm_judge.tag
+    tagged = [d for d in documents if llm_tag in d.all_tags]
+    if not tagged:
+        print(f"No documents found tagged with '{llm_tag}'. Nothing to judge.")
+        db.close()
+        sys.exit(0)
+    tagged_paths = {d.file_path for d in tagged}
+    print(f"Found {len(tagged)} document(s) tagged with '{llm_tag}'.")
+
+    has_failures = False
+
+    # Phase 1: whole-document self-consistency review -> document_judge_results
+    doc_targets = (
+        tagged if (args.exhaustive or args.max_documents <= 0) else tagged[: args.max_documents]
+    )
+    if len(doc_targets) < len(tagged):
+        print(
+            f"[Warning] {len(tagged)} tagged document(s) but --max-documents={args.max_documents}; "
+            f"only auditing {len(doc_targets)}. Raise --max-documents or pass -a/--exhaustive "
+            "for full coverage."
+        )
+    print(
+        f"\n>>> [1/2] Whole-document self-consistency review "
+        f"({len(doc_targets)} document(s), backend: {backend})..."
+    )
+    doc_results = []
+    for idx, doc in enumerate(doc_targets, start=1):
+        print(f"  [{idx}/{len(doc_targets)}] Auditing '{doc.file_path}'...", flush=True)
+        res = reviewer.review_single_document(
+            doc, backend=backend, model=model, check_ids=selected_checks, dry_run=args.dry_run
+        )
+        print(f"       -> Status: {res.status} ({res.summary[:70]})")
+        for iss in res.issues:
+            cid = iss.get("check_id", "CHECK")
+            print(
+                f"          [{iss.get('severity', 'WARNING')}] [{cid}] "
+                f"{iss.get('location', '')}: {iss.get('description', '')}"
+            )
+        if res.status == "FAIL":
+            has_failures = True
+        doc_results.append(res)
+
+    if not args.dry_run:
+        db.replace_document_judge_results(doc_results, backend)
+        db.set_assessed_doc_hashes(
+            "document_judge", {d.file_path: d.content_hash for d in doc_targets}
+        )
+
+    # Phase 2: cross-document island review -> judge_results
+    islands = graph.extract_document_islands(min_size=1)
+    related_islands = [isl for isl in islands if tagged_paths & set(isl.file_paths)]
+    island_targets = (
+        related_islands
+        if (args.exhaustive or args.max_subgraphs <= 0)
+        else related_islands[: args.max_subgraphs]
+    )
+    if len(island_targets) < len(related_islands):
+        print(
+            f"[Warning] {len(related_islands)} island(s) touch tagged documents but "
+            f"--max-subgraphs={args.max_subgraphs}; only auditing {len(island_targets)}. "
+            "Raise --max-subgraphs or pass -a/--exhaustive for full coverage."
+        )
+    print(
+        f"\n>>> [2/2] Cross-document island review "
+        f"({len(island_targets)} island(s), backend: {backend})..."
+    )
+    island_results = []
+    covered_hashes: dict[str, str] = {}
+    doc_by_path = {d.file_path: d for d in documents}
+    for idx, isl in enumerate(island_targets, start=1):
+        print(
+            f"  [{idx}/{len(island_targets)}] Auditing island '{isl.name}' "
+            f"({isl.total_docs} doc(s))...",
+            flush=True,
+        )
+        res = reviewer.review_document_island(
+            isl,
+            documents,
+            backend=backend,
+            model=model,
+            check_ids=selected_checks,
+            dry_run=args.dry_run,
+        )
+        print(f"       -> Status: {res.status} ({res.summary[:70]})")
+        for iss in res.issues:
+            cid = iss.get("check_id", "CHECK")
+            print(
+                f"          [{iss.get('severity', 'WARNING')}] [{cid}] "
+                f"{iss.get('location', '')}: {iss.get('description', '')}"
+            )
+        if res.status == "FAIL":
+            has_failures = True
+        island_results.append(res)
+        for fp in isl.file_paths:
+            d = doc_by_path.get(fp)
+            if d:
+                covered_hashes[fp] = d.content_hash
+
+    if not args.dry_run:
+        db.replace_judge_results(island_results, backend)
+        db.set_assessed_doc_hashes("judge", covered_hashes)
+        db.commit()
+
+    db.close()
+    sys.exit(1 if has_failures else 0)
+
+
 def cmd_llm_word(args):
     """Executes terminology embedding, pairwise similarity indexing, LLM variance judgment, and report."""
     config = Config.load(args.config)
@@ -1055,6 +1193,56 @@ def _add_llm_keyword_review_subparser(subparsers) -> None:
     p.set_defaults(func=cmd_llm_keyword_review)
 
 
+def _add_llm_judge_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "llm-judge",
+        help=(
+            "Anchored LLM semantic judge for all {VERIFY_LLM}-tagged documents "
+            "(discharges the OBLIG-JUDGE-* / OBLIG-DOC-JUDGE-* obligations)"
+        ),
+    )
+    _add_config_arg(p)
+    p.add_argument(
+        "--max-documents",
+        type=int,
+        default=20,
+        help="Max tagged documents to audit in whole-document mode (default: 20, 0 for unlimited).",
+    )
+    p.add_argument(
+        "--max-subgraphs",
+        type=int,
+        default=20,
+        help="Max document islands to audit in cluster mode (default: 20, 0 for unlimited).",
+    )
+    p.add_argument(
+        "-a",
+        "--exhaustive",
+        action="store_true",
+        help="Ignore --max-documents/--max-subgraphs and audit full coverage.",
+    )
+    p.add_argument(
+        "--check",
+        help="Run only a specific check ID",
+    )
+    p.add_argument(
+        "--list-checks",
+        action="store_true",
+        help="List all configured single/cluster review checks and exit",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Assemble and display prompts without calling the LLM backend or persisting results",
+    )
+    p.add_argument(
+        "--backend",
+        choices=["openrouter", "sakura", "ollama", "mock"],
+        help="LLM backend override",
+    )
+    p.add_argument("--model", help="LLM model name override")
+    p.set_defaults(func=cmd_llm_judge)
+
+
 _SUBPARSER_BUILDERS = (
     _add_init_subparser,
     _add_build_subparser,
@@ -1067,6 +1255,7 @@ _SUBPARSER_BUILDERS = (
     _add_llm_word_subparser,
     _add_llm_single_review_subparser,
     _add_llm_keyword_review_subparser,
+    _add_llm_judge_subparser,
 )
 
 
