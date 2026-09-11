@@ -110,8 +110,9 @@ keywords:
     pattern: "^GLOBAL_[A-Za-z0-9_]+$"
     defined_in: "docs/architecture/document_structure.md"
   local:
-    pattern: "^[A-Za-z0-9_]+$"
-    defined_in: "docs/requires/**/*.md"
+    # GOTCHA / TEST / BENCHMARK IDs use component-qualified hyphenated names.
+    pattern: "^[A-Za-z0-9_-]+$"
+    defined_in: "docs/requires/**/*.md または docs/architecture/keyword_dictionary.md"
 
 # 形式検証 (pyModelChecking) の設定
 formal_verification:
@@ -148,6 +149,8 @@ llm_judge:
   - 設計仕様書内に付与することで、該当コンポーネントの `formal/` フォルダ内に pyModelChecking モデルスクリプトが存在し、モデル検査が PASS することを義務付けます。
 - **`{VERIFY_LLM}`**:
   - 設計仕様書内に付与することで、LLM 監査（`llm-single-review` / `llm-keyword-review`）実行時に対象ドキュメントや関連サブグラフのセマンティック監査を実行します。
+- **`{VERIFY_WIT}`**:
+  - 設計仕様書内に付与することで、コンポーネント配下の WIT 定義を検査し、構文・型整合性を検証します。
 
 ---
 
@@ -313,6 +316,17 @@ spec-integrator format-doc [OPTIONS] [FILES...]
 
 ### (4) `spec-integrator format-src` / `check-src`
 ソースコード（C++: clang-format / Python: Ruff）の自動フォーマットおよびサボり検証・単体テストを実行します。
+
+`--group` は対象の規約・検証設定を選択します。`cpp` は C++ 規約、`python` は
+一般 Python、`concepts` は仕様書に対応するコンセプト実装、`formal` は
+pyModelChecking 形式モデル、`pysim` は組み込み移植対象のシミュレータとテスト、
+`all` は全グループを対象にします。
+
+Python のサボり検証はファイルごとに `ast.parse` を一度実行し、`typing.Any`、空関数、
+および形式検証の `guards=False` 呼出しを AST ノードから判定します。AST に含まれない
+コメント中の `TODO` 等は `tokenize` のコメントトークンだけを対象にし、文字列・docstring
+の内容をソース違反として誤検出しません。C++ は Python と別の言語解析バックエンドとして
+扱い、clang の AST／コンパイラ情報を用いるバックエンドへ移行できる境界を維持します。
 
 ```bash
 spec-integrator format-src --group <cpp|python|concepts|formal|pysim|all>

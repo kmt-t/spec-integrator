@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import ast
 import fnmatch
+import io
 import re
 import shutil
 import subprocess
-import sys
+import tokenize
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from spec_integrator.config import Config, SourceGroupConfig
+    from spec_integrator.config import Config
 
 
 @dataclass
@@ -33,6 +34,10 @@ class SourceVerificationResult:
     @property
     def status(self) -> str:
         return "FAIL" if any(i.severity == "ERROR" for i in self.issues) else "PASS"
+
+
+_WORK_MARKER_RE = re.compile(r"\b(TODO|FIXME|XXX|HACK)\b\s*[:：]?")
+_TYPING_MODULES = frozenset(("typing", "typing_extensions"))
 
 
 class SourceVerifier:
@@ -90,7 +95,7 @@ class SourceVerifier:
                 )
                 if matches_ext and matches_pat:
                     matched.append(p)
-            return sorted(list(set(matched)))
+            return sorted(set(matched))
 
         # Auto-discover from include_dirs
         collected: list[Path] = []
@@ -111,7 +116,7 @@ class SourceVerifier:
                 if matches_ext and matches_pat:
                     collected.append(p.resolve())
 
-        return sorted(list(set(collected)))
+        return sorted(set(collected))
 
     def verify_group(
         self,
@@ -173,102 +178,34 @@ class SourceVerifier:
             if file_path.is_relative_to(self.root_dir)
             else str(file_path)
         )
-        lines = content.splitlines()
-
-        # 1. TODO / FIXME / HACK comments check
-        if not rules or "todo_comment" in rules:
-            for idx, line_str in enumerate(lines, start=1):
-                # Ignore if inside a docstring or test fixture name
-                m = re.search(r"\b(TODO|FIXME|XXX|HACK)\b\s*[:：]?", line_str)
-                if m:
-                    # Ignore comment markers in markdown or documentation files
-                    issues.append(
-                        SourceIssue(
-                            file_path=rel_path,
-                            line=idx,
-                            rule="SABOTAGE-TODO-COMMENT",
-                            severity="WARNING",
-                            message=f"Unresolved work marker found: '{m.group(0)}' in source code.",
-                            group=group_name,
-                        )
-                    )
-
-        # 2. Python specific anti-sabotage (typing.Any prohibition & dummy functions)
-        if file_path.suffix.lower() == ".py":
-            # forbid_typing_any
-            if not rules or "forbid_typing_any" in rules:
-                for idx, line_str in enumerate(lines, start=1):
-                    # Check "from typing import ... Any ..." or "import typing" + "typing.Any"
-                    if re.search(r"from\s+typing\s+import\b[^#]*\bAny\b", line_str) or re.search(
-                        r"\btyping\.Any\b", line_str
-                    ):
+        is_python = file_path.suffix.lower() == ".py"
+        if is_python:
+            issues.extend(
+                self._check_python_rules(file_path, content, rel_path, rules, group_name)
+            )
+        else:
+            # C++ is dispatched to its language-specific analyzer. The current
+            # rules remain the compatibility path until the clang AST backend
+            # is wired into this same boundary.
+            if not rules or "todo_comment" in rules:
+                for idx, line_str in enumerate(content.splitlines(), start=1):
+                    match = _WORK_MARKER_RE.search(line_str)
+                    if match:
                         issues.append(
                             SourceIssue(
                                 file_path=rel_path,
                                 line=idx,
-                                rule="PY-FORBIDDEN-TYPING-ANY",
-                                severity="ERROR",
-                                message="Use of 'typing.Any' is strictly forbidden in Fireball. Use specific types or algebraic data types.",
+                                rule="SABOTAGE-TODO-COMMENT",
+                                severity="WARNING",
+                                message=f"Unresolved work marker found: '{match.group(0)}' in source code.",
                                 group=group_name,
                             )
                         )
 
-            # dummy_pass / empty function body check via AST
-            if not rules or "dummy_pass" in rules or "empty_function" in rules:
-                try:
-                    tree = ast.parse(content, filename=str(file_path))
-                    for node in ast.walk(tree):
-                        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                            # Check if body is only pass, Ellipsis, or return constant
-                            if len(node.body) == 1:
-                                single = node.body[0]
-                                if isinstance(single, ast.Pass):
-                                    issues.append(
-                                        SourceIssue(
-                                            file_path=rel_path,
-                                            line=node.lineno,
-                                            rule="SABOTAGE-EMPTY-FUNCTION",
-                                            severity="ERROR",
-                                            message=f"Function '{node.name}' has empty 'pass' implementation (dummy placeholder).",
-                                            group=group_name,
-                                        )
-                                    )
-                                elif (
-                                    isinstance(single, ast.Expr)
-                                    and isinstance(single.value, ast.Constant)
-                                    and single.value.value is Ellipsis
-                                ):
-                                    issues.append(
-                                        SourceIssue(
-                                            file_path=rel_path,
-                                            line=node.lineno,
-                                            rule="SABOTAGE-EMPTY-FUNCTION",
-                                            severity="ERROR",
-                                            message=f"Function '{node.name}' has empty '...' implementation.",
-                                            group=group_name,
-                                        )
-                                    )
-                except SyntaxError:
-                    pass
-
-            # formal mutation guards check
-            if "mutation_guards_required" in rules:
-                if "guards=False" not in content and "guards = False" not in content:
-                    issues.append(
-                        SourceIssue(
-                            file_path=rel_path,
-                            line=1,
-                            rule="FORMAL-MUTATION-GUARD-MISSING",
-                            severity="ERROR",
-                            message="Formal model must include 'guards=False' mutation verification test.",
-                            group=group_name,
-                        )
-                    )
-
         # 3. C++ specific empty function check
         if file_path.suffix.lower() in (".hxx", ".cxx", ".c", ".h", ".cpp"):
             if "empty_function" in rules:
-                for idx, line_str in enumerate(lines, start=1):
+                for idx, line_str in enumerate(content.splitlines(), start=1):
                     # Check for empty function implementation `{}` on the same line
                     if re.search(r"\)\s*(?:const)?\s*\{\s*\}", line_str):
                         # Allow default constructor/destructor
@@ -285,6 +222,152 @@ class SourceVerifier:
                             )
 
         return issues
+
+    def _check_python_rules(
+        self,
+        file_path: Path,
+        content: str,
+        rel_path: str,
+        rules: list[str],
+        group_name: str,
+    ) -> list[SourceIssue]:
+        """Checks Python source from one parsed AST, with comments read by tokenize."""
+        try:
+            tree = ast.parse(content, filename=str(file_path))
+        except SyntaxError as error:
+            return [
+                SourceIssue(
+                    file_path=rel_path,
+                    line=error.lineno or 1,
+                    rule="PY-SYNTAX-ERROR",
+                    severity="ERROR",
+                    message=f"Python AST parsing failed: {error.msg}",
+                    group=group_name,
+                )
+            ]
+
+        issues: list[SourceIssue] = []
+        if not rules or "todo_comment" in rules:
+            issues.extend(self._check_python_work_markers(content, rel_path, group_name))
+        if not rules or "forbid_typing_any" in rules:
+            issues.extend(self._check_python_typing_any(tree, rel_path, group_name))
+        if not rules or "dummy_pass" in rules or "empty_function" in rules:
+            issues.extend(self._check_python_empty_functions(tree, rel_path, group_name))
+        if "mutation_guards_required" in rules and not self._has_false_guard_call(tree):
+            issues.append(
+                SourceIssue(
+                    file_path=rel_path,
+                    line=1,
+                    rule="FORMAL-MUTATION-GUARD-MISSING",
+                    severity="ERROR",
+                    message="Formal model must include a call with guards=False for mutation verification.",
+                    group=group_name,
+                )
+            )
+        return issues
+
+    def _check_python_work_markers(
+        self, content: str, rel_path: str, group_name: str
+    ) -> list[SourceIssue]:
+        issues: list[SourceIssue] = []
+        try:
+            tokens = tokenize.generate_tokens(io.StringIO(content).readline)
+            for token in tokens:
+                if token.type != tokenize.COMMENT:
+                    continue
+                match = _WORK_MARKER_RE.search(token.string)
+                if match:
+                    issues.append(
+                        SourceIssue(
+                            file_path=rel_path,
+                            line=token.start[0],
+                            rule="SABOTAGE-TODO-COMMENT",
+                            severity="WARNING",
+                            message=f"Unresolved work marker found: '{match.group(0)}' in source code.",
+                            group=group_name,
+                        )
+                    )
+        except tokenize.TokenError:
+            # Syntax errors are reported by the AST parser before this helper runs.
+            pass
+        return issues
+
+    def _check_python_typing_any(
+        self, tree: ast.Module, rel_path: str, group_name: str
+    ) -> list[SourceIssue]:
+        typing_aliases = set(_TYPING_MODULES)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in _TYPING_MODULES:
+                        typing_aliases.add(alias.asname or alias.name)
+
+        any_nodes: list[ast.AST] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module in _TYPING_MODULES:
+                any_nodes.extend(alias for alias in node.names if alias.name == "Any")
+            elif (
+                isinstance(node, ast.Attribute)
+                and node.attr == "Any"
+                and isinstance(node.value, ast.Name)
+                and node.value.id in typing_aliases
+            ):
+                any_nodes.append(node)
+
+        return [
+            SourceIssue(
+                file_path=rel_path,
+                line=getattr(node, "lineno", 1),
+                rule="PY-FORBIDDEN-TYPING-ANY",
+                severity="ERROR",
+                message="Use of 'typing.Any' is strictly forbidden in Fireball. Use specific types or algebraic data types.",
+                group=group_name,
+            )
+            for node in any_nodes
+        ]
+
+    def _check_python_empty_functions(
+        self, tree: ast.Module, rel_path: str, group_name: str
+    ) -> list[SourceIssue]:
+        issues: list[SourceIssue] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or len(node.body) != 1:
+                continue
+            single = node.body[0]
+            if isinstance(single, ast.Pass):
+                detail = "empty 'pass' implementation (dummy placeholder)"
+            elif (
+                isinstance(single, ast.Expr)
+                and isinstance(single.value, ast.Constant)
+                and single.value.value is Ellipsis
+            ):
+                detail = "empty '...' implementation"
+            else:
+                continue
+            issues.append(
+                SourceIssue(
+                    file_path=rel_path,
+                    line=node.lineno,
+                    rule="SABOTAGE-EMPTY-FUNCTION",
+                    severity="ERROR",
+                    message=f"Function '{node.name}' has {detail}.",
+                    group=group_name,
+                )
+            )
+        return issues
+
+    @staticmethod
+    def _has_false_guard_call(tree: ast.Module) -> bool:
+        return any(
+            isinstance(node, ast.Call)
+            and any(
+                keyword.arg == "guards"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is False
+                for keyword in node.keywords
+            )
+            for node in ast.walk(tree)
+        )
 
     def _check_cpp_rules(
         self, file_path: Path, rules: list[str], group_name: str
