@@ -7,6 +7,8 @@ from spec_integrator.models import VerificationIssue
 class DeclaredEvidenceFileMissingCheck(AntiSabotageCheck):
     """証跡ファイルの欠落: <!-- evidence: ... --> に書かれたパスが実在するか検証する。"""
 
+    _NON_FILE_EVIDENCE_KEYS = frozenset({"contract-only"})
+
     rule_code = "EVID-DECLARED-FILE-MISSING"
     name = "証跡ファイルの欠落"
     gate = "Evidence"
@@ -22,6 +24,8 @@ class DeclaredEvidenceFileMissingCheck(AntiSabotageCheck):
         for doc in ctx.documents:
             doc_dir = (ctx.docs_root / doc.file_path).parent
             for ev_type, ev_path in doc.evidence.items():
+                if ev_type in self._NON_FILE_EVIDENCE_KEYS:
+                    continue
                 resolved = None
                 for cand in [doc_dir / ev_path, ctx.docs_root / ev_path, repo_root / ev_path]:
                     if cand.exists():

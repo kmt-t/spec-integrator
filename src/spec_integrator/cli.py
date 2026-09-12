@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
+import subprocess
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -285,8 +287,6 @@ def cmd_format_doc(args):
 
 def cmd_format_src(args):
     """Applies static formatters (Ruff for Python, clang-format for C++) to source code."""
-    import shutil
-    import subprocess
     from spec_integrator.source_verifier import SourceVerifier
 
     config = Config.load(args.config)

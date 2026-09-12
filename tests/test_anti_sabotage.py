@@ -145,3 +145,32 @@ def test_evidence_and_consistency_checks(tmp_path):
     codes = [i.rule_code for i in issues]
     assert "EVID-DECLARED-FILE-MISSING" in codes
     assert "CONSIST-DUPLICATE-DEFINITION" in codes
+
+
+def test_contract_only_evidence_metadata_is_not_a_file(tmp_path):
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    cfg = Config()
+    cfg.config_dir = tmp_path
+    doc = docs_dir / "contract.md"
+    doc.write_text(
+        """# Contract
+<!-- evidence:
+     contract-only: true
+     formal: formal_model.py
+-->
+""",
+        encoding="utf-8",
+    )
+
+    parsed = MarkdownParser(cfg).parse_file(doc, docs_dir)
+    ctx = AntiSabotageContext(
+        documents=[parsed],
+        graph=None,
+        docs_root=docs_dir,
+        config=cfg,
+    )
+    issues = DeclaredEvidenceFileMissingCheck().check(ctx)
+    assert len(issues) == 1
+    assert issues[0].rule_code == "EVID-DECLARED-FILE-MISSING"
+    assert "contract-only" not in issues[0].message

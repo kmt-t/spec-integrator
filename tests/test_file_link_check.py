@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
-import pytest
-from pathlib import Path
+from spec_integrator.anti_sabotage.base import AntiSabotageContext
+from spec_integrator.anti_sabotage.checks.fmt_file_link import FileLinkFormatCheck
+from spec_integrator.anti_sabotage.runner import AntiSabotageRunner
 from spec_integrator.config import Config
 from spec_integrator.parser import MarkdownParser
-from spec_integrator.anti_sabotage.base import AntiSabotageContext
-from spec_integrator.anti_sabotage.runner import AntiSabotageRunner
-from spec_integrator.anti_sabotage.checks.fmt_file_link import FileLinkFormatCheck
 
 
 def test_file_link_format_valid(tmp_path):

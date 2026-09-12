@@ -98,8 +98,8 @@ co-change の依存関係は `{Keyword}` の既存トレーサビリティから
 - **LLM as a Judge セマンティック監査 (`llm-single-review`, `llm-keyword-review` コマンド)**:
   - 単一ドキュメント・セクションの自己一貫性監査、または高リスクキーワードが連結するドキュメント島全体のトレーサビリティ・意味的矛盾を Sakura / OpenRouter / Ollama バックエンドで診断。
 - **SQLite データベース・監査キャッシュ (`DocAuditDB`)**:
-  - ドキュメント構造の高速クエリ、ハッシュ値による差分検証キャッシュに加え、`risk`/`llm-single-review`/`llm-keyword-review` の判定結果そのもの（中間 JSON レポートは生成しない）を記録する唯一の正本。
-  - `.spec-integrator/doc_cache.db` は git 管理対象（`.gitattributes` で `*.db binary` 指定）。フレッシュチェックアウトや CI でも、課金を伴う LLM 監査を再実行せずに直近の監査結果を参照できる。
+  - ドキュメント構造の高速クエリ、ハッシュ値による差分検証キャッシュに加え、`risk`/`llm-single-review`/`llm-keyword-review` の判定結果そのもの（中間 JSON レポートは生成しない）を記録するローカル生成データ。
+  - `.spec-integrator/doc_cache.db` は検証時に親リポジトリ上で再生成する非追跡ファイルであり、spec-integrator サブモジュールおよび親リポジトリのGit履歴には含めない。フレッシュチェックアウト後は `build --clean` または `sync` で再構築する。
 - **CI / GitHub Actions ファースト**:
   - 検査器リビジョン刻印（Rule R9 準拠）、サマリー表、違反詳細、トレーサビリティマトリクス、リスク評価・LLM 判定結果を集約した単一 Markdown レポートを出力。
 
