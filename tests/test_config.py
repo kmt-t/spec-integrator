@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from spec_integrator.config import Config, TierConfig
 
 
@@ -56,3 +58,26 @@ project:
     assert cfg.is_excluded("FORMAT.md")
     assert cfg.is_excluded("templates/custom_spec.md")
     assert not cfg.is_excluded("components/tier1_core/os_coos.md")
+
+
+def test_config_loads_pysim_import_tiers(tmp_path: Path) -> None:
+    cfg_file = tmp_path / "spec-integrator.yaml"
+    cfg_file.write_text(
+        """pysim_imports:
+  root: experiments/pysim
+  tiers:
+    - tier: 1
+      paths: [tier1_core/**/*.py]
+    - tier: 2
+      paths: [tier2_runtime/**/*.py]
+""",
+        encoding="utf-8",
+    )
+
+    cfg = Config.load(cfg_file)
+
+    assert cfg.pysim_imports.root == "experiments/pysim"
+    assert [(item.tier, item.paths) for item in cfg.pysim_imports.tiers] == [
+        (1, ["tier1_core/**/*.py"]),
+        (2, ["tier2_runtime/**/*.py"]),
+    ]

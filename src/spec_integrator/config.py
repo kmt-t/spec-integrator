@@ -326,6 +326,24 @@ class SourceVerificationConfig:
     groups: dict[str, SourceGroupConfig] = field(default_factory=dict)
 
 
+@dataclass
+class PysimImportTierConfig:
+    """Tier assignment for pysim product source files."""
+
+    tier: int
+    paths: list[str] = field(default_factory=list)
+    exclude: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PysimImportConfig:
+    """Configuration for the pysim import dependency check."""
+
+    enabled: bool = True
+    root: str = "experiments/pysim"
+    tiers: list[PysimImportTierConfig] = field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Root Configuration Object
 # ---------------------------------------------------------------------------
@@ -347,6 +365,7 @@ class Config:
     terminology: TerminologyConfig = field(default_factory=TerminologyConfig)
     semantic_topic: SemanticTopicConfig = field(default_factory=SemanticTopicConfig)
     source_verification: SourceVerificationConfig = field(default_factory=SourceVerificationConfig)
+    pysim_imports: PysimImportConfig = field(default_factory=PysimImportConfig)
     config_dir: Path = field(default_factory=Path.cwd)
 
     def is_excluded(self, file_path: str | Path, docs_root: Path | None = None) -> bool:
@@ -447,6 +466,8 @@ class Config:
             if inv_path.exists():
                 with open(inv_path, "r", encoding="utf-8") as f:
                     extra = yaml.safe_load(f) or {}
+                if isinstance(extra, dict):
+                    consistency.invariants.extend(extra.get("invariants", []))
         # 6. Source verification
         source_verif_raw = data.get("source_verification") or {}
         groups_raw = source_verif_raw.get("groups", {})
@@ -466,6 +487,32 @@ class Config:
         source_verification = SourceVerificationConfig(
             enabled=source_verif_raw.get("enabled", True),
             groups=parsed_groups,
+        )
+
+        # 7. Pysim product import dependency configuration
+        pysim_imports_raw = data.get("pysim_imports") or {}
+        parsed_pysim_tiers: list[PysimImportTierConfig] = []
+        for tier_data in pysim_imports_raw.get("tiers", []):
+            if not isinstance(tier_data, dict):
+                continue
+            tier_value = tier_data.get("tier")
+            if isinstance(tier_value, str) and tier_value.isdigit():
+                tier_value = int(tier_value)
+            if not isinstance(tier_value, int):
+                raise ValueError("pysim_imports.tiers[].tier must be an integer")
+            paths = tier_data.get("paths", [])
+            if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
+                raise ValueError("pysim_imports.tiers[].paths must be a list of strings")
+            exclude = tier_data.get("exclude", [])
+            if not isinstance(exclude, list) or not all(isinstance(path, str) for path in exclude):
+                raise ValueError("pysim_imports.tiers[].exclude must be a list of strings")
+            parsed_pysim_tiers.append(
+                PysimImportTierConfig(tier=tier_value, paths=paths, exclude=exclude)
+            )
+        pysim_imports = PysimImportConfig(
+            enabled=bool(pysim_imports_raw.get("enabled", True)),
+            root=str(pysim_imports_raw.get("root", "experiments/pysim")),
+            tiers=parsed_pysim_tiers,
         )
 
         return cls(
@@ -491,6 +538,7 @@ class Config:
                 SemanticTopicConfig, data.get("semantic_topic")
             ),
             source_verification=source_verification,
+            pysim_imports=pysim_imports,
             config_dir=config_dir,
         )
 
@@ -541,10 +589,11 @@ __all__ = [
     "LLMJudgeConfig",
     "ObligationConfig",
     "ProjectConfig",
+    "PysimImportConfig",
+    "PysimImportTierConfig",
     "SourceCheckRule",
     "SourceGroupConfig",
     "SourceVerificationConfig",
-    "TestChainConfig",
     "TierConfig",
     "WITVerificationConfig",
     "normalize_rel_path",

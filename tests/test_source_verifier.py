@@ -6,7 +6,7 @@ _SRC_DIR = _PROJECT_ROOT / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from spec_integrator.config import Config
+from spec_integrator.config import Config, PysimImportConfig, PysimImportTierConfig
 from spec_integrator.source_verifier import SourceIssue, SourceVerifier
 
 
@@ -64,8 +64,51 @@ build_model(guards=False)
     ]
 
 
+def test_python_static_checks_allow_protocol_contract_bodies(tmp_path: Path) -> None:
+    issues = _check_python(
+        tmp_path,
+        '''from typing import Protocol
+
+class Contract(Protocol):
+    def required(self, value: int) -> str: ...
+
+def placeholder() -> None:
+    ...
+''',
+        ["empty_function"],
+    )
+
+    assert [(issue.rule, issue.line) for issue in issues] == [
+        ("SABOTAGE-EMPTY-FUNCTION", 6),
+    ]
+
+
 def test_python_static_checks_report_ast_syntax_errors(tmp_path: Path) -> None:
     issues = _check_python(tmp_path, "def broken(:\n    pass\n", ["forbid_typing_any"])
 
     assert len(issues) == 1
     assert issues[0].rule == "PY-SYNTAX-ERROR"
+
+
+def test_pysim_import_check_uses_configured_file_tiers(tmp_path: Path) -> None:
+    pysim_root = tmp_path / "experiments" / "pysim"
+    (pysim_root / "tier1").mkdir(parents=True)
+    (pysim_root / "tier2").mkdir(parents=True)
+    (pysim_root / "tier1" / "contract.py").write_text("from implementation import Value\n", encoding="utf-8")
+    (pysim_root / "tier2" / "implementation.py").write_text("class Value: pass\n", encoding="utf-8")
+
+    config = Config()
+    config.config_dir = tmp_path
+    config.pysim_imports = PysimImportConfig(
+        root="experiments/pysim",
+        tiers=[
+            PysimImportTierConfig(tier=1, paths=["tier1/*.py"]),
+            PysimImportTierConfig(tier=2, paths=["tier2/*.py"]),
+        ],
+    )
+
+    issues = SourceVerifier(config)._check_pysim_imports("python_pysim")
+
+    assert [(issue.rule, issue.line) for issue in issues] == [
+        ("PYSIM-IMPORT-DIRECTION", 1)
+    ]

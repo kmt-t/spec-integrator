@@ -6,6 +6,7 @@ import io
 import re
 import shutil
 import subprocess
+import sys
 import tokenize
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -152,6 +153,8 @@ class SourceVerifier:
             elif cid == "run_tests":
                 # For pysim, run scenarios/unit tests
                 result.issues.extend(self._run_pysim_tests(group_name))
+            elif cid == "pysim_imports":
+                result.issues.extend(self._check_pysim_imports(group_name))
 
         return result
 
@@ -222,6 +225,123 @@ class SourceVerifier:
                             )
 
         return issues
+
+    def _check_pysim_imports(self, group_name: str) -> list[SourceIssue]:
+        """Checks configured pysim product imports against Tier direction."""
+        cfg = self.config.pysim_imports
+        if not cfg.enabled:
+            return []
+
+        root = self.config.resolve_path(cfg.root)
+        if not cfg.tiers:
+            return [
+                SourceIssue(
+                    file_path=str(self.config.config_dir / "spec-integrator.yaml"),
+                    line=1,
+                    rule="PYSIM-IMPORT-CONFIG",
+                    severity="ERROR",
+                    message="pysim_imports.tiers must define product source file Tier assignments.",
+                    group=group_name,
+                )
+            ]
+
+        file_tiers: dict[Path, list[int]] = {}
+        for tier_cfg in cfg.tiers:
+            for pattern in tier_cfg.paths:
+                for file_path in root.glob(pattern):
+                    relative = file_path.relative_to(root).as_posix()
+                    excluded = any(fnmatch.fnmatch(relative, item) for item in tier_cfg.exclude)
+                    if file_path.is_file() and file_path.suffix == ".py" and not excluded:
+                        file_tiers.setdefault(file_path.resolve(), []).append(tier_cfg.tier)
+
+        issues: list[SourceIssue] = []
+        for file_path, tiers in file_tiers.items():
+            if len(set(tiers)) != 1:
+                issues.append(
+                    SourceIssue(
+                        file_path=self._relative_source_path(file_path),
+                        line=1,
+                        rule="PYSIM-IMPORT-CONFIG",
+                        severity="ERROR",
+                        message=f"Product source file has multiple configured Tiers: {sorted(set(tiers))}.",
+                        group=group_name,
+                    )
+                )
+
+        module_tiers: dict[str, set[int]] = {}
+        for file_path, tiers in file_tiers.items():
+            if len(set(tiers)) != 1:
+                continue
+            tier = tiers[0]
+            relative = file_path.relative_to(root).with_suffix("")
+            parts = relative.parts
+            module_tiers.setdefault(parts[-1], set()).add(tier)
+            for index in range(1, len(parts) + 1):
+                module_tiers.setdefault(".".join(parts[:index]), set()).add(tier)
+
+        for file_path, tiers in file_tiers.items():
+            if len(set(tiers)) != 1:
+                continue
+            source_tier = tiers[0]
+            try:
+                tree = ast.parse(file_path.read_text(encoding="utf-8"), filename=str(file_path))
+            except SyntaxError as error:
+                issues.append(
+                    SourceIssue(
+                        file_path=self._relative_source_path(file_path),
+                        line=error.lineno or 1,
+                        rule="PYSIM-IMPORT-SYNTAX",
+                        severity="ERROR",
+                        message=f"Cannot inspect imports because the file has a syntax error: {error.msg}",
+                        group=group_name,
+                    )
+                )
+                continue
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    imported = [(alias.name, node.lineno) for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    imported = [(node.module, node.lineno)]
+                else:
+                    continue
+
+                for module, line in imported:
+                    imported_tiers = module_tiers.get(module)
+                    if not imported_tiers:
+                        continue
+                    if len(imported_tiers) != 1:
+                        issues.append(
+                            SourceIssue(
+                                file_path=self._relative_source_path(file_path),
+                                line=line,
+                                rule="PYSIM-IMPORT-CONFIG",
+                                severity="ERROR",
+                                message=f"Imported module '{module}' has multiple configured Tiers: {sorted(imported_tiers)}.",
+                                group=group_name,
+                            )
+                        )
+                        continue
+                    imported_tier = next(iter(imported_tiers))
+                    if source_tier < imported_tier:
+                        issues.append(
+                            SourceIssue(
+                                file_path=self._relative_source_path(file_path),
+                                line=line,
+                                rule="PYSIM-IMPORT-DIRECTION",
+                                severity="ERROR",
+                                message=(
+                                    f"Configured Tier {source_tier} product code must not import "
+                                    f"'{module}' from Tier {imported_tier}."
+                                ),
+                                group=group_name,
+                            )
+                        )
+        return issues
+
+    def _relative_source_path(self, file_path: Path) -> str:
+        """Returns a stable repository-relative path for source issues."""
+        return str(file_path.relative_to(self.root_dir)).replace("\\", "/")
 
     def _check_python_rules(
         self,
@@ -330,8 +450,19 @@ class SourceVerifier:
         self, tree: ast.Module, rel_path: str, group_name: str
     ) -> list[SourceIssue]:
         issues: list[SourceIssue] = []
+        protocol_ranges = [
+            (node.lineno, node.end_lineno or node.lineno)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef)
+            and any(isinstance(base, ast.Name) and base.id == "Protocol" for base in node.bases)
+        ]
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or len(node.body) != 1:
+                continue
+            if any(start <= node.lineno <= end for start, end in protocol_ranges):
+                # Ellipsis is the standard body for a structural Protocol
+                # contract, not an executable placeholder. Keep the empty
+                # implementation rule focused on concrete functions.
                 continue
             single = node.body[0]
             if isinstance(single, ast.Pass):
@@ -568,16 +699,11 @@ class SourceVerifier:
                 continue
             rel = str(tr.relative_to(self.root_dir)).replace("\\", "/")
             cmd = [
-                "uv",
-                "run",
-                "--system-certs",
-                "--project",
-                "tools/spec-integrator",
-                "--with",
-                "wasmtime",
-                "--with",
-                "cython",
-                "python",
+                # Reuse the interpreter running spec-integrator. Invoking uv
+                # recursively makes the quality gate depend on uv's global
+                # cache permissions and can report an environment failure as
+                # a pysim test failure.
+                sys.executable,
                 str(tr),
             ]
             try:
