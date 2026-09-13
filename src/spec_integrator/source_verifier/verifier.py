@@ -698,12 +698,16 @@ class SourceVerifier:
             if not tr.exists():
                 continue
             rel = str(tr.relative_to(self.root_dir)).replace("\\", "/")
+            project_python = self.root_dir / ".venv" / "Scripts" / "python.exe"
+            if not project_python.exists():
+                project_python = self.root_dir / ".venv" / "bin" / "python"
+            test_python = str(project_python) if project_python.exists() else sys.executable
             cmd = [
-                # Reuse the interpreter running spec-integrator. Invoking uv
-                # recursively makes the quality gate depend on uv's global
-                # cache permissions and can report an environment failure as
-                # a pysim test failure.
-                sys.executable,
+                # Prefer the repository environment because pysim's tests
+                # require project dependencies such as cython and wasmtime.
+                # Falling back to spec-integrator's interpreter keeps the
+                # checker usable in repositories without a project venv.
+                test_python,
                 str(tr),
             ]
             try:
