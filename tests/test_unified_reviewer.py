@@ -23,6 +23,11 @@ def test_config_checks_loaded_from_project_yaml():
     assert "natural_language_standards" in ids
     assert "reference_by_keyword_or_filename" in ids
     assert "rationale_over_history" in ids
+    assert "readability_structure" in ids
+    readability = next(rule for rule in rules if rule.id == "readability_structure")
+    readability_prompt = readability.get_prompt_text(config.config_dir)
+    assert "separate concise bullet lists" in readability_prompt
+    assert "preserves every requirement" in readability_prompt
 
 
 def test_effective_checks_filtering(tmp_path: Path):

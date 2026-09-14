@@ -168,3 +168,29 @@ def test_static_verifier_levenshtein_typos(tmp_path):
     assert "ハイパーバイザー" in typo_issues[0].message
     assert "ハイパーバイザ" in typo_issues[0].message
     assert typo_issues[0].severity == "WARNING"
+
+
+def test_static_verifier_ignores_unrelated_similar_terms(tmp_path):
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    cfg = Config()
+    (docs_dir / "doc_a.md").write_text(
+        """# Doc A
+アサーション、カード、Flush、CallFrame、benchmark を扱う。
+""",
+        encoding="utf-8",
+    )
+    (docs_dir / "doc_b.md").write_text(
+        """# Doc B
+アクション、コード、Flash、call_frame、benchmarks を扱う。
+""",
+        encoding="utf-8",
+    )
+    parser = MarkdownParser(cfg)
+    docs = [
+        parser.parse_file(docs_dir / "doc_a.md", docs_dir),
+        parser.parse_file(docs_dir / "doc_b.md", docs_dir),
+    ]
+    graph = DocGraphBuilder(cfg).build(docs, docs_dir)
+    issues = StaticVerifier(cfg).verify(docs, graph, docs_dir)
+    assert not [issue for issue in issues if issue.rule_code == "FMT-LEVENSHTEIN-TYPO"]

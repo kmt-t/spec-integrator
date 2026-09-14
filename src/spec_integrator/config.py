@@ -304,6 +304,14 @@ class SourceCheckRule:
     id: str = ""
     enabled: bool = True
     rules: list[str] = field(default_factory=list)
+    builtin_container_exclude_paths: list[str] = field(default_factory=list)
+    rtti_exclude_paths: list[str] = field(default_factory=list)
+    in_operator_exclude_paths: list[str] = field(default_factory=list)
+    raise_exclude_paths: list[str] = field(default_factory=list)
+    test_backdoor_exclude_paths: list[str] = field(default_factory=list)
+    forbidden_product_symbols: list[str] = field(default_factory=list)
+    non_none_union_exclude_paths: list[str] = field(default_factory=list)
+    string_member_exclude_paths: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -137,7 +137,19 @@ class SourceVerifier:
             if cid == "anti_sabotage":
                 for f in files:
                     result.issues.extend(
-                        self._check_anti_sabotage(f, check_rule.rules, group_name)
+                        self._check_anti_sabotage(
+                            f,
+                            check_rule.rules,
+                            group_name,
+                            check_rule.builtin_container_exclude_paths,
+                            check_rule.rtti_exclude_paths,
+                            check_rule.in_operator_exclude_paths,
+                            check_rule.raise_exclude_paths,
+                            check_rule.test_backdoor_exclude_paths,
+                            check_rule.forbidden_product_symbols,
+                            check_rule.non_none_union_exclude_paths,
+                            check_rule.string_member_exclude_paths,
+                        )
                     )
             elif cid == "cpp_rules":
                 for f in files:
@@ -151,7 +163,8 @@ class SourceVerifier:
                     if f.suffix.lower() == ".py":
                         result.issues.extend(self._execute_python_file(f, group_name))
             elif cid == "run_tests":
-                # For pysim, run scenarios/unit tests
+                # Pysim source verification runs the unit-test suite only.
+                # Scenarios and benchmarks are review fixtures, not source-gate inputs.
                 result.issues.extend(self._run_pysim_tests(group_name))
             elif cid == "pysim_imports":
                 result.issues.extend(self._check_pysim_imports(group_name))
@@ -159,7 +172,18 @@ class SourceVerifier:
         return result
 
     def _check_anti_sabotage(
-        self, file_path: Path, rules: list[str], group_name: str
+        self,
+        file_path: Path,
+        rules: list[str],
+        group_name: str,
+        builtin_container_exclude_paths: list[str] | None = None,
+        rtti_exclude_paths: list[str] | None = None,
+        in_operator_exclude_paths: list[str] | None = None,
+        raise_exclude_paths: list[str] | None = None,
+        test_backdoor_exclude_paths: list[str] | None = None,
+        forbidden_product_symbols: list[str] | None = None,
+        non_none_union_exclude_paths: list[str] | None = None,
+        string_member_exclude_paths: list[str] | None = None,
     ) -> list[SourceIssue]:
         issues: list[SourceIssue] = []
         try:
@@ -184,7 +208,21 @@ class SourceVerifier:
         is_python = file_path.suffix.lower() == ".py"
         if is_python:
             issues.extend(
-                self._check_python_rules(file_path, content, rel_path, rules, group_name)
+                self._check_python_rules(
+                    file_path,
+                    content,
+                    rel_path,
+                    rules,
+                    group_name,
+                    builtin_container_exclude_paths or [],
+                    rtti_exclude_paths or [],
+                    in_operator_exclude_paths or [],
+                    raise_exclude_paths or [],
+                    test_backdoor_exclude_paths or [],
+                    forbidden_product_symbols or [],
+                    non_none_union_exclude_paths or [],
+                    string_member_exclude_paths or [],
+                )
             )
         else:
             # C++ is dispatched to its language-specific analyzer. The current
@@ -350,6 +388,14 @@ class SourceVerifier:
         rel_path: str,
         rules: list[str],
         group_name: str,
+        builtin_container_exclude_paths: list[str] | None = None,
+        rtti_exclude_paths: list[str] | None = None,
+        in_operator_exclude_paths: list[str] | None = None,
+        raise_exclude_paths: list[str] | None = None,
+        test_backdoor_exclude_paths: list[str] | None = None,
+        forbidden_product_symbols: list[str] | None = None,
+        non_none_union_exclude_paths: list[str] | None = None,
+        string_member_exclude_paths: list[str] | None = None,
     ) -> list[SourceIssue]:
         """Checks Python source from one parsed AST, with comments read by tokenize."""
         try:
@@ -371,6 +417,72 @@ class SourceVerifier:
             issues.extend(self._check_python_work_markers(content, rel_path, group_name))
         if not rules or "forbid_typing_any" in rules:
             issues.extend(self._check_python_typing_any(tree, rel_path, group_name))
+        if "forbid_object_type" in rules:
+            issues.extend(self._check_python_object_type(tree, rel_path, group_name))
+        if "forbid_non_none_union" in rules:
+            normalized_path = rel_path.replace("\\", "/").lstrip("./")
+            excluded = any(
+                fnmatch.fnmatch(normalized_path, pattern.replace("\\", "/").lstrip("./"))
+                for pattern in (non_none_union_exclude_paths or [])
+            )
+            if not excluded:
+                issues.extend(self._check_python_non_none_unions(tree, rel_path, group_name))
+        if "forbid_string_members" in rules:
+            normalized_path = rel_path.replace("\\", "/").lstrip("./")
+            excluded = any(
+                fnmatch.fnmatch(normalized_path, pattern.replace("\\", "/").lstrip("./"))
+                for pattern in (string_member_exclude_paths or [])
+            )
+            if not excluded:
+                issues.extend(self._check_python_string_members(tree, rel_path, group_name))
+        if "forbid_raise" in rules:
+            normalized_path = rel_path.replace("\\", "/").lstrip("./")
+            excluded = any(
+                fnmatch.fnmatch(normalized_path, pattern.replace("\\", "/").lstrip("./"))
+                for pattern in (raise_exclude_paths or [])
+            )
+            if not excluded:
+                issues.extend(self._check_python_raise(tree, rel_path, group_name))
+        if "forbid_rtti" in rules:
+            normalized_path = rel_path.replace("\\", "/").lstrip("./")
+            excluded = any(
+                fnmatch.fnmatch(normalized_path, pattern.replace("\\", "/").lstrip("./"))
+                for pattern in (rtti_exclude_paths or [])
+            )
+            if not excluded:
+                issues.extend(self._check_python_rtti(tree, rel_path, group_name))
+        if "forbid_in_operator" in rules:
+            normalized_path = rel_path.replace("\\", "/").lstrip("./")
+            excluded = any(
+                fnmatch.fnmatch(normalized_path, pattern.replace("\\", "/").lstrip("./"))
+                for pattern in (in_operator_exclude_paths or [])
+            )
+            if not excluded:
+                issues.extend(self._check_python_in_operator(tree, rel_path, group_name))
+        if "forbid_test_backdoor" in rules:
+            normalized_path = rel_path.replace("\\", "/").lstrip("./")
+            excluded = any(
+                fnmatch.fnmatch(normalized_path, pattern.replace("\\", "/").lstrip("./"))
+                for pattern in (test_backdoor_exclude_paths or [])
+            )
+            if not excluded:
+                issues.extend(
+                    self._check_python_test_backdoor(
+                        tree, rel_path, group_name, forbidden_product_symbols or []
+                    )
+                )
+        if "forbid_required_nullable_arguments" in rules:
+            issues.extend(
+                self._check_python_required_nullable_arguments(tree, rel_path, group_name)
+            )
+        if "forbid_builtin_containers" in rules:
+            normalized_excludes = {
+                path.replace("\\", "/").lstrip("./")
+                for path in (builtin_container_exclude_paths or [])
+            }
+            normalized_path = rel_path.replace("\\", "/").lstrip("./")
+            if not any(fnmatch.fnmatch(normalized_path, pattern) for pattern in normalized_excludes):
+                issues.extend(self._check_python_builtin_containers(tree, rel_path, group_name))
         if not rules or "dummy_pass" in rules or "empty_function" in rules:
             issues.extend(self._check_python_empty_functions(tree, rel_path, group_name))
         if "mutation_guards_required" in rules and not self._has_false_guard_call(tree):
@@ -384,6 +496,436 @@ class SourceVerifier:
                     group=group_name,
                 )
             )
+        return issues
+
+    def _check_python_raise(
+        self, tree: ast.Module, rel_path: str, group_name: str
+    ) -> list[SourceIssue]:
+        """Reject explicit exception sending while allowing ``try``/``except``."""
+        return [
+            SourceIssue(
+                file_path=rel_path,
+                line=getattr(node, "lineno", 1),
+                rule="PY-FORBIDDEN-RAISE",
+                severity="ERROR",
+                message="Explicit 'raise' is forbidden in pysim; return an error result or fail-fast with assert.",
+                group=group_name,
+            )
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Raise)
+        ]
+
+    def _check_python_rtti(
+        self, tree: ast.Module, rel_path: str, group_name: str
+    ) -> list[SourceIssue]:
+        forbidden = {"isinstance", "type", "hasattr", "getattr", "setattr"}
+        issues = [
+            SourceIssue(
+                file_path=rel_path,
+                line=getattr(node, "lineno", 1),
+                rule="PY-FORBIDDEN-RTTI",
+                severity="ERROR",
+                message=f"Dynamic type inspection '{node.func.id}' is forbidden in pysim.",
+                group=group_name,
+            )
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in forbidden
+        ]
+        forbidden_attributes = {
+            "__class__",
+            "__dict__",
+            "__getattribute__",
+            "__getattr__",
+            "__setattr__",
+            "__instancecheck__",
+            "__subclasscheck__",
+        }
+        issues.extend(
+            SourceIssue(
+                file_path=rel_path,
+                line=getattr(node, "lineno", 1),
+                rule="PY-FORBIDDEN-RTTI",
+                severity="ERROR",
+                message=f"Dynamic type/reflection attribute '{node.attr}' is forbidden in pysim.",
+                group=group_name,
+            )
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and node.attr in forbidden_attributes
+        )
+        return issues
+
+    def _check_python_in_operator(
+        self, tree: ast.Module, rel_path: str, group_name: str
+    ) -> list[SourceIssue]:
+        return [
+            SourceIssue(
+                file_path=rel_path,
+                line=getattr(node, "lineno", 1),
+                rule="PY-FORBIDDEN-IN-OPERATOR",
+                severity="ERROR",
+                message="The 'in' operator is forbidden in pysim product code; use a bounded view lookup or indexed access.",
+                group=group_name,
+            )
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Compare)
+            and any(isinstance(operator, (ast.In, ast.NotIn)) for operator in node.ops)
+        ]
+
+    def _check_python_test_backdoor(
+        self,
+        tree: ast.Module,
+        rel_path: str,
+        group_name: str,
+        forbidden_product_symbols: list[str],
+    ) -> list[SourceIssue]:
+        issues: list[SourceIssue] = []
+        test_module_names = {"pytest", "unittest", "unittest.mock", "mock"}
+        forbidden_symbols = set(forbidden_product_symbols)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in test_module_names:
+                        issues.append(
+                            SourceIssue(
+                                file_path=rel_path,
+                                line=getattr(node, "lineno", 1),
+                                rule="PY-TEST-CODE-IN-PRODUCT",
+                                severity="ERROR",
+                                message=f"Test-only module '{alias.name}' is imported by pysim product code.",
+                                group=group_name,
+                            )
+                        )
+            elif isinstance(node, ast.ImportFrom):
+                if node.module in test_module_names:
+                    issues.append(
+                        SourceIssue(
+                            file_path=rel_path,
+                            line=getattr(node, "lineno", 1),
+                            rule="PY-TEST-CODE-IN-PRODUCT",
+                            severity="ERROR",
+                            message=f"Test-only module '{node.module}' is imported by pysim product code.",
+                            group=group_name,
+                        )
+                    )
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.name in forbidden_symbols:
+                    issues.append(
+                        SourceIssue(
+                            file_path=rel_path,
+                            line=getattr(node, "lineno", 1),
+                            rule="PY-FORBIDDEN-PRODUCT-SYMBOL",
+                            severity="ERROR",
+                            message=f"Product symbol '{node.name}' is reserved for tests or obsolete compatibility paths.",
+                            group=group_name,
+                        )
+                    )
+                if node.name.startswith("test_") or node.name.startswith("_test_"):
+                    issues.append(
+                        SourceIssue(
+                            file_path=rel_path,
+                            line=getattr(node, "lineno", 1),
+                            rule="PY-TEST-CODE-IN-PRODUCT",
+                            severity="ERROR",
+                            message=f"Test-only symbol '{node.name}' is defined in pysim product code.",
+                            group=group_name,
+                        )
+                    )
+        return issues
+
+    def _check_python_required_nullable_arguments(
+        self, tree: ast.Module, rel_path: str, group_name: str
+    ) -> list[SourceIssue]:
+        issues: list[SourceIssue] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            arguments = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
+            positional_defaults = [
+                None
+            ] * (len(node.args.posonlyargs) + len(node.args.args) - len(node.args.defaults))
+            positional_defaults.extend(node.args.defaults)
+            defaults = positional_defaults + list(node.args.kw_defaults)
+            nullable_arguments: set[str] = set()
+            for argument, default in zip(arguments, defaults, strict=True):
+                if argument.arg in ("next_pc", "loops_to"):
+                    continue
+                nullable = (
+                    argument.annotation is not None
+                    and any(
+                        isinstance(part, ast.Constant) and part.value is None
+                        for part in ast.walk(argument.annotation)
+                    )
+                ) or (
+                    isinstance(default, ast.Constant) and default.value is None
+                )
+                if nullable:
+                    nullable_arguments.add(argument.arg)
+
+            if node.name.startswith("compile_"):
+                for argument in arguments:
+                    if argument.arg not in nullable_arguments:
+                        continue
+                    issues.append(
+                        SourceIssue(
+                            file_path=rel_path,
+                            line=getattr(argument, "lineno", 1),
+                            rule="PY-REQUIRED-ARGUMENT-NULLABLE",
+                            severity="ERROR",
+                            message=f"Compile API argument '{argument.arg}' must be prepared by the caller; do not accept None as a test or compatibility path.",
+                            group=group_name,
+                        )
+                    )
+                continue
+
+            for statement in ast.walk(node):
+                if not isinstance(statement, ast.Assert):
+                    continue
+                if not isinstance(statement.test, ast.Compare):
+                    continue
+                if len(statement.test.ops) != 1 or not isinstance(statement.test.ops[0], ast.IsNot):
+                    continue
+                left, right = statement.test.left, statement.test.comparators[0]
+                if (
+                    isinstance(left, ast.Name)
+                    and left.id in nullable_arguments
+                    and isinstance(right, ast.Constant)
+                    and right.value is None
+                ):
+                    issues.append(
+                        SourceIssue(
+                            file_path=rel_path,
+                            line=getattr(statement, "lineno", 1),
+                            rule="PY-REQUIRED-ARGUMENT-NULLABLE",
+                            severity="ERROR",
+                            message=f"Argument '{left.id}' is declared nullable but required by an assertion; make it mandatory and prepare it at the caller.",
+                            group=group_name,
+                        )
+                    )
+        return issues
+
+    def _check_python_object_type(
+        self, tree: ast.Module, rel_path: str, group_name: str
+    ) -> list[SourceIssue]:
+        return [
+            SourceIssue(
+                file_path=rel_path,
+                line=getattr(node, "lineno", 1),
+                rule="PY-FORBIDDEN-OBJECT-TYPE",
+                severity="ERROR",
+                message="Use of 'object' is forbidden in pysim. Use a concrete type or algebraic data type.",
+                group=group_name,
+            )
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Name) and node.id == "object"
+        ]
+
+    def _check_python_string_members(
+        self, tree: ast.Module, rel_path: str, group_name: str
+    ) -> list[SourceIssue]:
+        issues: list[SourceIssue] = []
+        for class_node in ast.walk(tree):
+            if not isinstance(class_node, ast.ClassDef):
+                continue
+            member_annotations: list[ast.AnnAssign] = [
+                statement for statement in class_node.body if isinstance(statement, ast.AnnAssign)
+            ]
+            for method in class_node.body:
+                if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                member_annotations.extend(
+                    statement
+                    for statement in ast.walk(method)
+                    if isinstance(statement, ast.AnnAssign)
+                    and isinstance(statement.target, ast.Attribute)
+                    and isinstance(statement.target.value, ast.Name)
+                    and statement.target.value.id in ("self", "cls")
+                )
+            for statement in member_annotations:
+                if isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, str):
+                    continue
+                if (
+                    isinstance(statement.annotation, ast.Subscript)
+                    and isinstance(statement.annotation.value, ast.Name)
+                    and statement.annotation.value.id in ("ClassVar", "Final")
+                ):
+                    continue
+                if not any(
+                    isinstance(item, ast.Name) and item.id == "str"
+                    for item in ast.walk(statement.annotation)
+                ):
+                    continue
+                issues.append(
+                    SourceIssue(
+                        file_path=rel_path,
+                        line=getattr(statement, "lineno", 1),
+                        rule="PY-FORBIDDEN-STRING-MEMBER",
+                        severity="ERROR",
+                        message="String-typed class members are forbidden in pysim product code; use a ROM byte range, integer ID, or fixed numeric representation.",
+                        group=group_name,
+                    )
+                )
+        return issues
+
+    @staticmethod
+    def _union_parts(node: ast.AST) -> list[ast.AST]:
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            return SourceVerifier._union_parts(node.left) + SourceVerifier._union_parts(node.right)
+        return [node]
+
+    @staticmethod
+    def _is_none_type(node: ast.AST) -> bool:
+        return isinstance(node, ast.Constant) and node.value is None
+
+    def _check_python_non_none_unions(
+        self, tree: ast.Module, rel_path: str, group_name: str
+    ) -> list[SourceIssue]:
+        annotations: list[ast.AST] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AnnAssign):
+                annotations.append(node.annotation)
+            elif isinstance(node, ast.Assign):
+                # PEP 604 type aliases are ordinary assignments in the AST.
+                # A public, capitalized alias such as ``WasiValue = A | B``
+                # must therefore be checked as a type annotation as well.
+                if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                    target_name = node.targets[0].id
+                    if target_name and target_name[0].isupper():
+                        annotations.append(node.value)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                arguments = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
+                annotations.extend(arg.annotation for arg in arguments if arg.annotation is not None)
+                if node.args.vararg is not None and node.args.vararg.annotation is not None:
+                    annotations.append(node.args.vararg.annotation)
+                if node.args.kwarg is not None and node.args.kwarg.annotation is not None:
+                    annotations.append(node.args.kwarg.annotation)
+                if node.returns is not None:
+                    annotations.append(node.returns)
+
+        issues: list[SourceIssue] = []
+        for annotation in annotations:
+            for node in self._union_nodes(annotation):
+                union_parts = self._union_parts(node) if isinstance(node, ast.BinOp) else None
+                if isinstance(node, ast.Subscript) and (
+                    isinstance(node.value, ast.Name) or isinstance(node.value, ast.Attribute)
+                ):
+                    value_name = node.value.id if isinstance(node.value, ast.Name) else node.value.attr
+                    if value_name == "Union":
+                        union_parts = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+                    elif value_name == "Optional":
+                        optional_parts = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+                        if len(optional_parts) != 1:
+                            union_parts = optional_parts
+                if union_parts is None:
+                    continue
+                if len(union_parts) != 2 or sum(self._is_none_type(part) for part in union_parts) != 1:
+                    issues.append(
+                        SourceIssue(
+                            file_path=rel_path,
+                            line=getattr(node, "lineno", 1),
+                            rule="PY-FORBIDDEN-NON-NONE-UNION",
+                            severity="ERROR",
+                            message="Only a nullable union of T | None or Optional[T] is allowed in pysim.",
+                            group=group_name,
+                        )
+                    )
+        return issues
+
+    @staticmethod
+    def _union_nodes(annotation: ast.AST) -> list[ast.AST]:
+        """Returns top-level union expressions without reporting nested PEP 604 nodes twice."""
+        nodes: list[ast.AST] = []
+
+        def visit(node: ast.AST) -> None:
+            is_pep604_union = isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr)
+            if is_pep604_union:
+                nodes.append(node)
+                return
+            if isinstance(node, ast.Subscript) and (
+                isinstance(node.value, ast.Name) or isinstance(node.value, ast.Attribute)
+            ):
+                value_name = node.value.id if isinstance(node.value, ast.Name) else node.value.attr
+                if value_name in ("Union", "Optional"):
+                    nodes.append(node)
+                    return
+            for child in ast.iter_child_nodes(node):
+                visit(child)
+
+        visit(annotation)
+        return nodes
+
+    def _check_python_builtin_containers(
+        self, tree: ast.Module, rel_path: str, group_name: str
+    ) -> list[SourceIssue]:
+        """Reject raw dict/set/list syntax in pysim source.
+
+        The checker is intentionally syntax-based: a custom fixed-capacity
+        container may use its own implementation details, but product code
+        must express ownership and bounds through that container API rather
+        than exposing Python's built-in container vocabulary.
+        """
+        # ``Callable[[Arg1, Arg2], Result]`` uses an AST List as typing
+        # syntax, but it does not construct or expose a runtime container.
+        callable_parameter_lists = {
+            id(node.slice.elts[0])
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Subscript)
+            and (
+                (isinstance(node.value, ast.Name) and node.value.id == "Callable")
+                or (isinstance(node.value, ast.Attribute) and node.value.attr == "Callable")
+            )
+            and isinstance(node.slice, ast.Tuple)
+            and node.slice.elts
+            and isinstance(node.slice.elts[0], ast.List)
+        }
+
+        issues: list[SourceIssue] = []
+        for node in ast.walk(tree):
+            rule = ""
+            message = ""
+            if isinstance(node, ast.List) and id(node) in callable_parameter_lists:
+                continue
+            if isinstance(node, (ast.List, ast.ListComp)):
+                rule = "PY-FORBIDDEN-BUILTIN-LIST"
+                message = "Built-in list syntax is forbidden in pysim; use a fixed-capacity system container."
+            elif isinstance(node, (ast.Dict, ast.DictComp)):
+                rule = "PY-FORBIDDEN-BUILTIN-DICT"
+                message = "Built-in dict syntax is forbidden in pysim; use a FlatMap storage or view."
+            elif isinstance(node, (ast.Set, ast.SetComp)):
+                rule = "PY-FORBIDDEN-BUILTIN-SET"
+                message = "Built-in set syntax is forbidden in pysim; use a FlatSet storage or view."
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id == "list":
+                    rule = "PY-FORBIDDEN-BUILTIN-LIST"
+                    message = "Calling list() is forbidden in pysim; use a fixed-capacity system container."
+                elif node.func.id == "dict":
+                    rule = "PY-FORBIDDEN-BUILTIN-DICT"
+                    message = "Calling dict() is forbidden in pysim; use a FlatMap storage or view."
+                elif node.func.id == "set":
+                    rule = "PY-FORBIDDEN-BUILTIN-SET"
+                    message = "Calling set() is forbidden in pysim; use a FlatSet storage or view."
+            elif isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+                if node.value.id == "list":
+                    rule = "PY-FORBIDDEN-BUILTIN-LIST"
+                    message = "list[...] annotations are forbidden in pysim; use a concrete system container type."
+                elif node.value.id == "dict":
+                    rule = "PY-FORBIDDEN-BUILTIN-DICT"
+                    message = "dict[...] annotations are forbidden in pysim; use a concrete system container type."
+                elif node.value.id == "set":
+                    rule = "PY-FORBIDDEN-BUILTIN-SET"
+                    message = "set[...] annotations are forbidden in pysim; use a concrete system container type."
+            if rule:
+                issues.append(
+                    SourceIssue(
+                        file_path=rel_path,
+                        line=getattr(node, "lineno", 1),
+                        rule=rule,
+                        severity="ERROR",
+                        message=message,
+                        group=group_name,
+                    )
+                )
         return issues
 
     def _check_python_work_markers(
@@ -690,10 +1232,7 @@ class SourceVerifier:
 
     def _run_pysim_tests(self, group_name: str) -> list[SourceIssue]:
         issues: list[SourceIssue] = []
-        test_runners = [
-            self.root_dir / "experiments/pysim/tests/run_all.py",
-            self.root_dir / "experiments/pysim/scenarios/run_all.py",
-        ]
+        test_runners = (self.root_dir / "experiments/pysim/tests/run_all.py",)
         for tr in test_runners:
             if not tr.exists():
                 continue

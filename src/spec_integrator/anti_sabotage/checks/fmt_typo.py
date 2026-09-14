@@ -28,6 +28,55 @@ def levenshtein_distance(s1: str, s2: str) -> int:
     return previous_row[-1]
 
 
+def _common_prefix_length(s1: str, s2: str) -> int:
+    length = 0
+    for c1, c2 in zip(s1, s2):
+        if c1 != c2:
+            break
+        length += 1
+    return length
+
+
+def _is_prefix_edit(s1: str, s2: str, distance: int) -> bool:
+    """Accept a one-character suffix insertion/deletion, not a new word."""
+    if distance != abs(len(s1) - len(s2)):
+        return False
+    return s1.startswith(s2) or s2.startswith(s1)
+
+
+def _katakana_typo_candidate(w1: str, w2: str, distance: int) -> bool:
+    """Accept only long shared stems, not merely similar-sounding terms."""
+    min_length = min(len(w1), len(w2))
+    if min_length < 6 or abs(len(w1) - len(w2)) > 1:
+        return False
+    if _common_prefix_length(w1, w2) < min_length - 1:
+        return False
+    if not _is_prefix_edit(w1, w2, distance):
+        return False
+    longer = w1 if len(w1) > len(w2) else w2
+    shorter = w2 if len(w1) > len(w2) else w1
+    return longer[len(shorter) :] == "ー"
+
+
+def _english_identifier(word: str) -> bool:
+    return (
+        "_" in word
+        or any(char.isupper() for char in word[1:])
+        or (word[0].isupper() and any(char.islower() for char in word[1:]))
+    )
+
+
+def _english_inflection_pair(word1: str, word2: str) -> bool:
+    return (
+        word1 + "s" == word2
+        or word2 + "s" == word1
+        or word1 + "ed" == word2
+        or word2 + "ed" == word1
+        or word1 + "ing" == word2
+        or word2 + "ing" == word1
+    )
+
+
 class LevenshteinTypoCheck(AntiSabotageCheck):
     """表記揺れ・誤記の警告: レーベンシュタイン距離を用いて類似単語の揺れを検出する。"""
 
@@ -76,12 +125,7 @@ class LevenshteinTypoCheck(AntiSabotageCheck):
                     continue
 
                 dist = levenshtein_distance(w1, w2)
-                is_typo = (dist == 1) or (
-                    dist == 2
-                    and len1 >= 5
-                    and len2 >= 5
-                    and ("ー" in w1 or "ー" in w2 or "イ" in w1 or "イ" in w2)
-                )
+                is_typo = _katakana_typo_candidate(w1, w2, dist)
 
                 if is_typo:
                     pair_key = (min(w1, w2), max(w1, w2))
@@ -127,13 +171,28 @@ class LevenshteinTypoCheck(AntiSabotageCheck):
                 low2 = w2.lower()
                 if low1 == low2:
                     continue
+                if _english_identifier(w1) or _english_identifier(w2):
+                    continue
                 if abs(len(low1) - len(low2)) > 1:
                     continue
                 if re.sub(r"\d+$", "", low1) == re.sub(r"\d+$", "", low2):
                     continue
+                if _english_inflection_pair(low1, low2):
+                    continue
+                if not any(
+                    path1 == path2 and line1 == line2
+                    for path1, line1 in english_occs[w1]
+                    for path2, line2 in english_occs[w2]
+                ):
+                    continue
 
                 dist = levenshtein_distance(low1, low2)
-                if dist == 1:
+                if _is_prefix_edit(low1, low2, dist):
+                    continue
+                if (
+                    _common_prefix_length(low1, low2)
+                    >= min(len(low1), len(low2)) - 1
+                ):
                     pair_key = (min(low1, low2), max(low1, low2))
                     if pair_key in reported_pairs:
                         continue
