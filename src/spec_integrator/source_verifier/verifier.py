@@ -728,13 +728,14 @@ class SourceVerifier:
         for class_node in ast.walk(tree):
             if not isinstance(class_node, ast.ClassDef):
                 continue
-            member_annotations: list[ast.AnnAssign] = [
+            class_constants = [
                 statement for statement in class_node.body if isinstance(statement, ast.AnnAssign)
             ]
+            instance_members: list[ast.AnnAssign] = []
             for method in class_node.body:
                 if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
-                member_annotations.extend(
+                instance_members.extend(
                     statement
                     for statement in ast.walk(method)
                     if isinstance(statement, ast.AnnAssign)
@@ -742,7 +743,7 @@ class SourceVerifier:
                     and isinstance(statement.target.value, ast.Name)
                     and statement.target.value.id in ("self", "cls")
                 )
-            for statement in member_annotations:
+            for statement in class_constants:
                 if isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, str):
                     continue
                 if (
@@ -751,6 +752,22 @@ class SourceVerifier:
                     and statement.annotation.value.id in ("ClassVar", "Final")
                 ):
                     continue
+                if not any(
+                    isinstance(item, ast.Name) and item.id == "str"
+                    for item in ast.walk(statement.annotation)
+                ):
+                    continue
+                issues.append(
+                    SourceIssue(
+                        file_path=rel_path,
+                        line=getattr(statement, "lineno", 1),
+                        rule="PY-FORBIDDEN-STRING-MEMBER",
+                        severity="ERROR",
+                        message="String-typed class members are forbidden in pysim product code; use a ROM byte range, integer ID, or fixed numeric representation.",
+                        group=group_name,
+                    )
+                )
+            for statement in instance_members:
                 if not any(
                     isinstance(item, ast.Name) and item.id == "str"
                     for item in ast.walk(statement.annotation)

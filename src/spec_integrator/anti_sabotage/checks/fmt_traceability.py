@@ -43,7 +43,8 @@ class TraceabilityCheck(AntiSabotageCheck):
                                 rule_code="TRACE-UNDEFINED-KEYWORD",
                                 message=(
                                     f"Undefined keyword referenced: '{{{kw}}}'. "
-                                    "No definition found in designated source of truth."
+                                    "Reason: No definition found in designated source of truth. "
+                                    "Check the rules in 'docs/architecture/document_structure.md' and 'docs/architecture/keyword_dictionary.md'."
                                 ),
                             )
                         )
@@ -64,5 +65,46 @@ class TraceabilityCheck(AntiSabotageCheck):
                         ),
                     )
                 )
+
+        # Check for same keyword defined (inline) and referenced (traceability comment) in the same section
+        import re
+        for doc in ctx.documents:
+            lines = doc.content.splitlines()
+            for sec in doc.sections:
+                sec_lines = lines[sec.line_start - 1 : sec.line_end]
+                comment_kws: set[str] = set()
+                inline_kws: set[str] = set()
+                in_code = False
+                for line in sec_lines:
+                    s_line = line.strip()
+                    if s_line.startswith("```"):
+                        in_code = not in_code
+                        continue
+                    if in_code:
+                        continue
+                    for m_tr in re.finditer(r"<!--\s*traceability:\s*(.*?)\s*-->", line):
+                        comment_kws.update(re.findall(r"\{([A-Za-z0-9_\-]+)\}", m_tr.group(1)))
+                    line_no_comment = re.sub(r"<!--.*?-->", "", line)
+                    for m_in in re.finditer(r"\{([A-Za-z0-9_\-]+)\}", line_no_comment):
+                        kw_name = m_in.group(1)
+                        if not kw_name.startswith("VERIFY_"):
+                            inline_kws.add(kw_name)
+
+                overlap = sorted(comment_kws.intersection(inline_kws))
+                for kw in overlap:
+                    issues.append(
+                        VerificationIssue(
+                            gate="Traceability",
+                            severity="ERROR",
+                            file_path=doc.file_path,
+                            line=sec.line_start,
+                            rule_code="TRACE-DUPLICATE-DEF-REF",
+                            message=(
+                                f"Keyword '{{{kw}}}' is both defined (inline) and referenced (comment) in the same section '{sec.heading}'. "
+                                "Reason: A keyword must be either defined inline OR referenced via '<!-- traceability: ... -->', never both in the same section. "
+                                "Check the rules in 'docs/architecture/document_structure.md' and 'docs/architecture/keyword_dictionary.md'."
+                            ),
+                        )
+                    )
 
         return issues

@@ -568,8 +568,7 @@ class Config:
         """Checks if a given file_path is the definition source for the keyword."""
         for _k_type, rule in self.keywords.items():
             if re.match(rule.pattern, keyword):
-                if rule.is_definition_file(file_path):
-                    return True
+                return rule.is_definition_file(file_path)
         return False
 
     def get_docs_dir(self) -> Path:
