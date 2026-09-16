@@ -1249,7 +1249,7 @@ class SourceVerifier:
 
     def _run_pysim_tests(self, group_name: str) -> list[SourceIssue]:
         issues: list[SourceIssue] = []
-        test_runners = (self.root_dir / "experiments/pysim/tests/run_all.py",)
+        test_runners = (self.root_dir / "experiments/pysim/qa/run_all.py",)
         for tr in test_runners:
             if not tr.exists():
                 continue

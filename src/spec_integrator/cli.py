@@ -10,6 +10,7 @@ from pathlib import Path
 
 from spec_integrator.anti_sabotage.base import AntiSabotageContext
 from spec_integrator.anti_sabotage.checks import LevenshteinTypoCheck
+from spec_integrator.anti_sabotage.checks.prose_readability import ProseReadabilityCheck
 from spec_integrator.config import Config
 from spec_integrator.db import DocAuditDB
 from spec_integrator.graph import DocGraphBuilder
@@ -335,6 +336,42 @@ def cmd_format_src(args):
                     total_formatted += len(cpp_files)
 
     _log(f"✔ Source formatting complete across {len(group_names)} group(s).")
+    sys.exit(0)
+
+
+def cmd_prose_check(args):
+    """Reports GiNZA readability candidates for selected Markdown files."""
+    config = Config.load(args.config)
+    docs_root = config.get_docs_dir().resolve()
+    parser = MarkdownParser(config)
+    if args.files:
+        candidate_paths = [Path(file_path).resolve() for file_path in args.files]
+    else:
+        candidate_paths = sorted(docs_root.rglob("*.md"))
+
+    documents = []
+    for file_path in candidate_paths:
+        if not file_path.is_file():
+            _log(f"[Error] Markdown file not found: {file_path}")
+            sys.exit(2)
+        try:
+            file_path.relative_to(docs_root)
+        except ValueError:
+            _log(f"[Error] Markdown file is outside the docs directory: {file_path}")
+            sys.exit(2)
+        if not config.is_excluded(file_path, docs_root):
+            documents.append(parser.parse_file(file_path, docs_root))
+
+    context = AntiSabotageContext(
+        documents=documents,
+        graph=None,
+        docs_root=docs_root,
+        config=config,
+    )
+    issues = ProseReadabilityCheck().check(context)
+    for issue in issues:
+        _log(f"[{issue.severity}] {issue.file_path}:{issue.line} - {issue.message}")
+    _log(f"Prose review candidates: {len(issues)} warning(s).")
     sys.exit(0)
 
 
@@ -1008,6 +1045,15 @@ def _add_check_doc_subparser(subparsers) -> None:
     p.set_defaults(func=cmd_check_doc)
 
 
+def _add_prose_check_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "prose-check", help="Report warning-only Japanese prose readability candidates"
+    )
+    _add_config_arg(p)
+    p.add_argument("files", nargs="*", help="Optional Markdown files to inspect")
+    p.set_defaults(func=cmd_prose_check)
+
+
 def _add_format_src_subparser(subparsers) -> None:
     p = subparsers.add_parser(
         "format-src", help="Format source code (Ruff for Python, clang-format for C++)"
@@ -1248,6 +1294,7 @@ _SUBPARSER_BUILDERS = (
     _add_build_subparser,
     _add_format_doc_subparser,
     _add_check_doc_subparser,
+    _add_prose_check_subparser,
     _add_format_src_subparser,
     _add_check_src_subparser,
     _add_graph_subparser,

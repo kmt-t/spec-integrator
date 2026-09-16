@@ -298,6 +298,24 @@ class SemanticTopicConfig:
 
 
 @dataclass
+class ProseReadabilityConfig:
+    """Thresholds for warning-only Japanese prose readability checks."""
+
+    max_sentence_characters: int = 100
+    complex_sentence_min_characters: int = 90
+    min_clause_links: int = 4
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("max_sentence_characters", self.max_sentence_characters),
+            ("complex_sentence_min_characters", self.complex_sentence_min_characters),
+            ("min_clause_links", self.min_clause_links),
+        ):
+            if type(value) is not int or value < 1:
+                raise ValueError(f"prose_readability.{name} must be a positive integer")
+
+
+@dataclass
 class SourceCheckRule:
     """A check rule within a source group."""
 
@@ -372,6 +390,7 @@ class Config:
     consistency: ConsistencyConfig = field(default_factory=ConsistencyConfig)
     terminology: TerminologyConfig = field(default_factory=TerminologyConfig)
     semantic_topic: SemanticTopicConfig = field(default_factory=SemanticTopicConfig)
+    prose_readability: ProseReadabilityConfig = field(default_factory=ProseReadabilityConfig)
     source_verification: SourceVerificationConfig = field(default_factory=SourceVerificationConfig)
     pysim_imports: PysimImportConfig = field(default_factory=PysimImportConfig)
     config_dir: Path = field(default_factory=Path.cwd)
@@ -544,6 +563,9 @@ class Config:
             terminology=_load_dataclass_from_dict(TerminologyConfig, data.get("terminology")),
             semantic_topic=_load_dataclass_from_dict(
                 SemanticTopicConfig, data.get("semantic_topic")
+            ),
+            prose_readability=_load_dataclass_from_dict(
+                ProseReadabilityConfig, data.get("prose_readability")
             ),
             source_verification=source_verification,
             pysim_imports=pysim_imports,

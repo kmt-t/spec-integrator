@@ -41,6 +41,24 @@ keywords:
     assert cfg.get_tier_for_path("docs/other/spec.md") is None
 
 
+def test_config_loads_prose_readability_thresholds(tmp_path: Path) -> None:
+    cfg_file = tmp_path / "spec-integrator.yaml"
+    cfg_file.write_text(
+        """prose_readability:
+  max_sentence_characters: 120
+  complex_sentence_min_characters: 80
+  min_clause_links: 4
+""",
+        encoding="utf-8",
+    )
+
+    config = Config.load(cfg_file)
+
+    assert config.prose_readability.max_sentence_characters == 120
+    assert config.prose_readability.complex_sentence_min_characters == 80
+    assert config.prose_readability.min_clause_links == 4
+
+
 def test_config_exclude_patterns(tmp_path):
     yaml_content = """version: "1.0"
 project:

@@ -25,6 +25,10 @@ dev = [
     "pytest>=8.0.0",
     "pytest-cov>=4.1.0",
 ]
+prose = [
+    "ginza>=5.2.0,<6",
+    "ja-ginza>=5.2.0,<6",
+]
 
 [project.scripts]
 spec-integrator = "spec_integrator.cli:main"

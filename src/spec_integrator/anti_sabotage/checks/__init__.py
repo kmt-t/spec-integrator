@@ -25,6 +25,7 @@ from spec_integrator.anti_sabotage.checks.fmt_hierarchy import HierarchyCheck
 from spec_integrator.anti_sabotage.checks.fmt_invalid_mermaid import MermaidSyntaxCheck
 from spec_integrator.anti_sabotage.checks.fmt_traceability import TraceabilityCheck
 from spec_integrator.anti_sabotage.checks.fmt_typo import LevenshteinTypoCheck
+from spec_integrator.anti_sabotage.checks.prose_readability import ProseReadabilityCheck
 from spec_integrator.anti_sabotage.checks.formal_backing_ambiguous import (
     FormalBackingAmbiguousCheck,
 )
@@ -66,6 +67,7 @@ ALL_CHECKS: list[type[AntiSabotageCheck]] = [
     TraceabilityCheck,
     HierarchyCheck,
     LevenshteinTypoCheck,
+    ProseReadabilityCheck,
     # Formal
     FormalModelMissingCheck,
     FormalContractMissingCheck,
@@ -116,5 +118,6 @@ __all__ = [
     "SymbolDriftCheck",
     "TagToEvidenceMismatchCheck",
     "TraceabilityCheck",
+    "ProseReadabilityCheck",
     "VerificationTagSkippedCheck",
 ]

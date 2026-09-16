@@ -135,7 +135,17 @@ spec-integrator format-doc --config spec-integrator.yaml
 # 全 8 ゲートの静的クリーン検証 (CI 標準)
 spec-integrator check-doc --config spec-integrator.yaml --report report.md --clean
 ```
+標準実行では GiNZA による日本語文章チェックも行い、長文・複雑な節接続を警告として報告します。文章チェックの警告だけでは終了コードに影響しません。
 全 8 ゲートがパスすれば終了コード `0`、エラーがあれば `1` となり、`report.md` に詳細レポートが出力されます。
+
+GiNZAの警告は文章を自動修正する指示ではなく、内容を保った分割が可能か人が確認する候補です。コードブロックと見出しは解析せず、表の文章セルは解析します。
+しきい値はプロジェクトルートの `spec-integrator.yaml` にある `prose_readability` の3項目で調整します。警告専用であり、しきい値を変えてもエラーゲートにはなりません。
+
+文章を1ファイルずつ確認する場合は、次のコマンドを使う。対象を省略すると `docs/` 配下の全Markdownを確認する。
+
+```bash
+spec-integrator prose-check docs/components/tier2_runtime/runtime_interpreter.md
+```
 
 ### 5. ソースコード自動フォーマット & 静的規約・サボり検査 (`format-src`, `check-src`)
 ```bash

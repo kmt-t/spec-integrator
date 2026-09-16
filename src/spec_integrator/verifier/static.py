@@ -8,6 +8,7 @@ from spec_integrator.anti_sabotage.checks.fmt_broken_link import BrokenLinkCheck
 from spec_integrator.anti_sabotage.checks.fmt_file_link import FileLinkFormatCheck
 from spec_integrator.anti_sabotage.checks.fmt_hierarchy import HierarchyCheck
 from spec_integrator.anti_sabotage.checks.fmt_invalid_mermaid import MermaidSyntaxCheck
+from spec_integrator.anti_sabotage.checks.prose_readability import ProseReadabilityCheck
 from spec_integrator.anti_sabotage.checks.fmt_traceability import TraceabilityCheck
 from spec_integrator.anti_sabotage.checks.fmt_typo import LevenshteinTypoCheck
 from spec_integrator.anti_sabotage.runner import AntiSabotageRunner
@@ -32,6 +33,7 @@ class StaticVerifier:
                 LevenshteinTypoCheck(),
                 TraceabilityCheck(),
                 HierarchyCheck(),
+                ProseReadabilityCheck(),
             ]
         )
 
