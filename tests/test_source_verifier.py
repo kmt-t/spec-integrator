@@ -119,6 +119,7 @@ values: tuple[int, ...] = (1,)
 other: tuple[int, ...] = (2,)
 merged = values + other
 rebuilt = tuple(values)
+generated = tuple(value for value in values)
 expanded = (*values, *other)
 ''',
         ["forbid_builtin_containers"],
@@ -128,7 +129,10 @@ expanded = (*values, *other)
         ("PY-FORBIDDEN-TUPLE-CONCAT", 4),
         ("PY-FORBIDDEN-TUPLE-REBUILD", 5),
         ("PY-FORBIDDEN-TUPLE-REBUILD", 6),
+        ("PY-FORBIDDEN-TUPLE-REBUILD", 7),
     ]
+    assert "Reason:" in issues[1].message
+    assert "Resource requirement:" in issues[1].message
 
 
 def test_python_pysim_allows_callable_parameter_type_syntax(tmp_path: Path) -> None:

@@ -957,7 +957,7 @@ class SourceVerifier:
             elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                 if node.func.id == "tuple" and node.args and not isinstance(node.args[0], ast.Tuple):
                     rule = "PY-FORBIDDEN-TUPLE-REBUILD"
-                    message = "Converting an iterable to tuple is forbidden in pysim; use a fixed-capacity system container and freeze only at the load boundary."
+                    message = "Reason: tuple(iterable) materializes the entire iterable and duplicates peak memory. Resource requirement: create no intermediate sequence; consume incrementally, retaining data only in caller-owned bounded storage when required."
                 elif node.func.id == "list":
                     rule = "PY-FORBIDDEN-BUILTIN-LIST"
                     message = "Calling list() is forbidden in pysim; use a fixed-capacity system container."
@@ -980,12 +980,12 @@ class SourceVerifier:
             elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
                 if is_tuple_expression(node.left) or is_tuple_expression(node.right):
                     rule = "PY-FORBIDDEN-TUPLE-CONCAT"
-                    message = "Tuple concatenation is forbidden in pysim; use a fixed-capacity system container for constructed data."
+                    message = "Reason: tuple concatenation allocates and copies a new sequence, increasing peak memory. Resource requirement: create no intermediate sequence; retain data only in caller-owned bounded storage when indexed retention is required."
             elif isinstance(node, ast.Tuple) and any(
                 isinstance(element, ast.Starred) for element in node.elts
             ):
                 rule = "PY-FORBIDDEN-TUPLE-REBUILD"
-                message = "Starred tuple reconstruction is forbidden in pysim; use a fixed-capacity system container for constructed data."
+                message = "Reason: starred tuple construction materializes and copies the source. Resource requirement: create no intermediate sequence; consume incrementally, retaining data only in caller-owned bounded storage when required."
             if rule:
                 issues.append(
                     SourceIssue(
