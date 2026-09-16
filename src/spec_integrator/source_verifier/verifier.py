@@ -875,12 +875,15 @@ class SourceVerifier:
     def _check_python_builtin_containers(
         self, tree: ast.Module, rel_path: str, group_name: str
     ) -> list[SourceIssue]:
-        """Reject raw dict/set/list syntax in pysim source.
+        """Reject raw containers and tuple rebuilding in pysim source.
 
         The checker is intentionally syntax-based: a custom fixed-capacity
         container may use its own implementation details, but product code
         must express ownership and bounds through that container API rather
-        than exposing Python's built-in container vocabulary.
+        than exposing Python's built-in container vocabulary. Tuple literals
+        remain valid for immutable data; converting an iterable to a tuple or
+        concatenating tuple-shaped expressions is rejected because it can
+        hide a mutable temporary sequence.
         """
         # ``Callable[[Arg1, Arg2], Result]`` uses an AST List as typing
         # syntax, but it does not construct or expose a runtime container.
@@ -896,6 +899,45 @@ class SourceVerifier:
             and node.slice.elts
             and isinstance(node.slice.elts[0], ast.List)
         }
+
+        tuple_names: set[str] = set()
+
+        def is_tuple_annotation(node: ast.AST) -> bool:
+            if isinstance(node, ast.Name):
+                return node.id == "tuple"
+            if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+                return node.value.id == "tuple"
+            return False
+
+        def is_tuple_expression(node: ast.AST) -> bool:
+            if isinstance(node, ast.Tuple):
+                return True
+            if isinstance(node, ast.Name):
+                return node.id in tuple_names
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                return node.func.id == "tuple"
+            return False
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.arg) and node.annotation is not None:
+                if is_tuple_annotation(node.annotation):
+                    tuple_names.add(node.arg)
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                if is_tuple_annotation(node.annotation):
+                    tuple_names.add(node.target.id)
+
+        changed = True
+        while changed:
+            changed = False
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.AST):
+                    continue
+                if not is_tuple_expression(node.value):
+                    continue
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id not in tuple_names:
+                        tuple_names.add(target.id)
+                        changed = True
 
         issues: list[SourceIssue] = []
         for node in ast.walk(tree):
@@ -913,7 +955,10 @@ class SourceVerifier:
                 rule = "PY-FORBIDDEN-BUILTIN-SET"
                 message = "Built-in set syntax is forbidden in pysim; use a FlatSet storage or view."
             elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                if node.func.id == "list":
+                if node.func.id == "tuple" and node.args and not isinstance(node.args[0], ast.Tuple):
+                    rule = "PY-FORBIDDEN-TUPLE-REBUILD"
+                    message = "Converting an iterable to tuple is forbidden in pysim; use a fixed-capacity system container and freeze only at the load boundary."
+                elif node.func.id == "list":
                     rule = "PY-FORBIDDEN-BUILTIN-LIST"
                     message = "Calling list() is forbidden in pysim; use a fixed-capacity system container."
                 elif node.func.id == "dict":
@@ -932,6 +977,15 @@ class SourceVerifier:
                 elif node.value.id == "set":
                     rule = "PY-FORBIDDEN-BUILTIN-SET"
                     message = "set[...] annotations are forbidden in pysim; use a concrete system container type."
+            elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+                if is_tuple_expression(node.left) or is_tuple_expression(node.right):
+                    rule = "PY-FORBIDDEN-TUPLE-CONCAT"
+                    message = "Tuple concatenation is forbidden in pysim; use a fixed-capacity system container for constructed data."
+            elif isinstance(node, ast.Tuple) and any(
+                isinstance(element, ast.Starred) for element in node.elts
+            ):
+                rule = "PY-FORBIDDEN-TUPLE-REBUILD"
+                message = "Starred tuple reconstruction is forbidden in pysim; use a fixed-capacity system container for constructed data."
             if rule:
                 issues.append(
                     SourceIssue(

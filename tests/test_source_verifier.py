@@ -111,6 +111,26 @@ items = list(values)
     ]
 
 
+def test_python_pysim_rejects_tuple_rebuild_and_concat(tmp_path: Path) -> None:
+    issues = _check_python(
+        tmp_path,
+        '''
+values: tuple[int, ...] = (1,)
+other: tuple[int, ...] = (2,)
+merged = values + other
+rebuilt = tuple(values)
+expanded = (*values, *other)
+''',
+        ["forbid_builtin_containers"],
+    )
+
+    assert [(issue.rule, issue.line) for issue in issues] == [
+        ("PY-FORBIDDEN-TUPLE-CONCAT", 4),
+        ("PY-FORBIDDEN-TUPLE-REBUILD", 5),
+        ("PY-FORBIDDEN-TUPLE-REBUILD", 6),
+    ]
+
+
 def test_python_pysim_allows_callable_parameter_type_syntax(tmp_path: Path) -> None:
     issues = _check_python(
         tmp_path,

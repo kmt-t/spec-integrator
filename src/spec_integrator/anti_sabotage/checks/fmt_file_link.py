@@ -141,6 +141,7 @@ class FileLinkFormatCheck(AntiSabotageCheck):
         for doc in ctx.documents:
             lines = doc.content.splitlines()
             in_code_block = False
+            in_html_comment = False
             for line_idx, line in enumerate(lines, 1):
                 stripped = line.strip()
                 if stripped.startswith("```"):
@@ -149,8 +150,18 @@ class FileLinkFormatCheck(AntiSabotageCheck):
                 if in_code_block:
                     continue
 
-                # Ignore comments and frontmatter
-                if stripped.startswith("<!--") or stripped.startswith("---"):
+                # Ignore complete HTML comments, including multiline comments.
+                if in_html_comment:
+                    if "-->" in line:
+                        in_html_comment = False
+                    continue
+                if stripped.startswith("<!--"):
+                    if "-->" not in stripped:
+                        in_html_comment = True
+                    continue
+
+                # Ignore frontmatter
+                if stripped.startswith("---"):
                     continue
 
                 # Mask out markdown links: [text](target) -> replace with spaces

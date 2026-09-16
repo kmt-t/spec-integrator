@@ -111,3 +111,38 @@ print("docs/target.md")
     codes = [i.rule_code for i in issues]
     assert len(issues) >= 1
     assert any("Unlinked file path 'docs/target.md'" in i.message for i in issues)
+
+
+def test_multiline_html_comment_paths_are_ignored(tmp_path):
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir(parents=True)
+    target_file = docs_dir / "target.md"
+    target_file.write_text("# Target\n", encoding="utf-8")
+
+    cfg = Config()
+    cfg.config_dir = tmp_path
+
+    doc_with_comment = docs_dir / "doc_with_comment.md"
+    doc_with_comment.write_text(
+        """# Doc
+<!-- evidence:
+     test: docs/target.md
+-->
+""",
+        encoding="utf-8",
+    )
+
+    parser = MarkdownParser(cfg)
+    docs = [
+        parser.parse_file(doc_with_comment, docs_dir),
+        parser.parse_file(target_file, docs_dir),
+    ]
+    ctx = AntiSabotageContext(
+        documents=docs,
+        graph=None,
+        docs_root=docs_dir,
+        config=cfg,
+    )
+
+    issues = AntiSabotageRunner(checks=[FileLinkFormatCheck()]).run(ctx)
+    assert issues == []
