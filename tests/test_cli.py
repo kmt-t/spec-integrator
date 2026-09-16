@@ -262,14 +262,6 @@ def test_cli_subparsers_args():
     assert args_check_doc.subcommand == "check-doc"
     assert args_check_doc.report == "custom_report.md"
 
-    args_prose_check = parser.parse_args(
-        ["prose-check", "docs/components/tier2_runtime/runtime_interpreter.md"]
-    )
-    assert args_prose_check.subcommand == "prose-check"
-    assert args_prose_check.files == [
-        "docs/components/tier2_runtime/runtime_interpreter.md"
-    ]
-
     args_format_src = parser.parse_args(["format-src", "-g", "python", "file.py"])
     assert args_format_src.subcommand == "format-src"
     assert args_format_src.group == "python"

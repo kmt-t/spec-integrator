@@ -1,6 +1,6 @@
 from spec_integrator.config import Config
 from spec_integrator.parser import MarkdownParser
-from spec_integrator.verifier.formal import FormalVerifier
+from spec_integrator.document.gates.formal import FormalVerifier
 
 _HEADER = """
 from pyModelChecking import Kripke

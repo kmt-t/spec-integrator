@@ -4,120 +4,40 @@ import ast
 import fnmatch
 import io
 import re
-import shutil
-import subprocess
-import sys
 import tokenize
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from spec_integrator.config import Config
 
-
-@dataclass
-class SourceIssue:
-    file_path: str
-    line: int
-    rule: str
-    severity: str  # "ERROR" or "WARNING"
-    message: str
-    group: str = ""
-
-
-@dataclass
-class SourceVerificationResult:
-    group: str
-    files_evaluated: int = 0
-    issues: list[SourceIssue] = field(default_factory=list)
-
-    @property
-    def status(self) -> str:
-        return "FAIL" if any(i.severity == "ERROR" for i in self.issues) else "PASS"
+from spec_integrator.source.discovery import SourceDiscovery
+from spec_integrator.source.execution import SourceExecution
+from spec_integrator.source.models import SourceIssue, SourceVerificationResult
 
 
 _WORK_MARKER_RE = re.compile(r"\b(TODO|FIXME|XXX|HACK)\b\s*[:：]?")
 _TYPING_MODULES = frozenset(("typing", "typing_extensions"))
 
 
-class SourceVerifier:
-    """Verifies source code according to project rules, anti-sabotage checks, and group configuration."""
+class SourceAnalyzer:
+    """Analyzes source files according to rules and group configuration."""
 
     def __init__(self, config: Config):
         self.config = config
         self.root_dir = config.config_dir
+        self.discovery = SourceDiscovery(config)
+        self.execution = SourceExecution(config)
 
     def resolve_group_names(self, group_filter: str | None = None) -> list[str]:
-        all_groups = self.config.source_verification.groups
-        if not group_filter or group_filter.lower() in ("all", "*"):
-            return list(all_groups.keys())
-
-        gf = group_filter.lower()
-        if gf == "python":
-            return [g for g in all_groups if g.startswith("python_")]
-        if gf in ("concepts", "concept"):
-            return [g for g in all_groups if "concept" in g]
-        if gf in ("formal", "model"):
-            return [g for g in all_groups if "formal" in g]
-        if gf in ("pysim", "sim"):
-            return [g for g in all_groups if "pysim" in g]
-        if gf in all_groups:
-            return [gf]
-        # Match prefix or substring
-        matches = [g for g in all_groups if gf in g]
-        if matches:
-            return matches
-        return []
+        return self.discovery.resolve_group_names(group_filter)
 
     def collect_files_for_group(
         self,
         group_name: str,
         explicit_files: list[str | Path] | None = None,
     ) -> list[Path]:
-        group_cfg = self.config.source_verification.groups.get(group_name)
-        if not group_cfg:
-            return []
-
-        if explicit_files:
-            matched: list[Path] = []
-            for f in explicit_files:
-                p = Path(f).resolve()
-                if not p.is_file():
-                    continue
-                # Check extension
-                ext = p.suffix.lower()
-                matches_ext = not group_cfg.extensions or ext in [
-                    e.lower() for e in group_cfg.extensions
-                ]
-                # Check patterns
-                matches_pat = not group_cfg.patterns or any(
-                    fnmatch.fnmatch(p.name, pat) for pat in group_cfg.patterns
-                )
-                if matches_ext and matches_pat:
-                    matched.append(p)
-            return sorted(set(matched))
-
-        # Auto-discover from include_dirs
-        collected: list[Path] = []
-        for idir in group_cfg.include_dirs:
-            dir_path = self.root_dir / idir
-            if not dir_path.exists():
-                continue
-            for p in dir_path.rglob("*"):
-                if not p.is_file():
-                    continue
-                ext = p.suffix.lower()
-                matches_ext = not group_cfg.extensions or ext in [
-                    e.lower() for e in group_cfg.extensions
-                ]
-                matches_pat = not group_cfg.patterns or any(
-                    fnmatch.fnmatch(p.name, pat) for pat in group_cfg.patterns
-                )
-                if matches_ext and matches_pat:
-                    collected.append(p.resolve())
-
-        return sorted(set(collected))
+        return self.discovery.collect_files(group_name, explicit_files)
 
     def verify_group(
         self,
@@ -788,7 +708,7 @@ class SourceVerifier:
     @staticmethod
     def _union_parts(node: ast.AST) -> list[ast.AST]:
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
-            return SourceVerifier._union_parts(node.left) + SourceVerifier._union_parts(node.right)
+            return SourceAnalyzer._union_parts(node.left) + SourceAnalyzer._union_parts(node.right)
         return [node]
 
     @staticmethod
@@ -1206,151 +1126,10 @@ class SourceVerifier:
         return issues
 
     def _run_ruff(self, files: list[Path], group_name: str) -> list[SourceIssue]:
-        issues: list[SourceIssue] = []
-        ruff_bin = shutil.which("ruff")
-        base_cmd = (
-            [ruff_bin] if ruff_bin else ["uv", "run", "--system-certs", "--with", "ruff", "ruff"]
-        )
-
-        # Run ruff check on the list of files
-        file_args = [str(f) for f in files]
-        res = subprocess.run(
-            [*base_cmd, "check", *file_args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        if res.returncode != 0:
-            for line in res.stdout.splitlines():
-                line = line.strip()
-                if not line or line.startswith("Found "):
-                    continue
-                issues.append(
-                    SourceIssue(
-                        file_path="[python]",
-                        line=1,
-                        rule="PY-RUFF-LINT",
-                        severity="ERROR",
-                        message=line,
-                        group=group_name,
-                    )
-                )
-        return issues
+        return self.execution.run_ruff(files, group_name)
 
     def _execute_python_file(self, file_path: Path, group_name: str) -> list[SourceIssue]:
-        issues: list[SourceIssue] = []
-        rel_path = (
-            str(file_path.relative_to(self.root_dir)).replace("\\", "/")
-            if file_path.is_relative_to(self.root_dir)
-            else str(file_path)
-        )
-        # Run with uv
-        cmd = [
-            "uv",
-            "run",
-            "--system-certs",
-            "--project",
-            "tools/spec-integrator",
-            "python",
-            str(file_path),
-        ]
-        try:
-            res = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-            )
-            if res.returncode != 0:
-                err_msg = res.stderr.strip() or res.stdout.strip()
-                last_line = err_msg.splitlines()[-1] if err_msg else "Exit code non-zero"
-                issues.append(
-                    SourceIssue(
-                        file_path=rel_path,
-                        line=1,
-                        rule="PY-EXECUTION-FAILED",
-                        severity="ERROR",
-                        message=f"Execution failed: {last_line}",
-                        group=group_name,
-                    )
-                )
-        except subprocess.TimeoutExpired:
-            issues.append(
-                SourceIssue(
-                    file_path=rel_path,
-                    line=1,
-                    rule="PY-EXECUTION-TIMEOUT",
-                    severity="ERROR",
-                    message="Execution timed out after 30 seconds.",
-                    group=group_name,
-                )
-            )
-        except Exception as e:
-            issues.append(
-                SourceIssue(
-                    file_path=rel_path,
-                    line=1,
-                    rule="PY-EXECUTION-ERROR",
-                    severity="ERROR",
-                    message=f"Failed to execute: {e}",
-                    group=group_name,
-                )
-            )
-        return issues
+        return self.execution.execute_python_file(file_path, group_name)
 
     def _run_pysim_tests(self, group_name: str) -> list[SourceIssue]:
-        issues: list[SourceIssue] = []
-        test_runners = (self.root_dir / "experiments/pysim/qa/run_all.py",)
-        for tr in test_runners:
-            if not tr.exists():
-                continue
-            rel = str(tr.relative_to(self.root_dir)).replace("\\", "/")
-            project_python = self.root_dir / ".venv" / "Scripts" / "python.exe"
-            if not project_python.exists():
-                project_python = self.root_dir / ".venv" / "bin" / "python"
-            test_python = str(project_python) if project_python.exists() else sys.executable
-            cmd = [
-                # Prefer the repository environment because pysim's tests
-                # require project dependencies such as cython and wasmtime.
-                # Falling back to spec-integrator's interpreter keeps the
-                # checker usable in repositories without a project venv.
-                test_python,
-                str(tr),
-            ]
-            try:
-                res = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=60,
-                )
-                if res.returncode != 0:
-                    err_msg = res.stderr.strip() or res.stdout.strip()
-                    last_line = err_msg.splitlines()[-1] if err_msg else "Exit code non-zero"
-                    issues.append(
-                        SourceIssue(
-                            file_path=rel,
-                            line=1,
-                            rule="PYSIM-TEST-FAILED",
-                            severity="ERROR",
-                            message=f"Pysim test suite failed: {last_line}",
-                            group=group_name,
-                        )
-                    )
-            except Exception as e:
-                issues.append(
-                    SourceIssue(
-                        file_path=rel,
-                        line=1,
-                        rule="PYSIM-TEST-ERROR",
-                        severity="ERROR",
-                        message=f"Failed to run pysim tests: {e}",
-                        group=group_name,
-                    )
-                )
-        return issues
+        return self.execution.run_pysim_tests(group_name)

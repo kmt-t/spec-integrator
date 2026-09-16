@@ -2,7 +2,7 @@ import pytest
 from spec_integrator.anti_sabotage.checks.consist_symbol_drift import normalize_value
 from spec_integrator.config import Config, KeywordRule
 from spec_integrator.parser import MarkdownParser
-from spec_integrator.verifier.consistency import ConsistencyVerifier
+from spec_integrator.document.gates.consistency import ConsistencyVerifier
 
 
 def _docs(tmp_path, files: dict[str, str]):

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from spec_integrator.db import VerificationIssue
+from spec_integrator.models import VerificationIssue
 from spec_integrator.judge.llm_backend import (
     call_ollama,
     call_openrouter,

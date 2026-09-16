@@ -1,6 +1,6 @@
 from spec_integrator.config import Config
 from spec_integrator.parser import MarkdownParser
-from spec_integrator.verifier.evidence import EvidenceVerifier
+from spec_integrator.document.gates.evidence import EvidenceVerifier
 
 
 def _parse(tmp_path, rel_name, body):

@@ -141,12 +141,6 @@ spec-integrator check-doc --config spec-integrator.yaml --report report.md --cle
 GiNZAの警告は文章を自動修正する指示ではなく、内容を保った分割が可能か人が確認する候補です。コードブロックと見出しは解析せず、表の文章セルは解析します。
 しきい値はプロジェクトルートの `spec-integrator.yaml` にある `prose_readability` の3項目で調整します。警告専用であり、しきい値を変えてもエラーゲートにはなりません。
 
-文章を1ファイルずつ確認する場合は、次のコマンドを使う。対象を省略すると `docs/` 配下の全Markdownを確認する。
-
-```bash
-spec-integrator prose-check docs/components/tier2_runtime/runtime_interpreter.md
-```
-
 ### 5. ソースコード自動フォーマット & 静的規約・サボり検査 (`format-src`, `check-src`)
 ```bash
 # ソースコード自動整形 (Python: Ruff / C++: clang-format)

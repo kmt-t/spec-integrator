@@ -7,7 +7,9 @@ if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
 from spec_integrator.config import Config, PysimImportConfig, PysimImportTierConfig
-from spec_integrator.source_verifier import SourceIssue, SourceVerifier
+from spec_integrator.source import SourceIssue
+from spec_integrator.source.analyzer import SourceAnalyzer
+from spec_integrator.source.coordinator import SourceVerifier
 
 
 def _check_python(tmp_path: Path, source: str, rules: list[str]) -> list[SourceIssue]:
@@ -15,8 +17,8 @@ def _check_python(tmp_path: Path, source: str, rules: list[str]) -> list[SourceI
     source_file.write_text(source, encoding="utf-8")
     config = Config()
     config.config_dir = tmp_path
-    verifier = SourceVerifier(config)
-    return verifier._check_anti_sabotage(source_file, rules, "python")
+    analyzer = SourceAnalyzer(config)
+    return analyzer._check_anti_sabotage(source_file, rules, "python")
 
 
 def test_python_static_checks_ignore_strings_and_docstrings(tmp_path: Path) -> None:
@@ -238,8 +240,8 @@ def inspect(value: int) -> bool:
 
 
 def test_python_pysim_container_exclusion_is_path_configured(tmp_path: Path) -> None:
-    verifier = SourceVerifier(Config())
-    issues = verifier._check_python_rules(
+    analyzer = SourceAnalyzer(Config())
+    issues = analyzer._check_python_rules(
         tmp_path / "system_containers.py",
         "values: list[int] = [1, 2]\n",
         "experiments/pysim/tier1_core/system_containers.py",
@@ -268,7 +270,7 @@ def test_pysim_import_check_uses_configured_file_tiers(tmp_path: Path) -> None:
         ],
     )
 
-    issues = SourceVerifier(config)._check_pysim_imports("python_pysim")
+    issues = SourceAnalyzer(config)._check_pysim_imports("python_pysim")
 
     assert [(issue.rule, issue.line) for issue in issues] == [
         ("PYSIM-IMPORT-DIRECTION", 1)

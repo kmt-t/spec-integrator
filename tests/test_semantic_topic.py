@@ -5,7 +5,7 @@ from unittest.mock import patch
 from spec_integrator.config import Config, SemanticTopicConfig
 from spec_integrator.db import DocAuditDB
 from spec_integrator.terminology.section_indexer import SectionTopicIndexer, cosine_similarity
-from spec_integrator.verifier.section_verifier import SectionTopicVerifier
+from spec_integrator.document.gates.section_verifier import SectionTopicVerifier
 
 
 def test_cosine_similarity():

@@ -2,9 +2,7 @@ from spec_integrator.config import Config
 from spec_integrator.graph import DocGraphBuilder
 from spec_integrator.parser import MarkdownParser
 from spec_integrator.reporter import Reporter
-from spec_integrator.verifier.formal import FormalModelResult
-from spec_integrator.verifier.static import VerificationIssue
-from spec_integrator.verifier.wit import WITFileResult
+from spec_integrator.models import FormalModelResult, VerificationIssue, WITFileResult
 
 
 def test_reporter(tmp_path):

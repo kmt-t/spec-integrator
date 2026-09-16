@@ -2,7 +2,7 @@ from spec_integrator.config import Config
 from spec_integrator.db import DocAuditDB
 from spec_integrator.graph import DocGraphBuilder
 from spec_integrator.parser import MarkdownParser
-from spec_integrator.verifier.obligation import ObligationVerifier
+from spec_integrator.document.gates.obligation import ObligationVerifier
 
 
 def _setup(tmp_path, body):

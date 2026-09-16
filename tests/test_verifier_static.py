@@ -3,7 +3,7 @@ import sys
 from spec_integrator.config import Config, KeywordRule, TierConfig
 from spec_integrator.graph import DocGraphBuilder
 from spec_integrator.parser import MarkdownParser
-from spec_integrator.verifier.static import StaticVerifier
+from spec_integrator.document.gates.static import StaticVerifier
 
 
 def test_static_verifier_gates(tmp_path):

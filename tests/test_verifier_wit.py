@@ -1,6 +1,6 @@
 from spec_integrator.config import Config
 from spec_integrator.parser import MarkdownParser
-from spec_integrator.verifier.wit import WITVerifier
+from spec_integrator.document.gates.wit import WITVerifier
 
 
 def test_wit_verifier_valid_and_invalid(tmp_path):

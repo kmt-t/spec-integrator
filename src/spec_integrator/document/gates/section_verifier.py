@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from spec_integrator.db import VerificationIssue
+from spec_integrator.models import VerificationIssue
 
 if TYPE_CHECKING:
     from spec_integrator.config import Config
