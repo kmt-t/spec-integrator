@@ -7,6 +7,7 @@ from spec_integrator.models import VerificationIssue
 from spec_integrator.judge.llm_backend import (
     call_ollama,
     call_openrouter,
+    call_openrouter_jev,
     call_sakura,
     extract_json,
 )
@@ -131,8 +132,69 @@ class TermVarianceJudge:
             )
 
             try:
-                raw = self._call_backend(prompt, used_backend, model)
-                data = extract_json(raw)
+                if used_backend == "jev":
+                    response = call_openrouter_jev(
+                        self.config,
+                        {
+                            "term_a": term_a,
+                            "term_a_file": occ_a.get("file_path", "unknown"),
+                            "term_a_heading": occ_a.get("heading", ""),
+                            "term_a_context": occ_a.get("snippet", term_a),
+                            "term_b": term_b,
+                            "term_b_file": occ_b.get("file_path", "unknown"),
+                            "term_b_heading": occ_b.get("heading", ""),
+                            "term_b_context": occ_b.get("snippet", term_b),
+                        },
+                        {
+                            "term_decision": {
+                                "type": "choice",
+                                "instructions": (
+                                    "Compare `term_a` and `term_b` in their provided contexts. "
+                                    "Are they inconsistent labels for the same concept, and if so, "
+                                    "which existing term should be preferred?"
+                                ),
+                                "criteria": {
+                                    "no_variance": (
+                                        "The terms do not refer to the same concept, or their "
+                                        "difference is intentional and appropriate."
+                                    ),
+                                    "variance_prefer_a": (
+                                        f"The terms are an undesirable naming variance for the "
+                                        f"same concept; prefer '{term_a}'."
+                                    ),
+                                    "variance_prefer_b": (
+                                        f"The terms are an undesirable naming variance for the "
+                                        f"same concept; prefer '{term_b}'."
+                                    ),
+                                },
+                            }
+                        },
+                        model,
+                    )
+                    answer = response["answers"]["term_decision"]
+                    decision = answer.get("choice")
+                    if decision not in (
+                        "no_variance",
+                        "variance_prefer_a",
+                        "variance_prefer_b",
+                    ):
+                        raise ValueError(f"Jev returned an unknown term decision: {decision!r}")
+                    is_variance = decision != "no_variance"
+                    confidence = float(answer["confidence"])
+                    if not 0.0 <= confidence <= 1.0:
+                        raise ValueError("Jev returned a confidence outside the 0-1 range")
+                    data = {
+                        "is_variance": is_variance,
+                        "confidence": confidence,
+                        "preferred_term": term_b if decision == "variance_prefer_b" else term_a,
+                        "reason": (
+                            f"Jev selected '{decision}' with {confidence:.0%} confidence; "
+                            "the decision model does not return a text rationale."
+                        ),
+                    }
+                else:
+                    raw = self._call_backend(prompt, used_backend, model)
+                    data = extract_json(raw)
                 is_var = bool(data.get("is_variance", False))
                 conf = float(data.get("confidence", 0.0))
                 pref = str(data.get("preferred_term", term_a))

@@ -184,7 +184,7 @@ class LLMCheckRule:
 @dataclass
 class LLMJudgeConfig:
     tag: str = "{VERIFY_LLM}"
-    default_backend: str = "sakura"
+    default_backend: str = "jev"
     backends: dict[str, LLMBackendConfig] = field(default_factory=dict)
     section_char_budget: int = 8000
     checks: list[LLMCheckRule] = field(default_factory=list)
@@ -277,6 +277,7 @@ class TerminologyConfig:
 
     enabled: bool = True
     embedding_model: str = "multilingual-e5-large"
+    embedding_backend: str = "sakura"
     similarity_threshold: float = 0.90
     confidence_threshold: float = 0.70
     max_terms: int = 500

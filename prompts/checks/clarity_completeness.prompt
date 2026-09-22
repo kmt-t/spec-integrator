@@ -1,1 +1,8 @@
-Detect underspecified protocols, missing fallback behaviours, unassigned states, unhandled error conditions, or ambiguous boundary conditions left unresolved anywhere in the text.
+Review only the text supplied in `specification_content`. Flag a clarity/completeness issue only when the supplied wording leaves two materially different interpretations of a stated behavior, or when two supplied statements directly conflict.
+
+Count only concrete, locally visible defects such as:
+- A condition, actor, or result in a stated procedure has two materially different interpretations, and the supplied text does not resolve which one applies.
+- Two explicit statements in the supplied text give incompatible conditions, values, or outcomes.
+- A described decision branch leaves its outcome unresolved even though the next stated step depends on that outcome.
+
+Do not infer requirements from common practice, another document that is not included, or an unstated design intention. Do not flag details that could be added for completeness, wording that could merely be clearer, or a boundary/fallback case that the supplied text does not claim to cover. Leave spelling, missing characters or words, and punctuation defects to the dedicated typo/omission check. Ignore intentional fragments in table cells and bullets and valid code/API symbols. If you cannot identify an unmistakable ambiguity or contradiction in the supplied text, treat the criterion as satisfied.

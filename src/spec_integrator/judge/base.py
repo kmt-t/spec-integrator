@@ -36,6 +36,11 @@ class BaseJudge:
     def _call_openrouter(self, prompt: str, model: str | None) -> str:
         return llm_backend.call_openrouter(self.config, prompt, model)
 
+    def _call_jev(
+        self, state: str | dict, questions: dict[str, dict], model: str | None = None
+    ) -> dict:
+        return llm_backend.call_openrouter_jev(self.config, state, questions, model)
+
     def _call_ollama(self, prompt: str, model: str | None) -> str:
         return llm_backend.call_ollama(self.config, prompt, model)
 

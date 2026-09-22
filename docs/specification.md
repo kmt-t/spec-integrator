@@ -57,8 +57,9 @@ $$E = E_{\text{contain}} \cup E_{\text{define}} \cup E_{\text{refer}} \cup E_{\t
 - **`links_to`**: Markdown 相対リンク `[text](path.md#anchor)` による直接参照。
 
 ### (3) 局所サブグラフ $G_r$ の抽出（LLM 評価空間）
-特定の要件・キーワード $r \in V_{\text{item}}$ に対し、定義元セクション群 $\text{Def}(r) = \{ s \mid (s, r) \in E_{\text{define}} \}$ と参照設計セクション群 $\text{Ref}(r) = \{ s' \mid (s', r) \in E_{\text{refer}} \}$ を束ねた部分グラフ $G_r$ を抽出します。
-これにより、LLM as a Judge に与えるべき**最小完全な評価コンテキスト**を自動生成します。
+特定の要件・キーワード $r \in V_{\text{item}}$ に対し、定義元セクション群 $\text{Def}(r)$ と参照設計セクション群 $\text{Ref}(r)$ を抽出します。定義元ファイルは `keyword_dictionary.md` の「定義元正本」欄から取得し、定義セクションと、キーワード島に属する参照セクションを別のリストとして提示します。
+
+島レビューでは、定義の内容・配置・単一正本性と、参照セクションの `traceability` コメントによるリンクを独立して評価します。定義元セクションは通常の参照セクションの島抽出から除外される場合も、評価コンテキストへ追加します。これにより、LLM as a Judge に与える**役割を区別したセクション単位の評価コンテキスト**を生成します。
 
 ---
 
@@ -123,15 +124,32 @@ formal_verification:
 # LLM as a Judge の設定
 llm_judge:
   tag: "{VERIFY_LLM}"
-  default_backend: "sakura"          # "sakura" または "ollama"
+  default_backend: "jev"             # OpenRouter Decisions API を使う型付き判定モデル
   backends:
+    jev:
+      api_key_env: "OPENROUTER_API_KEY"
+      endpoint: "https://openrouter.ai/api/alpha/decisions"
+      model: "typesafe/jev-1.13"
     sakura:
       api_key_env: "SAKURA_API_KEY"
       model: "sakura-ai-model"
     ollama:
       endpoint: "http://localhost:11434"
       model: "llama3"
+
+terminology:
+  embedding_backend: "openrouter"
+  embedding_model: "intfloat/multilingual-e5-large"
 ```
+
+Jev は各レビュー基準に対して次のいずれかを選び、確信度を返します。`confirmed_violation` は設定された重大度で判定し、`possible_violation` と `insufficient_context` は WARN、`documented_open_issue` と `improvement_suggestion` は INFO、`no_issue` は結果詳細へ追加しません。
+
+- `confirmed_violation`: 明確に確認できる違反
+- `possible_violation`: 違反の可能性があり、人手の確認が必要
+- `documented_open_issue`: 文書が未解決・検討中と明記する事項
+- `insufficient_context`: 島内の情報だけでは判断できない事項
+- `improvement_suggestion`: 違反ではないが改善案がある事項
+- `no_issue`: 指摘事項なし
 
 ---
 
@@ -341,7 +359,7 @@ spec-integrator risk [OPTIONS]
 ```
 - **オプション**:
   - `-c, --config PATH`: 設定ファイルパス
-  - `--backend [sakura|openrouter|ollama|mock]`: LLM バックエンド指定
+  - `--backend [jev|sakura|openrouter|ollama|mock]`: LLM バックエンド指定。Jev は型付き判定を返し、説明文や引用箇所は生成しない
   - `--model TEXT`: モデル名の明示的オーバーライド
   - `-r, --report PATH`: リスクレポート出力先
 
@@ -352,8 +370,11 @@ TF-IDF 抽出キーワードのエンベディング類似度および LLM に�
 spec-integrator llm-word [OPTIONS]
 ```
 - **オプション**:
-  - `--quick`: LLM 呼び出しをスキップし、レーベンシュタイン距離による静的タイポ・表記揺れのみ検出（API 課金 0 円）
+  - `--quick`: 用語の LLM 文脈判定をスキップする。未作成の埋め込みがある場合は、設定済み埋め込み API を呼び出す
   - `--threshold FLOAT`: 類似度判定閾値
+  - `--backend NAME`: 用語判定バックエンド（既定値は設定の `llm_judge.default_backend`）
+  - `--model TEXT`: 用語判定モデルの上書き
+  - `--embedding-model TEXT`: 埋め込みモデルの上書き
 
 ### (7) `spec-integrator llm-single-review`
 単一ドキュメント内の全セクションまたは指定ファイルの内部一貫性・未裏付け主張を LLM でセマンティック監査します。

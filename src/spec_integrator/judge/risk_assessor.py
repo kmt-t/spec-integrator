@@ -140,7 +140,73 @@ class RiskAssessor(BaseJudge):
             )
 
         try:
-            if backend == "sakura":
+            if backend == "jev":
+                response = self._call_jev(
+                    {
+                        "keyword": f"{{{keyword}}}",
+                        "reference_count": len(sg.get("referenced_in", [])),
+                        "definition_sections": def_texts or ["(No explicit definition section)"],
+                        "referencing_sections": ref_texts or ["(No referencing sections)"],
+                    },
+                    {
+                        "complexity": {
+                            "type": "score",
+                            "instructions": (
+                                "Rate the inherent implementation complexity of this requirement "
+                                "or design keyword using its definition and referencing sections."
+                            ),
+                            "criteria": [
+                                "Very low: local, straightforward behavior with few states.",
+                                "Low: limited interactions and uncomplicated implementation.",
+                                "Moderate: several interacting behaviors or notable constraints.",
+                                "High: large state space, asynchronous behavior, ownership transfer, "
+                                "cache lifecycle, or low-level hardware interaction.",
+                                "Very high: several high-complexity factors combine or require "
+                                "extensive coordination.",
+                            ],
+                        },
+                        "design_risk": {
+                            "type": "score",
+                            "instructions": (
+                                "Rate the inherent design risk using the definition and referencing "
+                                "sections. Consider deadlocks, races, memory corruption, starvation, "
+                                "failure handling, and ambiguous assumptions."
+                            ),
+                            "criteria": [
+                                "Very low: behavior is explicit and has few consequential failure modes.",
+                                "Low: limited failure exposure with clear handling.",
+                                "Moderate: meaningful failure modes or assumptions require verification.",
+                                "High: substantial risk of deadlock, race, corruption, starvation, or "
+                                "missing recovery.",
+                                "Very high: multiple severe failure modes or critical unresolved "
+                                "assumptions.",
+                            ],
+                        },
+                    },
+                    model,
+                )
+                answers = response["answers"]
+                complexity_value = float(answers["complexity"]["score"])
+                risk_value = float(answers["design_risk"]["score"])
+                if not 0.0 <= complexity_value <= 4.0 or not 0.0 <= risk_value <= 4.0:
+                    raise ValueError("Jev returned a score outside the configured 0-4 range")
+                complexity_score = min(5, max(1, int(round(complexity_value)) + 1))
+                risk_score = min(5, max(1, int(round(risk_value)) + 1))
+                return KeywordRiskAssessment(
+                    item_id=sg["item_id"],
+                    keyword=keyword,
+                    file_path=file_path,
+                    tier=tier,
+                    complexity_score=complexity_score,
+                    risk_score=risk_score,
+                    line=line,
+                    covered_files=covered,
+                    summary=(
+                        f"Jev structured scores: complexity {complexity_value:.2f}/4, "
+                        f"design risk {risk_value:.2f}/4. Jev does not provide a text rationale."
+                    ),
+                )
+            elif backend == "sakura":
                 raw_resp = self._call_sakura(prompt, model)
             elif backend == "openrouter":
                 raw_resp = self._call_openrouter(prompt, model)

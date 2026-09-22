@@ -1,4 +1,7 @@
-Verify that all cross-document references use valid file paths (relative path or filename) or explicit metadata keywords ({Keyword}).
-- Prohibit Fragile Section Numbers: Referencing sections by chapter/section/subsection numbers (e.g., "第3章", "セクション2.1", "3.4項", "Chapter 3", "Section 2.4") is strictly prohibited because section numbers change during document refactoring and become stale.
-- Detect any reference relying on section numbers or vague heading titles instead of registered {Keyword} or file links.
-- Flag any chapter/section number references as an ERROR (Fragile Section Number Reference).
+Check only cross-document references that appear in the supplied text.
+
+Valid references include an existing relative file path, an existing filename, or a registered `{Keyword}`. Do not require Markdown link syntax when the filename/path itself is valid. Registered `GOTCHA-*` keywords and explicit test-case IDs are valid identifiers.
+
+Flag a reference only when the text visibly relies on a chapter/section number to locate another part of a document (for example, "第3章", "セクション2.1", "3.4項", "Chapter 3", or "Section 2.4"), or when a cited path/keyword is directly shown to be invalid in the supplied context.
+
+Do not mistake numbers in constants, versions, test IDs, GOTCHA IDs, filenames, file paths, or numbered headings themselves for a chapter/section reference. Do not guess that an uncited path or keyword is invalid. If the supplied text uses a valid filename/path or registered keyword and contains no explicit fragile section reference, answer that no violation is present.

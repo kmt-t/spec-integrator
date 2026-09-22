@@ -100,7 +100,7 @@ co-change の依存関係は `{Keyword}` の既存トレーサビリティから
 - **用語表記揺れ検査 (`llm-word` コマンド)**:
   - TF-IDF による抽出キーワードとエンベディング類似度・LLM による文脈判定を組み合わせ、用語表記揺れやタイポを高精度に検出。
 - **LLM as a Judge セマンティック監査 (`llm-single-review`, `llm-keyword-review` コマンド)**:
-  - 単一ドキュメント・セクションの自己一貫性監査、または高リスクキーワードが連結するドキュメント島全体のトレーサビリティ・意味的矛盾を Sakura / OpenRouter / Ollama バックエンドで診断。
+  - 単一ドキュメント・セクションの自己一貫性監査、または高リスクキーワードが連結するドキュメント島全体のトレーサビリティ・意味的矛盾を Jev / Sakura / OpenRouter / Ollama バックエンドで診断。Jev は基準ごとの型付き判定と確率を返すが、説明文・引用箇所は生成しない。
 - **SQLite データベース・監査キャッシュ (`DocAuditDB`)**:
   - ドキュメント構造の高速クエリ、ハッシュ値による差分検証キャッシュに加え、`risk`/`llm-single-review`/`llm-keyword-review` の判定結果そのもの（中間 JSON レポートは生成しない）を記録するローカル生成データ。
 - **CI / GitHub Actions ファースト**:
@@ -165,14 +165,15 @@ spec-integrator graph -f json -o graph.json
 # 結果はキャッシュ DB に記録され、check-doc レポートの Risk Assessment Detail 節に反映される
 spec-integrator risk --config spec-integrator.yaml
 ```
+Fireball の設定では OpenRouter 経由の Jev を既定で使うため、`OPENROUTER_API_KEY` を環境変数に設定する。必要に応じて `--backend openrouter` などを指定できる。`llm-word` の用語候補抽出にも OpenRouter の多言語埋め込みモデルを使い、別の `SAKURA_API_KEY` は要求しない。
 
 ### 8. 用語表記揺れチェック (`llm-word`)
 ```bash
-# 静的チェックのみ (高速・0コスト)
+# 用語の LLM 文脈判定をスキップ (未作成の埋め込みがあれば embedding API は呼び出す)
 spec-integrator llm-word --quick
 
 # エンベディング + LLM 文脈判定込み
-spec-integrator llm-word --backend sakura
+spec-integrator llm-word
 ```
 
 ### 9. LLM as a Judge セマンティック監査 (`llm-single-review`, `llm-keyword-review`)
@@ -183,6 +184,9 @@ spec-integrator llm-single-review --file docs/components/tier1_core/os_scheduler
 # 高リスクキーワード連結島監査
 spec-integrator llm-keyword-review --keyword SCHED_DISPATCH_TIMEOUT
 ```
+Jev は各レビュー基準を個別に分類し、選択肢ごとの確信度を返す。結果は「明確な違反」「違反の可能性」「既知の未解決事項」「文脈不足」「改善提案」「問題なし」に分かれ、明確な違反だけを設定済み重大度で FAIL/WARN にし、可能性や文脈不足は WARN、未解決事項と改善提案は INFO として残す。
+
+キーワード島では、キーワード台帳が指定する定義元セクションを `DEFINITION`、島に含まれる参照セクションを `REFERENCE` と明示して Jev に渡す。定義の置き場所・内容と、参照側のセクション単位 `traceability` リンクを別々の基準で確認する。Jev は説明文や文書内の引用箇所を生成しないため、WARN/INFO の確認には対象島のセクションを読み直す。説明や引用が必要な場合は `--backend openrouter` などチャット型バックエンドを指定する。
 
 ---
 
@@ -247,14 +251,22 @@ wit_verification:
 
 llm_judge:
   tag: "{VERIFY_LLM}"
-  default_backend: "sakura"
+  default_backend: "jev"
   backends:
+    jev:
+      api_key_env: "OPENROUTER_API_KEY"
+      endpoint: "https://openrouter.ai/api/alpha/decisions"
+      model: "typesafe/jev-1.13"
     sakura:
       api_key_env: "SAKURA_API_KEY"
       model: "preview/gemma-4-31B-it"
     ollama:
       endpoint: "http://localhost:11434"
       model: "llama3"
+
+terminology:
+  embedding_backend: "openrouter"
+  embedding_model: "intfloat/multilingual-e5-large"
 ```
 
 ---

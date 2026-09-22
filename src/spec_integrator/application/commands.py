@@ -135,14 +135,22 @@ formal_verification:
 
 llm_judge:
   tag: "{VERIFY_LLM}"
-  default_backend: "sakura"
+  default_backend: "jev"
   backends:
+    jev:
+      api_key_env: "OPENROUTER_API_KEY"
+      endpoint: "https://openrouter.ai/api/alpha/decisions"
+      model: "typesafe/jev-1.13"
     sakura:
       api_key_env: "SAKURA_API_KEY"
       model: "sakura-ai-model"
     ollama:
       endpoint: "http://localhost:11434"
       model: "llama3"
+
+terminology:
+  embedding_backend: "openrouter"
+  embedding_model: "intfloat/multilingual-e5-large"
 
 evidence:
   enabled: true
@@ -210,7 +218,7 @@ def cmd_risk(args):
 
 
 def cmd_llm_single_review(args):
-    """Reviews single documents section-by-section and the connected islands of their high-risk keywords."""
+    """Reviews documents section-by-section and their high-risk keyword islands."""
     config = Config.load(args.config)
     reviewer = UnifiedReviewEngine(config)
 
@@ -284,18 +292,22 @@ def cmd_llm_single_review(args):
 
         related_islands = []
         for isl in islands:
-            if doc.file_path in isl.file_paths and isl.total_docs >= 2:
+            if (
+                doc.file_path in isl.file_paths
+                and isl.total_docs >= 2
+                and set(isl.keywords).intersection(high_risk_kws)
+            ):
                 if isl not in related_islands:
                     related_islands.append(isl)
 
         if related_islands:
             print(
-                f"\n>>> [2/2] Reviewing {len(related_islands)} connected island(s) related to '{doc.file_path}' (high-risk kws: {len(high_risk_kws)})...",
+                f"\n>>> [2/2] Reviewing {len(related_islands)} high-risk keyword island(s) related to '{doc.file_path}'...",
                 flush=True,
             )
             for idx, isl in enumerate(related_islands, start=1):
                 print(
-                    f"  [{idx}/{len(related_islands)}] Auditing Island '{isl.name}' ({isl.total_docs} docs)...",
+                    f"  [{idx}/{len(related_islands)}] Auditing keyword island '{isl.name}' ({isl.total_docs} docs, {isl.total_sections} linked sections)...",
                     flush=True,
                 )
                 res_isl = reviewer.review_document_island(
@@ -323,7 +335,7 @@ def cmd_llm_single_review(args):
 
 
 def cmd_llm_keyword_review(args):
-    """Reviews connected document islands containing high-risk keywords."""
+    """Reviews per-keyword islands containing high-risk keywords."""
     config = Config.load(args.config)
     reviewer = UnifiedReviewEngine(config)
 
@@ -361,21 +373,16 @@ def cmd_llm_keyword_review(args):
         sys.exit(0)
 
     islands = graph.extract_document_islands(min_size=2)
-    kw_files = set()
-    for kw in target_keywords:
-        for doc in documents:
-            if kw in doc.all_keywords:
-                kw_files.add(doc.file_path)
-
-    target_islands = [isl for isl in islands if any(f in kw_files for f in isl.file_paths)]
+    target_keyword_set = set(target_keywords)
+    target_islands = [isl for isl in islands if target_keyword_set.intersection(isl.keywords)]
     print(
-        f"Found {len(target_islands)} connected document island(s) associated with target keywords."
+        f"Found {len(target_islands)} keyword island(s) for the target keywords."
     )
 
     has_failures = False
     for idx, isl in enumerate(target_islands, start=1):
         print(
-            f"\n[{idx}/{len(target_islands)}] Auditing Island '{isl.name}' ({isl.total_docs} docs, {isl.total_sections} sections)...",
+            f"\n[{idx}/{len(target_islands)}] Auditing keyword island '{isl.name}' ({isl.total_docs} docs, {isl.total_sections} linked sections)...",
             flush=True,
         )
         res = reviewer.review_document_island(
@@ -403,7 +410,7 @@ def cmd_llm_keyword_review(args):
 def cmd_llm_judge(args):
     """Runs the anchored LLM semantic judge across all {VERIFY_LLM}-tagged documents.
 
-    Persists results into `document_judge_results` (whole-document self-consistency,
+    Persists results into `document_judge_results` (per-section self-consistency,
     checked by DocumentJudgeCoverageCheck) and `judge_results` (cross-document island
     review, checked by JudgeCoverageCheck), anchored to the current document hashes so
     the Obligation Verifier can detect staleness. This is the command that discharges
@@ -442,7 +449,7 @@ def cmd_llm_judge(args):
 
     has_failures = False
 
-    # Phase 1: whole-document self-consistency review -> document_judge_results
+    # Phase 1: per-section self-consistency review -> document_judge_results
     doc_targets = (
         tagged if (args.exhaustive or args.max_documents <= 0) else tagged[: args.max_documents]
     )
@@ -453,7 +460,7 @@ def cmd_llm_judge(args):
             "for full coverage."
         )
     print(
-        f"\n>>> [1/2] Whole-document self-consistency review "
+        f"\n>>> [1/2] Per-section self-consistency review "
         f"({len(doc_targets)} document(s), backend: {backend})..."
     )
     doc_results = []
@@ -544,13 +551,14 @@ def cmd_llm_word(args):
     documents, _graph, db, _docs_root = _load_and_parse_all(config)
 
     indexer = TermIndexer(config)
-    _log(">>> [1/3] Generating term embeddings via Sakura AI...")
-    new_embeddings = indexer.index_embeddings(db, model=args.model)
+    embedding_backend = config.terminology.embedding_backend
+    _log(f">>> [1/3] Generating term embeddings via {embedding_backend}...")
+    new_embeddings = indexer.index_embeddings(db, model=args.embedding_model)
     _log(f"✔ Indexed {new_embeddings} new term embedding(s).")
 
     _log(">>> [2/3] Calculating pairwise similarities for terminology...")
     sim_pairs = indexer.compute_and_save_similarities(
-        db, model=args.model, min_similarity=args.threshold
+        db, model=args.embedding_model, min_similarity=args.threshold
     )
     _log(f"✔ Identified {sim_pairs} high-similarity term pair(s).")
 
@@ -706,7 +714,7 @@ def _add_risk_subparser(subparsers) -> None:
     _add_config_arg(p)
     p.add_argument(
         "--backend",
-        choices=["openrouter", "sakura", "ollama", "mock"],
+        choices=["jev", "openrouter", "sakura", "ollama", "mock"],
         help="Risk assessor backend",
     )
     p.add_argument("--model", help="LLM model name override")
@@ -738,9 +746,12 @@ def _add_llm_word_subparser(subparsers) -> None:
     )
     _add_config_arg(p)
     p.add_argument(
-        "--backend", choices=["openrouter", "sakura", "ollama", "mock"], help="LLM backend"
+        "--backend",
+        choices=["jev", "openrouter", "sakura", "ollama", "mock"],
+        help="LLM backend",
     )
-    p.add_argument("--model", help="LLM or embedding model name override")
+    p.add_argument("--model", help="LLM model name override")
+    p.add_argument("--embedding-model", help="Embedding model name override")
     p.add_argument(
         "--threshold",
         type=float,
@@ -756,7 +767,7 @@ def _add_llm_word_subparser(subparsers) -> None:
     p.add_argument(
         "--quick",
         action="store_true",
-        help="Skip LLM variance judgment and run static report",
+        help="Skip LLM variance judgment; missing embeddings may still call the configured API",
     )
     p.set_defaults(func=cmd_llm_word)
 
@@ -804,7 +815,7 @@ def _add_llm_single_review_subparser(subparsers) -> None:
     )
     p.add_argument(
         "--backend",
-        choices=["openrouter", "sakura", "ollama", "mock"],
+        choices=["jev", "openrouter", "sakura", "ollama", "mock"],
         help="LLM backend override",
     )
     p.add_argument("--model", help="LLM model name override")
@@ -814,7 +825,7 @@ def _add_llm_single_review_subparser(subparsers) -> None:
 def _add_llm_keyword_review_subparser(subparsers) -> None:
     p = subparsers.add_parser(
         "llm-keyword-review",
-        help="LLM review for connected document islands containing high-risk keywords",
+        help="LLM review for same-keyword section islands containing high-risk keywords",
     )
     _add_config_arg(p)
     p.add_argument(
@@ -842,7 +853,7 @@ def _add_llm_keyword_review_subparser(subparsers) -> None:
     )
     p.add_argument(
         "--backend",
-        choices=["openrouter", "sakura", "ollama", "mock"],
+        choices=["jev", "openrouter", "sakura", "ollama", "mock"],
         help="LLM backend override",
     )
     p.add_argument("--model", help="LLM model name override")
@@ -862,7 +873,7 @@ def _add_llm_judge_subparser(subparsers) -> None:
         "--max-documents",
         type=int,
         default=20,
-        help="Max tagged documents to audit in whole-document mode (default: 20, 0 for unlimited).",
+        help="Max tagged documents to audit in per-section mode (default: 20, 0 for unlimited).",
     )
     p.add_argument(
         "--max-subgraphs",
@@ -892,7 +903,7 @@ def _add_llm_judge_subparser(subparsers) -> None:
     )
     p.add_argument(
         "--backend",
-        choices=["openrouter", "sakura", "ollama", "mock"],
+        choices=["jev", "openrouter", "sakura", "ollama", "mock"],
         help="LLM backend override",
     )
     p.add_argument("--model", help="LLM model name override")

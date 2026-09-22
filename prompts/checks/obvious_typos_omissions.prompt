@@ -1,0 +1,5 @@
+Proofread the supplied text for unmistakable surface-level defects only.
+
+Flag an issue when the text itself clearly shows a misspelling, duplicated or dropped character/word, unfinished phrase, missing text, or accidental empty/unmatched punctuation that makes the intended sentence visibly malformed. Examples include an empty parenthetical in ordinary prose such as `処理（）を実行する`, a visibly cut-off sentence, or a required table value left blank.
+
+Do not guess the intended replacement. Do not flag acceptable spelling variants, domain terms, code/API identifiers, registered keywords, test IDs, deliberate fragments in headings/bullets/table cells, or valid syntax such as a function call `foo()`. Do not flag style, verbosity, or a sentence merely because it could be phrased better. A true finding requires a specific, unmistakable text fragment that is wrong or incomplete without relying on external documents or assumed intent. If reasonable interpretations remain, answer that no clear typo or omission is present.

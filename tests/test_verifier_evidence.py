@@ -78,7 +78,7 @@ See `reports/doc_report.md` for latest results.
 def test_verify_benchmark_tag_without_script_is_rejected(tmp_path):
     cfg, doc, docs_dir = _parse(
         tmp_path,
-        "components/tier3_jit/jit_compiler.md",
+        "components/tier3_executer/jit_compiler.md",
         """# JIT Compiler {VERIFY_BENCHMARK}
 ## Claim
 Compilation is fast enough that optimization is unnecessary.
@@ -92,13 +92,13 @@ Compilation is fast enough that optimization is unnecessary.
 def test_verify_benchmark_tag_with_script_is_accepted(tmp_path):
     cfg, doc, docs_dir = _parse(
         tmp_path,
-        "components/tier3_jit/jit_compiler.md",
+        "components/tier3_executer/jit_compiler.md",
         """# JIT Compiler {VERIFY_BENCHMARK}
 ## Claim
 Compilation is fast enough that optimization is unnecessary.
 """,
     )
-    bench_dir = docs_dir / "components" / "tier3_jit" / "benchmarks"
+    bench_dir = docs_dir / "components" / "tier3_executer" / "benchmarks"
     bench_dir.mkdir(parents=True)
     (bench_dir / "compile_cost_bench.py").write_text("# real benchmark\n", encoding="utf-8")
     issues = EvidenceVerifier(cfg).verify([doc], docs_dir)
@@ -108,7 +108,7 @@ Compilation is fast enough that optimization is unnecessary.
 def test_no_verify_benchmark_tag_is_not_checked(tmp_path):
     cfg, doc, docs_dir = _parse(
         tmp_path,
-        "components/tier3_jit/jit_compiler.md",
+        "components/tier3_executer/jit_compiler.md",
         """# JIT Compiler
 ## Claim
 Compilation is fast enough that optimization is unnecessary.

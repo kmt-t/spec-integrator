@@ -47,10 +47,10 @@ class FakePipeline:
 
 def _context(content: str) -> AntiSabotageContext:
     document = ParsedDocument(
-        file_path="components/tier2_runtime/runtime_interpreter.md",
-        full_path=Path("runtime_interpreter.md"),
+        file_path="components/tier3_executer/interpreter.md",
+        full_path=Path("interpreter.md"),
         tier=2,
-        component="runtime_interpreter",
+        component="interpreter",
         content=content,
         content_hash="test-hash",
     )

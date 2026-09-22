@@ -20,7 +20,7 @@ WIT specification file.
     # Valid WIT file
     wit_dir = comp_dir / "wit"
     wit_dir.mkdir()
-    (wit_dir / "fireball.wit").write_text(
+    (wit_dir / "fireball_hostcall_contract.wit").write_text(
         """package fireball:host@0.1.0;
 
 interface types {

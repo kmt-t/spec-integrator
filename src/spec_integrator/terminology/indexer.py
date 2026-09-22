@@ -3,7 +3,10 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-from spec_integrator.judge.llm_backend import call_sakura_embeddings
+from spec_integrator.judge.llm_backend import (
+    call_openrouter_embeddings,
+    call_sakura_embeddings,
+)
 
 if TYPE_CHECKING:
     from spec_integrator.config import Config
@@ -35,18 +38,26 @@ class TermIndexer:
     def index_embeddings(
         self, db: DocAuditDB, model: str | None = None, batch_size: int = 32
     ) -> int:
-        """Fetches embeddings from Sakura AI for unembedded terms and stores them."""
+        """Fetches embeddings from the configured provider and stores them."""
         selected_model = model or getattr(
             self.config.terminology, "embedding_model", "multilingual-e5-large"
         )
+        selected_backend = getattr(self.config.terminology, "embedding_backend", "sakura")
         unembedded = db.get_unembedded_terms(selected_model)
         if not unembedded:
             return 0
 
         try:
-            vectors = call_sakura_embeddings(
-                self.config, unembedded, model=selected_model, batch_size=batch_size
-            )
+            if selected_backend == "openrouter":
+                vectors = call_openrouter_embeddings(
+                    self.config, unembedded, model=selected_model, batch_size=batch_size
+                )
+            elif selected_backend == "sakura":
+                vectors = call_sakura_embeddings(
+                    self.config, unembedded, model=selected_model, batch_size=batch_size
+                )
+            else:
+                raise ValueError(f"Unsupported terminology embedding backend: '{selected_backend}'")
             records = [
                 (term, vec, selected_model) for term, vec in zip(unembedded, vectors, strict=False)
             ]
@@ -54,7 +65,7 @@ class TermIndexer:
             db.commit()
             return len(records)
         except Exception as e:
-            print(f"[Warning] Failed to generate term embeddings via Sakura AI: {e}")
+            print(f"[Warning] Failed to generate term embeddings via {selected_backend}: {e}")
             return 0
 
     def compute_and_save_similarities(

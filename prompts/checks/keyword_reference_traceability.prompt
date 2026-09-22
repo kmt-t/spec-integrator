@@ -1,0 +1,9 @@
+Review the supplied `REFERENCE SECTIONS` as references to the separately labelled `DEFINITION SECTIONS`.
+
+Check that:
+- Each reference section places the keyword in the section-level `<!-- traceability: {Keyword} -->` comment immediately associated with that section.
+- A keyword appearing only in ordinary prose, a table value, or an inline list is not treated as a valid reference link.
+- Reference sections use the definition rather than silently introducing a competing definition or contradicting it.
+- Do not require references that are not represented in the supplied island, and do not report style preferences.
+
+The project rule is defined in `docs/architecture/document_structure.md` section 4.4. Use the explicit `DEFINITION` and `REFERENCE` labels in the supplied context; do not infer a section's role from its wording alone.

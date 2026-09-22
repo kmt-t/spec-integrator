@@ -98,6 +98,64 @@ def call_sakura_embeddings(
     return all_embeddings
 
 
+def call_openrouter_embeddings(
+    config: Config,
+    texts: list[str],
+    model: str,
+    batch_size: int = 32,
+) -> list[list[float]]:
+    """Generates embedding vectors through OpenRouter's embeddings endpoint."""
+    if not texts:
+        return []
+    b_config = config.llm_judge.backends.get("jev") or config.llm_judge.backends.get(
+        "openrouter"
+    )
+    api_key_env = b_config.api_key_env if b_config else "OPENROUTER_API_KEY"
+    api_key = os.environ.get(api_key_env, "")
+    if not api_key:
+        raise ValueError(f"OpenRouter API key environment variable '{api_key_env}' is not set.")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    all_embeddings: list[list[float]] = []
+    for i in range(0, len(texts), batch_size):
+        payload = {"model": model, "input": texts[i : i + batch_size]}
+        last_err: Exception | None = None
+        batch: list[list[float]] | None = None
+        for attempt in range(RETRIES):
+            try:
+                resp = requests.post(
+                    "https://openrouter.ai/api/v1/embeddings",
+                    json=payload,
+                    headers=headers,
+                    timeout=60,
+                )
+                if resp.status_code != 200:
+                    raise RuntimeError(
+                        f"OpenRouter Embeddings API returned status {resp.status_code}: {resp.text}"
+                    )
+                data = resp.json()
+                items = data.get("data")
+                if not isinstance(items, list):
+                    raise ValueError("OpenRouter Embeddings API response has no 'data' list")
+                ordered_items = sorted(items, key=lambda item: item["index"])
+                batch = [item["embedding"] for item in ordered_items]
+                break
+            except Exception as e:
+                last_err = e
+                if attempt < RETRIES - 1:
+                    time.sleep(RETRY_SLEEP_SECONDS)
+        if batch is None:
+            raise RuntimeError(
+                f"Failed to fetch OpenRouter embeddings after {RETRIES} attempts: {last_err}"
+            )
+        all_embeddings.extend(batch)
+
+    return all_embeddings
+
+
 def call_openrouter(config: Config, prompt: str, model: str | None) -> str:
     b_config = config.llm_judge.backends.get("openrouter")
     api_key_env = b_config.api_key_env if b_config else "OPENROUTER_API_KEY"
@@ -121,6 +179,55 @@ def call_openrouter(config: Config, prompt: str, model: str | None) -> str:
     return _call_chat_completion(
         endpoint, headers, selected_model, prompt, timeout=90, backend_name="OpenRouter"
     )
+
+
+def call_openrouter_jev(
+    config: Config,
+    state: str | dict,
+    questions: dict[str, dict],
+    model: str | None = None,
+) -> dict:
+    """Sends typed decision questions to Jev through OpenRouter's Decisions API."""
+    b_config = config.llm_judge.backends.get("jev")
+    api_key_env = b_config.api_key_env if b_config else "OPENROUTER_API_KEY"
+    api_key = os.environ.get(api_key_env, "")
+    if not api_key:
+        raise ValueError(f"OpenRouter API key environment variable '{api_key_env}' is not set.")
+
+    selected_model = model or (
+        b_config.model if (b_config and b_config.model) else "typesafe/jev-1.13"
+    )
+    endpoint = (
+        b_config.endpoint
+        if (b_config and b_config.endpoint)
+        else "https://openrouter.ai/api/alpha/decisions"
+    )
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": getattr(config.project, "url", "https://github.com/spec-integrator"),
+        "X-OpenRouter-Title": f"{config.project.name} Spec Integrator",
+    }
+    payload = {"model": selected_model, "state": state, "questions": questions}
+
+    last_err: Exception | None = None
+    for attempt in range(RETRIES):
+        try:
+            resp = requests.post(endpoint, json=payload, headers=headers, timeout=90)
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"OpenRouter Jev API returned status {resp.status_code}: {resp.text}"
+                )
+            data = resp.json()
+            if not isinstance(data, dict) or not isinstance(data.get("answers"), dict):
+                raise ValueError("OpenRouter Jev API response has no 'answers' object")
+            return data
+        except Exception as e:
+            last_err = e
+            if attempt < RETRIES - 1:
+                time.sleep(RETRY_SLEEP_SECONDS)
+
+    raise RuntimeError(f"Failed to call OpenRouter Jev API after {RETRIES} attempts: {last_err}")
 
 
 def call_ollama(config: Config, prompt: str, model: str | None) -> str:

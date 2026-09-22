@@ -1,3 +1,5 @@
-Verify compliance with specification documentation standards (.agents/rules/documentation-standards.md):
-- Prose, section headings, and table column names must be written in clean Japanese natural language.
-- Flag any leakage of low-level C++ or Python internal implementation class names, types (e.g. `bytearray`, raw struct pointers), or temporary internal terms (e.g. `(AoS)`) appearing where conceptual specification terms belong.
+Check the supplied text against `.agents/rules/documentation-standards.md` for clear language-standard violations only.
+
+Flag only clearly non-Japanese prose in a place that requires Japanese, or low-level C++/Python implementation details used as the conceptual specification itself (for example, exposing `bytearray` or raw struct pointers as the design concept).
+
+Do not flag English code/API identifiers, registered metadata keywords, test IDs, Mermaid tokens, or terms whose English spelling is required by an external standard. Do not judge stylistic preference, sentence length, or a phrase as defective merely because it could be rewritten more elegantly. Obvious typos and missing text are handled by the dedicated typo/omission check. If the language is understandable and the English text is an allowed identifier or formal term, answer that no violation is present.
