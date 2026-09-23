@@ -1,2 +1,2 @@
-Cross-compare all referencing design sections against each other pairwise within the island.
+Compare only the supplied definition section with its paired reference section. Do not infer cross-reference mismatches involving sections omitted from this link pair.
 - Detect cross-document drift: mismatched register assignments, differing buffer/bank counts, conflicting state names, incompatible call signatures, contradictory ordering guarantees, or conflicting protocol handshakes.

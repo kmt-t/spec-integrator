@@ -1,9 +1,9 @@
-Review only the supplied `DEFINITION SECTIONS` and the corresponding `KEYWORD REGISTRY ENTRY`.
+Review only the supplied `DEFINITION SECTION`, its paired `REFERENCE SECTION`, and the corresponding `KEYWORD REGISTRY ENTRY`.
 
 Check that:
 - The declared definition source is an appropriate source of truth for this keyword's role and document tier.
 - The supplied definition section actually defines the keyword and agrees with the registry summary.
-- There is one clear authoritative definition; a reference section must not introduce a competing definition.
-- The definition does not claim a property that the supplied reference sections or explicitly open status contradict.
+- The paired reference section uses the definition and does not introduce a competing definition.
+- The definition does not claim a property that the paired reference section or explicitly open status contradicts.
 
-The registry row records the intended source and summary; it is not itself the keyword definition. Do not treat an explicitly unresolved or out-of-scope topic as a defect unless another supplied section presents it as settled or contradicts it. Do not infer domain facts that are absent from the supplied sections. If the definition's technical accuracy cannot be assessed from this island, classify it as `insufficient_context`, not as a confirmed violation.
+The registry row records the intended source and summary; it is not itself the keyword definition. Do not treat an explicitly unresolved or out-of-scope topic as a defect unless the paired reference presents it as settled or contradicts it. Do not infer domain facts that are absent from the supplied pair. If the definition's technical accuracy cannot be assessed from these sections, classify it as `insufficient_context`, not as a confirmed violation.

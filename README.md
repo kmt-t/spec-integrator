@@ -181,7 +181,7 @@ spec-integrator llm-word
 # 単一ドキュメント／セクション監査
 spec-integrator llm-single-review --file docs/components/tier1_core/os_scheduler.md
 
-# 高リスクキーワード連結島監査
+# 高リスクキーワードの定義・参照ペア監査
 spec-integrator llm-keyword-review --keyword SCHED_DISPATCH_TIMEOUT
 
 # 確信度70%以上の違反候補をDBから検索（API呼び出しなし）
@@ -189,7 +189,7 @@ spec-integrator llm-findings --min-confidence 0.70
 ```
 Jev は各レビュー基準を個別に分類し、選択肢ごとの確信度を返す。結果は「明確な違反」「違反の可能性」「既知の未解決事項」「文脈不足」「改善提案」「問題なし」に分かれ、明確な違反だけを設定済み重大度で FAIL/WARN にし、可能性や文脈不足は WARN、未解決事項と改善提案は INFO として残す。
 
-キーワード島では、キーワード台帳が指定する定義元セクションを `DEFINITION`、島に含まれる参照セクションを `REFERENCE` と明示して Jev に渡す。定義の置き場所・内容と、参照側のセクション単位 `traceability` リンクを別々の基準で確認する。Jev は説明文や文書内の引用箇所を生成しないため、WARN/INFO の確認には対象島のセクションを読み直す。説明や引用が必要な場合は `--backend openrouter` などチャット型バックエンドを指定する。
+キーワード監査では、キーワード台帳が指定する定義元セクションと参照セクションを1組ずつ `DEFINITION` / `REFERENCE` と明示して Jev に渡す。定義の置き場所・内容と、対応する参照のセクション単位 `traceability` リンクを各ペアで確認する。Jev は説明文や文書内の引用箇所を生成しないため、WARN/INFO の確認には結果に記録された定義・参照セクションを読み直す。説明や引用が必要な場合は `--backend openrouter` などチャット型バックエンドを指定する。
 
 判定単位の分類と確信度は SQLite の `judge_evaluations` テーブルへ保存する。`llm-findings --min-confidence 0.70` は既定で `confirmed_violation` と `possible_violation` を検索する。`--all-outcomes` を付けると文脈不足・既知の未解決事項・問題なしも含められ、`--run-type` で監査コマンドを絞り込める。
 

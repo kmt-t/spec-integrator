@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from spec_integrator.config import Config
-from spec_integrator.graph import DocumentIsland, Edge, Graph, Node
+from spec_integrator.graph import Edge, Graph, KeywordGroup, Node
 from spec_integrator.judge.unified_reviewer import UnifiedReviewEngine
 from spec_integrator.models import ParsedDocument, ParsedSection
 
@@ -45,12 +45,12 @@ llm_judge:
       prompt: "Check 1 prompt"
     - id: "rule2"
       name: "Rule 2"
-      mode: ["cluster"]
+      mode: ["link_pair"]
       enabled: true
       prompt: "Check 2 prompt"
     - id: "rule3"
       name: "Rule 3"
-      mode: ["single", "cluster"]
+      mode: ["single", "link_pair"]
       enabled: false
       prompt: "Check 3 prompt"
 """,
@@ -63,9 +63,9 @@ llm_judge:
     assert len(single_checks) == 1
     assert single_checks[0].id == "rule1"
 
-    cluster_checks = reviewer.get_effective_checks("cluster")
-    assert len(cluster_checks) == 1
-    assert cluster_checks[0].id == "rule2"
+    link_pair_checks = reviewer.get_effective_checks("link_pair")
+    assert len(link_pair_checks) == 1
+    assert link_pair_checks[0].id == "rule2"
 
     specific_checks = reviewer.get_effective_checks("single", check_ids=["rule1"])
     assert len(specific_checks) == 1
@@ -74,7 +74,7 @@ llm_judge:
     assert len(empty_checks) == 0
 
 
-def test_graph_extract_document_islands():
+def test_graph_extract_keyword_groups():
     graph = Graph()
     graph.add_node(Node(id="file:doc_a.md", label="doc_a.md", type="file", file_path="doc_a.md"))
     graph.add_node(Node(id="file:doc_b.md", label="doc_b.md", type="file", file_path="doc_b.md"))
@@ -87,15 +87,14 @@ def test_graph_extract_document_islands():
         Node(id="sec:doc_b.md#design", label="Design", type="section", file_path="doc_b.md")
     )
 
-    # doc_a links to doc_b
-    graph.add_edge(Edge(source="sec:doc_a.md#intro", target="file:doc_b.md", relation="links_to"))
+    graph.add_node(Node(id="item:Shared", label="Shared", type="item", file_path=""))
+    graph.add_edge(Edge(source="sec:doc_a.md#intro", target="item:Shared", relation="defines"))
+    graph.add_edge(Edge(source="sec:doc_b.md#design", target="item:Shared", relation="refers_to"))
 
-    islands = graph.extract_document_islands(min_size=1)
-    # doc_a and doc_b should be in one island of size 2, doc_c in an island of size 1
-    assert len(islands) == 2
-    island_files = [set(isl.file_paths) for isl in islands]
-    assert {"doc_a.md", "doc_b.md"} in island_files
-    assert {"doc_c.md"} in island_files
+    groups = graph.extract_keyword_groups(min_size=1)
+    assert len(groups) == 1
+    assert groups[0].keyword == "Shared"
+    assert set(groups[0].file_paths) == {"doc_a.md", "doc_b.md"}
 
 
 def test_review_single_document_dry_run(tmp_path: Path):
@@ -142,7 +141,7 @@ llm_judge:
     assert "Dry Run" in res.summary
 
 
-def test_review_document_island_dry_run(tmp_path: Path):
+def test_review_keyword_link_pairs_dry_run(tmp_path: Path):
     cfg_file = tmp_path / "spec-integrator.yaml"
     cfg_file.write_text(
         """version: "1.0"
@@ -150,9 +149,9 @@ llm_judge:
   checks:
     - id: "test_cluster_rule"
       name: "Test Cluster Rule"
-      mode: ["cluster"]
+      mode: ["link_pair"]
       enabled: true
-      prompt: "Test cluster prompt"
+      prompt: "Test link-pair prompt"
 """,
         encoding="utf-8",
     )
@@ -202,22 +201,22 @@ llm_judge:
         ],
     )
 
-    island = DocumentIsland(
-        island_id="island_01",
-        name="Test Island",
+    group = KeywordGroup(
+        group_id="keyword_group_TestKW",
+        keyword="TestKW",
         file_paths=["components/tier1_core/doc_a.md", "components/tier1_core/doc_b.md"],
         section_ids=[
             "sec:components/tier1_core/doc_a.md#Sec A",
             "sec:components/tier1_core/doc_b.md#Sec B",
         ],
-        keywords=["TestKW"],
         total_sections=2,
         total_docs=2,
     )
 
-    res = reviewer.review_document_island(island, [doc_a, doc_b], dry_run=True)
-    assert res.status == "PASS"
-    assert "Dry Run" in res.summary
+    results = reviewer.review_keyword_link_pairs(group, [doc_a, doc_b], dry_run=True)
+    assert len(results) == 2
+    assert all(result.status == "PASS" for result in results)
+    assert all("Dry Run" in result.summary for result in results)
 
 
 def test_review_mock_backend(tmp_path: Path):

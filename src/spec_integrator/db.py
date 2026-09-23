@@ -748,6 +748,7 @@ class DocAuditDB:
         rows: list[JudgeResult],
         backend: str,
         replace_all: bool = False,
+        replace_keywords: list[str] | None = None,
     ) -> None:
         """Stores each typed criterion decision for confidence-based screening."""
         now = self._now()
@@ -757,6 +758,15 @@ class DocAuditDB:
                     "DELETE FROM judge_evaluations WHERE run_type = ? AND backend = ?",
                     (run_type, backend),
                 )
+            elif replace_keywords:
+                for keyword in replace_keywords:
+                    pair_label_prefix = f"{{{keyword}}} | "
+                    self.conn.execute(
+                        "DELETE FROM judge_evaluations "
+                        "WHERE run_type = ? AND backend = ? "
+                        "AND substr(item_label, 1, length(?)) = ?",
+                        (run_type, backend, pair_label_prefix, pair_label_prefix),
+                    )
             for result in rows:
                 if not result.evaluations:
                     continue

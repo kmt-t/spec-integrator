@@ -217,7 +217,7 @@ def cmd_risk(args):
 
 
 def cmd_llm_single_review(args):
-    """Reviews documents section-by-section and their high-risk keyword islands."""
+    """Reviews documents section-by-section and their high-risk keyword link pairs."""
     config = Config.load(args.config)
     reviewer = UnifiedReviewEngine(config)
 
@@ -262,11 +262,13 @@ def cmd_llm_single_review(args):
         sys.exit(1)
 
     risk_records = {r["keyword"]: r.get("risk_score", 0) for r in db.get_risk_assessments()}
-    islands = graph.extract_document_islands(min_size=1)
+    keyword_groups = graph.extract_keyword_groups(min_size=1)
 
     has_failures = False
     document_results: list[JudgeResult] = []
-    island_results: dict[str, JudgeResult] = {}
+    link_pair_results: dict[str, JudgeResult] = {}
+    reviewed_keyword_group_ids: set[str] = set()
+    reviewed_keyword_names: set[str] = set()
     for doc in target_docs:
         print("\n" + "=" * 80)
         print(f" Auditing Document: '{doc.file_path}' (backend: {backend})")
@@ -288,50 +290,57 @@ def cmd_llm_single_review(args):
         if res_single.status == "FAIL":
             has_failures = True
 
-        # 2. Island review for related high-risk keywords
+        # 2. Definition/reference pair review for related high-risk keywords
         doc_kws = set(doc.all_keywords)
         high_risk_kws = [kw for kw in doc_kws if risk_records.get(kw, 0) >= high_risk_threshold]
 
-        related_islands = []
-        for isl in islands:
+        related_groups = []
+        for group in keyword_groups:
             if (
-                doc.file_path in isl.file_paths
-                and isl.total_docs >= 2
-                and set(isl.keywords).intersection(high_risk_kws)
+                doc.file_path in group.file_paths
+                and group.total_docs >= 2
+                and group.keyword in high_risk_kws
             ):
-                if isl not in related_islands:
-                    related_islands.append(isl)
+                if group.group_id not in reviewed_keyword_group_ids:
+                    related_groups.append(group)
+                    reviewed_keyword_group_ids.add(group.group_id)
+                    reviewed_keyword_names.add(group.keyword)
 
-        if related_islands:
+        if related_groups:
             print(
-                f"\n>>> [2/2] Reviewing {len(related_islands)} high-risk keyword island(s) related to '{doc.file_path}'...",
+                f"\n>>> [2/2] Reviewing {len(related_groups)} high-risk keyword group(s) related to '{doc.file_path}'...",
                 flush=True,
             )
-            for idx, isl in enumerate(related_islands, start=1):
+            for idx, group in enumerate(related_groups, start=1):
                 print(
-                    f"  [{idx}/{len(related_islands)}] Auditing keyword island '{isl.name}' ({isl.total_docs} docs, {isl.total_sections} linked sections)...",
+                    f"  [{idx}/{len(related_groups)}] Building definition/reference link pairs for '{{{group.keyword}}}'...",
                     flush=True,
                 )
-                res_isl = reviewer.review_document_island(
-                    isl,
+                pair_results = reviewer.review_keyword_link_pairs(
+                    group,
                     documents,
                     backend=backend,
                     model=model,
                     check_ids=selected_checks,
                     dry_run=args.dry_run,
                 )
-                island_results[isl.island_id] = res_isl
-                print(f"       -> Status: {res_isl.status} ({res_isl.summary[:70]})")
-                if res_isl.issues:
-                    for iss in res_isl.issues:
-                        cid = iss.get("check_id", "CHECK")
-                        print(
-                            f"          [{iss.get('severity', 'WARNING')}] [{cid}] {iss.get('location', '')}: {iss.get('description', '')}"
-                        )
-                if res_isl.status == "FAIL":
-                    has_failures = True
+                for pair_result in pair_results:
+                    link_pair_results[pair_result.item_id] = pair_result
+                    print(
+                        f"       -> {pair_result.item_label}: {pair_result.status} "
+                        f"({pair_result.summary[:70]})"
+                    )
+                    if pair_result.issues:
+                        for iss in pair_result.issues:
+                            cid = iss.get("check_id", "CHECK")
+                            print(
+                                f"          [{iss.get('severity', 'WARNING')}] [{cid}] "
+                                f"{iss.get('location', '')}: {iss.get('description', '')}"
+                            )
+                    if pair_result.status == "FAIL":
+                        has_failures = True
         else:
-            print("\n>>> [2/2] No connected multi-document islands found for this document.")
+            print("\n>>> [2/2] No connected high-risk keyword groups found for this document.")
 
     if not args.dry_run:
         db.save_judge_evaluations(
@@ -339,10 +348,11 @@ def cmd_llm_single_review(args):
             document_results,
             backend,
             replace_all=bool(args.all),
+            replace_keywords=None if args.all else sorted(reviewed_keyword_names),
         )
         db.save_judge_evaluations(
-            "llm-single-review-island",
-            list(island_results.values()),
+            "llm-single-review-link-pair",
+            list(link_pair_results.values()),
             backend,
             replace_all=bool(args.all),
         )
@@ -352,14 +362,14 @@ def cmd_llm_single_review(args):
 
 
 def cmd_llm_keyword_review(args):
-    """Reviews per-keyword islands containing high-risk keywords."""
+    """Reviews high-risk keyword definition/reference section pairs."""
     config = Config.load(args.config)
     reviewer = UnifiedReviewEngine(config)
 
     if args.list_checks:
-        all_checks = reviewer.get_effective_checks("cluster", include_disabled=True)
+        all_checks = reviewer.get_effective_checks("link_pair", include_disabled=True)
         print("=" * 80)
-        print(" Available LLM Keyword Island Review Checks")
+        print(" Available LLM Keyword Link-Pair Review Checks")
         print("=" * 80)
         for c in all_checks:
             status = "ENABLED " if c.enabled else "DISABLED"
@@ -389,36 +399,42 @@ def cmd_llm_keyword_review(args):
         db.close()
         sys.exit(0)
 
-    islands = graph.extract_document_islands(min_size=2)
+    keyword_groups = graph.extract_keyword_groups(min_size=2)
     target_keyword_set = set(target_keywords)
-    target_islands = [isl for isl in islands if target_keyword_set.intersection(isl.keywords)]
-    print(f"Found {len(target_islands)} keyword island(s) for the target keywords.")
+    target_groups = [group for group in keyword_groups if group.keyword in target_keyword_set]
+    print(f"Found {len(target_groups)} keyword group(s) for the target keywords.")
 
     has_failures = False
     review_results: list[JudgeResult] = []
-    for idx, isl in enumerate(target_islands, start=1):
+    for idx, group in enumerate(target_groups, start=1):
         print(
-            f"\n[{idx}/{len(target_islands)}] Auditing keyword island '{isl.name}' ({isl.total_docs} docs, {isl.total_sections} linked sections)...",
+            f"\n[{idx}/{len(target_groups)}] Building definition/reference pairs for '{{{group.keyword}}}'...",
             flush=True,
         )
-        res = reviewer.review_document_island(
-            isl,
+        pair_results = reviewer.review_keyword_link_pairs(
+            group,
             documents,
             backend=backend,
             model=model,
             check_ids=selected_checks,
             dry_run=args.dry_run,
         )
-        review_results.append(res)
-        print(f"       -> Status: {res.status} ({res.summary[:70]})")
-        if res.issues:
-            for iss in res.issues:
-                cid = iss.get("check_id", "CHECK")
-                print(
-                    f"          [{iss.get('severity', 'WARNING')}] [{cid}] {iss.get('location', '')}: {iss.get('description', '')}"
-                )
-        if res.status == "FAIL":
-            has_failures = True
+        print(f"       -> Completed {len(pair_results)} link-pair review(s).")
+        for pair_result in pair_results:
+            review_results.append(pair_result)
+            print(
+                f"          {pair_result.item_label}: {pair_result.status} "
+                f"({pair_result.summary[:70]})"
+            )
+            if pair_result.issues:
+                for iss in pair_result.issues:
+                    cid = iss.get("check_id", "CHECK")
+                    print(
+                        f"             [{iss.get('severity', 'WARNING')}] [{cid}] "
+                        f"{iss.get('location', '')}: {iss.get('description', '')}"
+                    )
+            if pair_result.status == "FAIL":
+                has_failures = True
 
     if not args.dry_run:
         db.save_judge_evaluations(
@@ -426,6 +442,9 @@ def cmd_llm_keyword_review(args):
             review_results,
             backend,
             replace_all=bool(args.keyword is None and args.min_risk is None),
+            replace_keywords=(
+                None if args.keyword is None and args.min_risk is None else target_keywords
+            ),
         )
         db.commit()
     db.close()
@@ -436,8 +455,8 @@ def cmd_llm_judge(args):
     """Runs the anchored LLM semantic judge across all {VERIFY_LLM}-tagged documents.
 
     Persists results into `document_judge_results` (per-section self-consistency,
-    checked by DocumentJudgeCoverageCheck) and `judge_results` (cross-document island
-    review, checked by JudgeCoverageCheck), anchored to the current document hashes so
+    checked by DocumentJudgeCoverageCheck) and `judge_results` (cross-document keyword
+    link-pair review, checked by JudgeCoverageCheck), anchored to the current document hashes so
     the Obligation Verifier can detect staleness. This is the command that discharges
     the OBLIG-JUDGE-* / OBLIG-DOC-JUDGE-* obligations.
     """
@@ -452,8 +471,8 @@ def cmd_llm_judge(args):
         for c in reviewer.get_effective_checks("single", include_disabled=True):
             status = "ENABLED " if c.enabled else "DISABLED"
             print(f"  [{status}] {c.id:<26} ({c.severity:<7}) - {c.name}")
-        print("-- Cluster Island Mode (-> judge_results) --")
-        for c in reviewer.get_effective_checks("cluster", include_disabled=True):
+        print("-- Keyword Link-Pair Mode (-> judge_results) --")
+        for c in reviewer.get_effective_checks("link_pair", include_disabled=True):
             status = "ENABLED " if c.enabled else "DISABLED"
             print(f"  [{status}] {c.id:<26} ({c.severity:<7}) - {c.name}")
         sys.exit(0)
@@ -512,59 +531,66 @@ def cmd_llm_judge(args):
             "document_judge", {d.file_path: d.content_hash for d in doc_targets}
         )
 
-    # Phase 2: cross-document island review -> judge_results
-    islands = graph.extract_document_islands(min_size=1)
-    related_islands = [isl for isl in islands if tagged_paths & set(isl.file_paths)]
-    island_targets = (
-        related_islands
-        if (args.exhaustive or args.max_subgraphs <= 0)
-        else related_islands[: args.max_subgraphs]
+    # Phase 2: cross-document definition/reference link-pair review -> judge_results
+    keyword_groups = graph.extract_keyword_groups(min_size=1)
+    related_groups = [group for group in keyword_groups if tagged_paths & set(group.file_paths)]
+    group_targets = (
+        related_groups
+        if (args.exhaustive or args.max_keyword_groups <= 0)
+        else related_groups[: args.max_keyword_groups]
     )
-    if len(island_targets) < len(related_islands):
+    if len(group_targets) < len(related_groups):
         print(
-            f"[Warning] {len(related_islands)} island(s) touch tagged documents but "
-            f"--max-subgraphs={args.max_subgraphs}; only auditing {len(island_targets)}. "
-            "Raise --max-subgraphs or pass -a/--exhaustive for full coverage."
+            f"[Warning] {len(related_groups)} keyword group(s) touch tagged documents but "
+            f"--max-keyword-groups={args.max_keyword_groups}; only auditing {len(group_targets)}. "
+            "Raise --max-keyword-groups or pass -a/--exhaustive for full coverage."
         )
     print(
-        f"\n>>> [2/2] Cross-document island review "
-        f"({len(island_targets)} island(s), backend: {backend})..."
+        f"\n>>> [2/2] Cross-document keyword link-pair review "
+        f"({len(group_targets)} keyword group(s), backend: {backend})..."
     )
-    island_results = []
+    link_pair_results = []
     covered_hashes: dict[str, str] = {}
     doc_by_path = {d.file_path: d for d in documents}
-    for idx, isl in enumerate(island_targets, start=1):
+    for idx, group in enumerate(group_targets, start=1):
         print(
-            f"  [{idx}/{len(island_targets)}] Auditing island '{isl.name}' "
-            f"({isl.total_docs} doc(s))...",
+            f"  [{idx}/{len(group_targets)}] Building link pairs for '{{{group.keyword}}}' "
+            f"({group.total_docs} doc(s), {group.total_sections} linked section(s))...",
             flush=True,
         )
-        res = reviewer.review_document_island(
-            isl,
+        pair_results = reviewer.review_keyword_link_pairs(
+            group,
             documents,
             backend=backend,
             model=model,
             check_ids=selected_checks,
             dry_run=args.dry_run,
         )
-        print(f"       -> Status: {res.status} ({res.summary[:70]})")
-        for iss in res.issues:
-            cid = iss.get("check_id", "CHECK")
+        print(f"       -> Completed {len(pair_results)} definition/reference link-pair review(s).")
+        for pair_result in pair_results:
             print(
-                f"          [{iss.get('severity', 'WARNING')}] [{cid}] "
-                f"{iss.get('location', '')}: {iss.get('description', '')}"
+                f"          {pair_result.item_label}: {pair_result.status} "
+                f"({pair_result.summary[:70]})"
             )
-        if res.status == "FAIL":
-            has_failures = True
-        island_results.append(res)
-        for fp in isl.file_paths:
+            for iss in pair_result.issues:
+                cid = iss.get("check_id", "CHECK")
+                print(
+                    f"             [{iss.get('severity', 'WARNING')}] [{cid}] "
+                    f"{iss.get('location', '')}: {iss.get('description', '')}"
+                )
+            if pair_result.status == "FAIL":
+                has_failures = True
+            link_pair_results.append(pair_result)
+        for fp in group.file_paths:
             d = doc_by_path.get(fp)
             if d:
                 covered_hashes[fp] = d.content_hash
 
     if not args.dry_run:
-        db.replace_judge_results(island_results, backend)
-        db.save_judge_evaluations("llm-judge-island", island_results, backend, replace_all=True)
+        db.replace_judge_results(link_pair_results, backend)
+        db.save_judge_evaluations(
+            "llm-judge-link-pair", link_pair_results, backend, replace_all=True
+        )
         db.set_assessed_doc_hashes("judge", covered_hashes)
         db.commit()
 
@@ -863,7 +889,7 @@ def _add_llm_word_subparser(subparsers) -> None:
 def _add_llm_single_review_subparser(subparsers) -> None:
     p = subparsers.add_parser(
         "llm-single-review",
-        help="LLM review for single documents (section-by-section) and related high-risk keyword islands",
+        help="LLM review for single documents (section-by-section) and related high-risk keyword link pairs",
     )
     _add_config_arg(p)
     p.add_argument(
@@ -885,7 +911,7 @@ def _add_llm_single_review_subparser(subparsers) -> None:
     p.add_argument(
         "--risk-threshold",
         type=int,
-        help="Override high risk threshold for keyword islands",
+        help="Override high risk threshold for keyword link pairs",
     )
     p.add_argument(
         "--check",
@@ -913,7 +939,7 @@ def _add_llm_single_review_subparser(subparsers) -> None:
 def _add_llm_keyword_review_subparser(subparsers) -> None:
     p = subparsers.add_parser(
         "llm-keyword-review",
-        help="LLM review for same-keyword section islands containing high-risk keywords",
+        help="LLM review for high-risk keyword definition/reference section pairs",
     )
     _add_config_arg(p)
     p.add_argument(
@@ -964,16 +990,16 @@ def _add_llm_judge_subparser(subparsers) -> None:
         help="Max tagged documents to audit in per-section mode (default: 20, 0 for unlimited).",
     )
     p.add_argument(
-        "--max-subgraphs",
+        "--max-keyword-groups",
         type=int,
         default=20,
-        help="Max document islands to audit in cluster mode (default: 20, 0 for unlimited).",
+        help="Max keyword groups to audit in link-pair mode (default: 20, 0 for unlimited).",
     )
     p.add_argument(
         "-a",
         "--exhaustive",
         action="store_true",
-        help="Ignore --max-documents/--max-subgraphs and audit full coverage.",
+        help="Ignore --max-documents/--max-keyword-groups and audit full coverage.",
     )
     p.add_argument(
         "--check",
@@ -982,7 +1008,7 @@ def _add_llm_judge_subparser(subparsers) -> None:
     p.add_argument(
         "--list-checks",
         action="store_true",
-        help="List all configured single/cluster review checks and exit",
+        help="List all configured single-section/link-pair review checks and exit",
     )
     p.add_argument(
         "--dry-run",
@@ -1032,10 +1058,10 @@ def _add_llm_findings_subparser(subparsers) -> None:
         "--run-type",
         choices=[
             "llm-single-review",
-            "llm-single-review-island",
+            "llm-single-review-link-pair",
             "llm-keyword-review",
             "llm-judge-document",
-            "llm-judge-island",
+            "llm-judge-link-pair",
             "imported-level2-audit-log",
         ],
         help="Filter to one review command or mode",

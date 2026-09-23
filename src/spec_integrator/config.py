@@ -162,11 +162,11 @@ class LLMBackendConfig:
 
 @dataclass
 class LLMCheckRule:
-    """A modular evaluation check rule for LLM document / island review."""
+    """A modular evaluation check rule for LLM document or link-pair review."""
 
     id: str
     name: str = ""
-    mode: list[str] = field(default_factory=lambda: ["single", "cluster"])  # "single", "cluster"
+    mode: list[str] = field(default_factory=lambda: ["single", "link_pair"])
     enabled: bool = True
     severity: str = "ERROR"  # "ERROR" | "WARNING"
     prompt: str = ""

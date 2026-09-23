@@ -103,14 +103,18 @@ class JudgeCoverageCheck(AntiSabotageCheck):
                         rule_code="OBLIG-JUDGE-SKIPPED",
                         message=(
                             f"Document declares '{llm_tag}' but does not appear in the LLM judge verdict. "
-                            "Raise --max-subgraphs so the audit actually covers it."
+                            "Raise --max-keyword-groups so the audit actually covers it."
                         ),
                     )
                 )
 
-        failed_keywords = {
-            e.get("item_label", "").strip("{}") for e in entries if e.get("status") == "FAIL"
-        }
+        failed_keywords: set[str] = set()
+        for entry in entries:
+            if entry.get("status") != "FAIL":
+                continue
+            label = str(entry.get("item_label", ""))
+            if label.startswith("{") and "}" in label:
+                failed_keywords.add(label[1 : label.index("}")])
         for doc in tagged:
             if doc.file_path not in covered:
                 continue

@@ -1,18 +1,30 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 
 from spec_integrator.config import Config, LLMCheckRule
-from spec_integrator.graph import DocumentIsland
+from spec_integrator.graph import KeywordGroup
 from spec_integrator.judge.base import BaseJudge
 from spec_integrator.models import JudgeEvaluation, JudgeResult, ParsedDocument, ParsedSection
+
+
+@dataclass(frozen=True)
+class _KeywordLinkPair:
+    keyword: str
+    item_id: str
+    item_label: str
+    definition: tuple[ParsedDocument, ParsedSection] | None
+    reference: tuple[ParsedDocument, ParsedSection]
+    registry_entry: dict[str, str] | None
+    declared_source: str
 
 
 class UnifiedReviewEngine(BaseJudge):
     """Unified engine for all LLM document audits:
 
     - Single document internal review
-    - Multi-document connected island review
+    - Definition/reference keyword link-pair review
     - Modular, configurable check rules defined strictly in configuration
     """
 
@@ -47,11 +59,11 @@ class UnifiedReviewEngine(BaseJudge):
         checks: list[LLMCheckRule],
         extra_instructions: str = "",
     ) -> str:
-        """Dynamically assembles the review prompt for single-doc or island mode."""
+        """Dynamically assembles the review prompt for single-section or link-pair mode."""
         lines: list[str] = [
             "You are a strict, formal System Specification Verification Judge and Auditor.",
             f"Your mission is to perform an exhaustive, evidence-based audit for: {target_name}",
-            f"Audit Mode: {'[SINGLE SECTION REVIEW]' if mode == 'single' else '[KEYWORD ISLAND REVIEW]'}",
+            f"Audit Mode: {'[SINGLE SECTION REVIEW]' if mode == 'single' else '[KEYWORD LINK-PAIR REVIEW]'}",
             "",
             "=== SPECIFICATION CONTENT TO AUDIT ===",
             sections_context,
@@ -209,157 +221,228 @@ class UnifiedReviewEngine(BaseJudge):
             covered_files=[doc.file_path],
         )
 
-    def review_document_island(
+    def review_keyword_link_pairs(
         self,
-        island: DocumentIsland,
+        group: KeywordGroup,
         documents: list[ParsedDocument],
         backend: str | None = None,
         model: str | None = None,
         check_ids: list[str] | None = None,
         dry_run: bool = False,
-    ) -> JudgeResult:
-        """Reviews the declared definition and linked reference sections of a keyword island."""
-        checks = self.get_effective_checks("cluster", check_ids=check_ids)
+    ) -> list[JudgeResult]:
+        """Reviews each canonical-definition/reference section pair separately."""
+        checks = self.get_effective_checks("link_pair", check_ids=check_ids)
+        pairs = self._collect_keyword_link_pairs(group, documents)
+        if not pairs:
+            return [
+                JudgeResult(
+                    item_id=group.group_id,
+                    item_label=group.keyword,
+                    status="SKIPPED",
+                    summary="No definition/reference link pairs were available for review.",
+                    covered_files=[],
+                )
+            ]
         if not checks:
-            return JudgeResult(
-                item_id=island.island_id,
-                item_label=island.name,
-                status="SKIPPED",
-                summary="No active checks configured for cluster island review.",
-                covered_files=island.file_paths,
-            )
+            return [
+                JudgeResult(
+                    item_id=pair.item_id,
+                    item_label=pair.item_label,
+                    status="SKIPPED",
+                    summary="No active checks configured for keyword link-pair review.",
+                    covered_files=self._pair_covered_files(pair),
+                )
+                for pair in pairs
+            ]
 
-        # Keep the shared-keyword definition and reference sections separate.
-        linked_section_ids = set(island.section_ids)
-        doc_map = {d.file_path: d for d in documents}
-        linked_docs = []
-        for file_path in island.file_paths:
-            doc = doc_map.get(file_path)
-            if doc and any(sec.section_id in linked_section_ids for sec in doc.sections):
-                linked_docs.append(doc)
+        selected_backend = backend or self.config.llm_judge.default_backend
+        results: list[JudgeResult] = []
+        print(f"Reviewing {len(pairs)} definition/reference link pair(s)...", flush=True)
+        for index, pair in enumerate(pairs, start=1):
+            print(f"  [{index}/{len(pairs)}] {pair.item_label}", flush=True)
+            context_text = self._keyword_link_pair_context(pair)
+            prompt = self.assemble_prompt(
+                "link_pair",
+                pair.item_label,
+                context_text,
+                checks,
+                extra_instructions=(
+                    "Evaluate only this one definition/reference link pair. Do not infer or report "
+                    "relationships with other sections in the keyword group. Keep every finding at "
+                    "the section level; do not report sentence-level locations. Cite the implicated "
+                    "definition or reference section by file and heading."
+                ),
+            )
+            if dry_run:
+                print(
+                    f"=== DRY-RUN LINK-PAIR PROMPT [{index}/{len(pairs)}]: "
+                    f"{pair.item_label} ({pair.item_id}) ==="
+                )
+                print(prompt)
+                print("=" * 80)
+                result = JudgeResult(
+                    item_id=pair.item_id,
+                    item_label=pair.item_label,
+                    status="PASS",
+                    summary="[Dry Run] Definition/reference link-pair prompt generated.",
+                    covered_files=self._pair_covered_files(pair),
+                )
+            else:
+                result = self._run_judge_llm(
+                    prompt,
+                    pair.item_id,
+                    pair.item_label,
+                    self._pair_covered_files(pair),
+                    selected_backend,
+                    model,
+                    checks=checks,
+                    context_text=context_text,
+                    mode="link_pair",
+                )
+                reference_doc, reference_section = pair.reference
+                default_location = f"{reference_doc.file_path} :: {reference_section.heading}"
+                for issue in result.issues:
+                    if not issue.get("location"):
+                        issue["location"] = default_location
+            results.append(result)
+        return results
+
+    def _collect_keyword_link_pairs(
+        self, group: KeywordGroup, documents: list[ParsedDocument]
+    ) -> list[_KeywordLinkPair]:
+        linked_section_ids = set(group.section_ids)
+        doc_map = {document.file_path: document for document in documents}
         linked_sections = [
-            (doc, sec)
-            for doc in linked_docs
-            for sec in doc.sections
-            if sec.section_id in linked_section_ids
+            (document, section)
+            for file_path in group.file_paths
+            if (document := doc_map.get(file_path)) is not None
+            for section in document.sections
+            if section.section_id in linked_section_ids
         ]
-        if not linked_sections:
-            return JudgeResult(
-                item_id=island.island_id,
-                item_label=island.name,
-                status="SKIPPED",
-                summary="No linked sections were available for island review.",
-                issues=[],
-                covered_files=[],
-            )
-
-        registry_entry = self._keyword_registry_entry(documents, island.name)
+        registry_entry = self._keyword_registry_entry(documents, group.keyword)
         declared_source = (
             registry_entry["definition_source"].strip("`").replace("\\", "/")
             if registry_entry
             else ""
         )
-        exact_definition_docs = [
-            doc
-            for doc in documents
-            if declared_source
-            and (doc.file_path == declared_source or doc.file_path.endswith(f"/{declared_source}"))
-        ]
-        if declared_source and not exact_definition_docs and "/" not in declared_source:
-            exact_definition_docs = [
-                doc for doc in documents if doc.file_path.rsplit("/", 1)[-1] == declared_source
-            ]
-        definition_sections = [
-            (doc, sec)
-            for doc in exact_definition_docs
-            for sec in doc.sections
-            if island.name in sec.keywords
-        ]
-        definition_section_ids = {sec.section_id for _doc, sec in definition_sections}
-        reference_sections = [
-            (doc, sec)
-            for doc, sec in linked_sections
-            if sec.section_id not in definition_section_ids
-        ]
-        covered_files = list(
-            dict.fromkeys(
-                doc.file_path for doc, _section in [*definition_sections, *reference_sections]
+        source_suffixes = {declared_source}
+        if declared_source.startswith("docs/"):
+            source_suffixes.add(declared_source.removeprefix("docs/"))
+        definition_docs = [
+            document
+            for document in documents
+            if any(
+                document.file_path == source or document.file_path.endswith(f"/{source}")
+                for source in source_suffixes
             )
+        ]
+        if declared_source and not definition_docs:
+            basename_matches = [
+                document
+                for document in documents
+                if document.file_path.rsplit("/", 1)[-1] == declared_source.rsplit("/", 1)[-1]
+            ]
+            if len(basename_matches) == 1:
+                definition_docs = basename_matches
+        definitions = sorted(
+            [
+                (document, section)
+                for document in definition_docs
+                for section in document.sections
+                if group.keyword in section.keywords
+            ],
+            key=lambda pair: (pair[0].file_path, pair[1].line_start, pair[1].section_id),
         )
-        context_blocks: list[str] = [
-            f"Keyword Island: {island.name}",
-            f"Declared definition source: {declared_source or '(not found in keyword registry)'}",
-            (
-                f"Definition sections: {len(definition_sections)}; "
-                f"reference sections: {len(reference_sections)}"
-            ),
-            f"Covered Files: {', '.join(covered_files)}",
-            f"Shared Keyword: {', '.join(island.keywords) if island.keywords else island.name}",
-            "Definition source metadata is read from docs/architecture/keyword_dictionary.md.",
-            "Project rule: definitions use the keyword inline in their source section; references "
-            "use a section-level <!-- traceability: {Keyword} --> comment.",
-            "",
+        definition_section_ids = {section.section_id for _document, section in definitions}
+        references = sorted(
+            [
+                (document, section)
+                for document, section in linked_sections
+                if section.section_id not in definition_section_ids
+            ],
+            key=lambda pair: (pair[0].file_path, pair[1].line_start, pair[1].section_id),
+        )
+        definition_candidates: list[tuple[ParsedDocument, ParsedSection] | None] = definitions or [
+            None
         ]
 
-        if registry_entry:
-            context_blocks.extend(
+        pairs: list[_KeywordLinkPair] = []
+        for definition in definition_candidates:
+            for reference in references:
+                definition_label = (
+                    f"{definition[0].file_path} :: {definition[1].heading}"
+                    if definition
+                    else "(definition section missing)"
+                )
+                reference_label = f"{reference[0].file_path} :: {reference[1].heading}"
+                definition_id = definition[1].section_id if definition else "missing-definition"
+                item_id = f"linkpair:{group.keyword}:{definition_id}->{reference[1].section_id}"
+                item_label = (
+                    f"{{{group.keyword}}} | DEFINITION {definition_label} "
+                    f"↔ REFERENCE {reference_label}"
+                )
+                pairs.append(
+                    _KeywordLinkPair(
+                        keyword=group.keyword,
+                        item_id=item_id,
+                        item_label=item_label,
+                        definition=definition,
+                        reference=reference,
+                        registry_entry=registry_entry,
+                        declared_source=declared_source,
+                    )
+                )
+        return pairs
+
+    def _keyword_link_pair_context(self, pair: _KeywordLinkPair) -> str:
+        lines = [
+            f"Keyword: {{{pair.keyword}}}",
+            "Evaluation unit: one definition section paired with one reference section.",
+            f"Declared definition source: {pair.declared_source or '(not found in keyword registry)'}",
+            "Definition source metadata is read from docs/architecture/keyword_dictionary.md.",
+            "Definitions use the keyword inline in their source section; references use the "
+            "section-level <!-- traceability: {Keyword} --> comment.",
+            "",
+        ]
+        if pair.registry_entry:
+            lines.extend(
                 [
                     "### KEYWORD REGISTRY ENTRY",
-                    f"- Target component: {registry_entry['target_component']}",
-                    f"- Summary: {registry_entry['summary']}",
+                    f"- Target component: {pair.registry_entry['target_component']}",
+                    f"- Summary: {pair.registry_entry['summary']}",
                     "",
                 ]
             )
 
-        def append_sections(
-            role: str, sections: list[tuple[ParsedDocument, ParsedSection]]
+        def append_section(
+            role: str, section_pair: tuple[ParsedDocument, ParsedSection] | None
         ) -> None:
-            context_blocks.append(f"### {role} SECTIONS")
-            if not sections:
-                context_blocks.append("(none found)")
-                context_blocks.append("")
+            lines.append(f"### {role} SECTION")
+            if section_pair is None:
+                lines.extend(["(not found in the declared definition source)", ""])
                 return
-            for doc, sec in sections:
-                keywords = f" [Keywords: {', '.join(sec.keywords)}]" if sec.keywords else ""
-                context_blocks.append(
-                    f"--- {role}: {doc.file_path} :: {sec.heading} "
-                    f"(Tier: {doc.tier}; ID: {sec.section_id}; "
-                    f"lines {sec.line_start}-{sec.line_end}){keywords} ---"
-                )
-                context_blocks.append(self._budgeted(sec.body_text))
-                context_blocks.append("")
-
-        append_sections("DEFINITION", definition_sections)
-        append_sections("REFERENCE", reference_sections)
-
-        context_text = "\n\n".join(context_blocks)
-        prompt = self.assemble_prompt("cluster", island.name, context_text, checks)
-
-        if dry_run:
-            print(f"=== DRY-RUN PROMPT FOR ISLAND: {island.name} ({island.island_id}) ===")
-            print(prompt)
-            print("=" * 80)
-            return JudgeResult(
-                item_id=island.island_id,
-                item_label=island.name,
-                status="PASS",
-                summary="[Dry Run] Prompt generated successfully.",
-                covered_files=covered_files,
+            document, section = section_pair
+            keywords = f" [Keywords: {', '.join(section.keywords)}]" if section.keywords else ""
+            lines.extend(
+                [
+                    f"File: {document.file_path} (Tier: {document.tier})",
+                    f"Section: {section.heading} (ID: {section.section_id}; "
+                    f"lines {section.line_start}-{section.line_end}){keywords}",
+                    self._budgeted(section.body_text),
+                    "",
+                ]
             )
 
-        selected_backend = backend or self.config.llm_judge.default_backend
-        result = self._run_judge_llm(
-            prompt,
-            island.island_id,
-            island.name,
-            covered_files,
-            selected_backend,
-            model,
-            checks=checks,
-            context_text=context_text,
-            mode="cluster",
-        )
-        return result
+        append_section("DEFINITION", pair.definition)
+        append_section("REFERENCE", pair.reference)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _pair_covered_files(pair: _KeywordLinkPair) -> list[str]:
+        files = [pair.reference[0].file_path]
+        if pair.definition:
+            files.insert(0, pair.definition[0].file_path)
+        return list(dict.fromkeys(files))
 
     def _run_judge_llm(
         self,

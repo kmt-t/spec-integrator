@@ -27,14 +27,13 @@ class Edge:
 
 
 @dataclass
-class DocumentIsland:
-    """Sections in different documents that share one review keyword."""
+class KeywordGroup:
+    """Sections in different documents that share one keyword."""
 
-    island_id: str
-    name: str
+    group_id: str
+    keyword: str
     file_paths: list[str]
     section_ids: list[str]
-    keywords: list[str]
     total_sections: int = 0
     total_docs: int = 0
 
@@ -55,10 +54,10 @@ class Graph:
                 return
         self.edges.append(edge)
 
-    def extract_document_islands(
-        self, min_size: int = 1, max_cluster_docs: int = 6
-    ) -> list[DocumentIsland]:
-        """Create one review island per keyword, containing only its linked sections."""
+    def extract_keyword_groups(
+        self, min_size: int = 1, max_group_docs: int = 6
+    ) -> list[KeywordGroup]:
+        """Create one keyword group containing the sections linked to that keyword."""
         meta_docs = {
             "architecture/document_structure.md",
             "architecture/keyword_dictionary.md",
@@ -79,10 +78,10 @@ class Graph:
             keyword_files.setdefault(keyword, set()).add(source.file_path)
             keyword_sections.setdefault(keyword, set()).add(source.id)
 
-        islands: list[DocumentIsland] = []
+        groups: list[KeywordGroup] = []
         for keyword in sorted(keyword_files):
             file_paths = sorted(keyword_files[keyword] - meta_docs)
-            if len(file_paths) < max(min_size, 2) or len(file_paths) > max_cluster_docs:
+            if len(file_paths) < max(min_size, 2) or len(file_paths) > max_group_docs:
                 continue
 
             section_ids = sorted(
@@ -93,19 +92,18 @@ class Graph:
             if not section_ids:
                 continue
 
-            islands.append(
-                DocumentIsland(
-                    island_id=f"island_kw_{keyword}",
-                    name=keyword,
+            groups.append(
+                KeywordGroup(
+                    group_id=f"keyword_group_{keyword}",
+                    keyword=keyword,
                     file_paths=file_paths,
                     section_ids=section_ids,
-                    keywords=[keyword],
                     total_sections=len(section_ids),
                     total_docs=len(file_paths),
                 )
             )
 
-        return islands
+        return groups
 
     def extract_item_subgraphs(self) -> list[dict]:
         """Extracts subgraphs centered around Item/Keyword nodes for LLM Judge or analysis."""
@@ -252,6 +250,7 @@ class DocGraphBuilder:
                     target_file = doc.file_path
                 else:
                     import os
+
                     norm_root = os.path.normpath(link.target_path).replace("\\", "/")
                     if f"file:{norm_root}" in graph.nodes:
                         target_file = norm_root

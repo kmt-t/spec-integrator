@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from spec_integrator.config import Config
-from spec_integrator.graph import DocumentIsland
+from spec_integrator.graph import KeywordGroup
 from spec_integrator.judge import UnifiedReviewEngine
 from spec_integrator.parser import ParsedDocument, ParsedSection
 
@@ -30,25 +30,25 @@ def _create_sample_doc(file_path: str = "components/test.md") -> ParsedDocument:
     )
 
 
-def test_unified_reviewer_islands_mock():
+def test_unified_reviewer_keyword_link_pairs_mock():
     repo_root = Path(__file__).resolve().parent.parent.parent.parent
     yaml_path = repo_root / "spec-integrator.yaml"
     config = Config.load(yaml_path)
     reviewer = UnifiedReviewEngine(config)
     doc = _create_sample_doc()
-    island = DocumentIsland(
-        island_id="island_01",
-        name="Test Island",
+    group = KeywordGroup(
+        group_id="keyword_group_TestKW",
+        keyword="TestKW",
         file_paths=[doc.file_path],
         section_ids=[s.section_id for s in doc.sections],
-        keywords=["TestKW"],
         total_sections=1,
         total_docs=1,
     )
 
-    res = reviewer.review_document_island(island, [doc], backend="mock")
-    assert res.status == "PASS"
-    assert res.item_label == "Test Island"
+    results = reviewer.review_keyword_link_pairs(group, [doc], backend="mock")
+    assert len(results) == 1
+    assert results[0].status == "PASS"
+    assert results[0].item_label.startswith("{TestKW} | DEFINITION ")
 
 
 def test_unified_reviewer_documents_mock():

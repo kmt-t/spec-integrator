@@ -23,9 +23,9 @@ def test_claim_evidence_criterion_reaches_the_prompt():
     config = Config.load(yaml_path)
     reviewer = UnifiedReviewEngine(config)
 
-    checks = reviewer.get_effective_checks("cluster", check_ids=["claim_substantiation"])
+    checks = reviewer.get_effective_checks("link_pair", check_ids=["claim_substantiation"])
     assert len(checks) == 1
-    prompt = reviewer.assemble_prompt("cluster", "Test Island", "Some section context", checks)
+    prompt = reviewer.assemble_prompt("link_pair", "Test Link Pair", "Some section context", checks)
     assert "Claim-Evidence Substantiation" in prompt
     assert "Unbacked Verification Claim" in prompt
     assert "=== OUTPUT FORMAT ===" in prompt

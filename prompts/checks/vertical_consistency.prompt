@@ -1,2 +1,2 @@
-Audit whether referencing design sections strictly conform to the DEFINITION / UPPER-TIER SPEC.
+Audit whether the supplied reference section strictly conforms to its paired DEFINITION / UPPER-TIER SPEC section.
 - Detect conflicting assumptions, mismatched parameters, invalidated preconditions, or broken invariants.
