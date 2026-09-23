@@ -55,7 +55,9 @@ def call_sakura_embeddings(
         raise ValueError(f"Sakura API key environment variable '{api_key_env}' is not set.")
 
     selected_model = model or getattr(
-        config.terminology, "embedding_model", "multilingual-e5-large"
+        config.terminology,
+        "embedding_model",
+        "nvidia/nemotron-3-embed-1b:free",
     )
     endpoint = "https://api.ai.sakura.ad.jp/v1/embeddings"
     headers = {
@@ -107,9 +109,7 @@ def call_openrouter_embeddings(
     """Generates embedding vectors through OpenRouter's embeddings endpoint."""
     if not texts:
         return []
-    b_config = config.llm_judge.backends.get("jev") or config.llm_judge.backends.get(
-        "openrouter"
-    )
+    b_config = config.llm_judge.backends.get("jev") or config.llm_judge.backends.get("openrouter")
     api_key_env = b_config.api_key_env if b_config else "OPENROUTER_API_KEY"
     api_key = os.environ.get(api_key_env, "")
     if not api_key:

@@ -139,7 +139,7 @@ llm_judge:
 
 terminology:
   embedding_backend: "openrouter"
-  embedding_model: "intfloat/multilingual-e5-large"
+  embedding_model: "nvidia/nemotron-3-embed-1b:free"
 ```
 
 Jev は各レビュー基準に対して次のいずれかを選び、確信度を返します。`confirmed_violation` は設定された重大度で判定し、`possible_violation` と `insufficient_context` は WARN、`documented_open_issue` と `improvement_suggestion` は INFO、`no_issue` は結果詳細へ追加しません。

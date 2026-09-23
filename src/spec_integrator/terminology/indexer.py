@@ -40,9 +40,11 @@ class TermIndexer:
     ) -> int:
         """Fetches embeddings from the configured provider and stores them."""
         selected_model = model or getattr(
-            self.config.terminology, "embedding_model", "multilingual-e5-large"
+            self.config.terminology,
+            "embedding_model",
+            "nvidia/nemotron-3-embed-1b:free",
         )
-        selected_backend = getattr(self.config.terminology, "embedding_backend", "sakura")
+        selected_backend = getattr(self.config.terminology, "embedding_backend", "openrouter")
         unembedded = db.get_unembedded_terms(selected_model)
         if not unembedded:
             return 0
@@ -73,7 +75,9 @@ class TermIndexer:
     ) -> int:
         """Calculates pairwise cosine similarity across all embedded terms and persists high-similarity pairs."""
         selected_model = model or getattr(
-            self.config.terminology, "embedding_model", "multilingual-e5-large"
+            self.config.terminology,
+            "embedding_model",
+            "nvidia/nemotron-3-embed-1b:free",
         )
         threshold = (
             min_similarity

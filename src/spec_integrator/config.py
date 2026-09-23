@@ -276,8 +276,8 @@ class TerminologyConfig:
     """Configuration for terminology variance detection."""
 
     enabled: bool = True
-    embedding_model: str = "multilingual-e5-large"
-    embedding_backend: str = "sakura"
+    embedding_model: str = "nvidia/nemotron-3-embed-1b:free"
+    embedding_backend: str = "openrouter"
     similarity_threshold: float = 0.90
     confidence_threshold: float = 0.70
     max_terms: int = 500
@@ -292,8 +292,8 @@ class SemanticTopicConfig:
     similarity_threshold: float = 0.80
     unlinked_warning_threshold: float = 0.82
     duplicate_warning_threshold: float = 0.90
-    embedding_model: str = "multilingual-e5-large"
-    backend: str = "sakura"
+    embedding_model: str = "nvidia/nemotron-3-embed-1b:free"
+    backend: str = "openrouter"
     batch_size: int = 16
     max_pairs: int = 1000
 

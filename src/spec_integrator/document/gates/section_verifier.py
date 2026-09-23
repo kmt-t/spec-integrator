@@ -27,7 +27,7 @@ class SectionTopicVerifier:
         min_sim = getattr(st_config, "similarity_threshold", 0.80)
         unlinked_threshold = getattr(st_config, "unlinked_warning_threshold", 0.82)
         duplicate_threshold = getattr(st_config, "duplicate_warning_threshold", 0.90)
-        model = getattr(st_config, "embedding_model", "multilingual-e5-large")
+        model = getattr(st_config, "embedding_model", "nvidia/nemotron-3-embed-1b:free")
         ignored_headings: set[str] = set(
             getattr(
                 st_config,

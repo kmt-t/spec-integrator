@@ -271,7 +271,7 @@ llm_judge:
 
 terminology:
   embedding_backend: "openrouter"
-  embedding_model: "intfloat/multilingual-e5-large"
+  embedding_model: "nvidia/nemotron-3-embed-1b:free"
 ```
 
 ---
