@@ -298,7 +298,27 @@ CREATE TABLE audit_cache (
     reason TEXT,
     updated_at TEXT
 );
+
+CREATE TABLE judge_evaluations (
+    run_type TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    item_label TEXT NOT NULL,
+    check_id TEXT NOT NULL,
+    location TEXT NOT NULL,
+    classification TEXT NOT NULL,
+    severity TEXT,
+    confidence REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
+    covered_files TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    PRIMARY KEY (run_type, item_id, check_id, location, backend)
+);
+
+CREATE INDEX idx_judge_evaluations_confidence
+    ON judge_evaluations (confidence DESC);
 ```
+
+Jevの判定をチェック単位で記録する。`confidence` は0.0〜1.0の実数で保存し、`llm-findings --min-confidence 0.70` からしきい値検索できる。
 
 ---
 
@@ -399,7 +419,22 @@ spec-integrator llm-keyword-review [OPTIONS]
   - `--min-risk INT`: 監査対象とする最小リスクスコア閾値
   - `--check CHECK_ID`: 実行する監査チェック ID を限定
 
-### (9) `spec-integrator graph`
+### (9) `spec-integrator llm-findings`
+DBに保存されたLLM判定を確信度と分類で検索します。LLM APIは呼び出しません。
+
+```bash
+spec-integrator llm-findings --min-confidence 0.70
+spec-integrator llm-findings --min-confidence 0.70 --run-type llm-keyword-review
+spec-integrator llm-findings --min-confidence 0.70 --all-outcomes --limit 0
+```
+- **オプション**:
+  - `--min-confidence FLOAT`: 最小確信度（0.0〜1.0、既定値: 0.70）
+  - `--classification OUTCOME`: 分類を限定。複数指定できる
+  - `--all-outcomes`: 問題なし・文脈不足なども含める
+  - `--run-type TYPE`: 監査コマンド／モードを限定
+  - `--limit INT`: 最大表示件数。0は全件
+
+### (10) `spec-integrator graph`
 DocGraph の抽出・可視化を行います。
 
 ```bash
@@ -410,7 +445,7 @@ spec-integrator graph [OPTIONS]
   - `-f, --format [mermaid|json]`: 出力フォーマット（デフォルト: `mermaid`）
   - `-o, --out PATH`: 出力先ファイルパス（未指定時は標準出力）
 
-### (10) `spec-integrator init`
+### (11) `spec-integrator init`
 カレントディレクトリに `spec-integrator.yaml` の雛形を生成します。
 
 ```bash

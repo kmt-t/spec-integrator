@@ -132,6 +132,15 @@ class ObligationSummary:
 # Judge & Assessor Results
 # ---------------------------------------------------------------------------
 @dataclass
+class JudgeEvaluation:
+    check_id: str
+    classification: str
+    confidence: float
+    location: str
+    severity: str | None = None
+
+
+@dataclass
 class JudgeResult:
     item_id: str
     item_label: str
@@ -139,6 +148,7 @@ class JudgeResult:
     summary: str
     issues: list[dict] = field(default_factory=list)
     covered_files: list[str] = field(default_factory=list)
+    evaluations: list[JudgeEvaluation] = field(default_factory=list)
 
 
 @dataclass
@@ -225,6 +235,7 @@ class RiskAssessmentReport:
 __all__ = [
     "ConsistencySummary",
     "FormalModelResult",
+    "JudgeEvaluation",
     "JudgeReport",
     "JudgeResult",
     "KeywordRiskAssessment",

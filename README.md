@@ -102,7 +102,7 @@ co-change の依存関係は `{Keyword}` の既存トレーサビリティから
 - **LLM as a Judge セマンティック監査 (`llm-single-review`, `llm-keyword-review` コマンド)**:
   - 単一ドキュメント・セクションの自己一貫性監査、または高リスクキーワードが連結するドキュメント島全体のトレーサビリティ・意味的矛盾を Jev / Sakura / OpenRouter / Ollama バックエンドで診断。Jev は基準ごとの型付き判定と確率を返すが、説明文・引用箇所は生成しない。
 - **SQLite データベース・監査キャッシュ (`DocAuditDB`)**:
-  - ドキュメント構造の高速クエリ、ハッシュ値による差分検証キャッシュに加え、`risk`/`llm-single-review`/`llm-keyword-review` の判定結果そのもの（中間 JSON レポートは生成しない）を記録するローカル生成データ。
+  - ドキュメント構造の高速クエリ、ハッシュ値による差分検証キャッシュに加え、`risk`/`llm-single-review`/`llm-keyword-review` の基準ごとの分類・確信度を記録するローカル生成データ。
 - **CI / GitHub Actions ファースト**:
   - 検査器リビジョン刻印（Rule R9 準拠）、サマリー表、違反詳細、トレーサビリティマトリクス、リスク評価・LLM 判定結果を集約した単一 Markdown レポートを出力。
 
@@ -183,10 +183,15 @@ spec-integrator llm-single-review --file docs/components/tier1_core/os_scheduler
 
 # 高リスクキーワード連結島監査
 spec-integrator llm-keyword-review --keyword SCHED_DISPATCH_TIMEOUT
+
+# 確信度70%以上の違反候補をDBから検索（API呼び出しなし）
+spec-integrator llm-findings --min-confidence 0.70
 ```
 Jev は各レビュー基準を個別に分類し、選択肢ごとの確信度を返す。結果は「明確な違反」「違反の可能性」「既知の未解決事項」「文脈不足」「改善提案」「問題なし」に分かれ、明確な違反だけを設定済み重大度で FAIL/WARN にし、可能性や文脈不足は WARN、未解決事項と改善提案は INFO として残す。
 
 キーワード島では、キーワード台帳が指定する定義元セクションを `DEFINITION`、島に含まれる参照セクションを `REFERENCE` と明示して Jev に渡す。定義の置き場所・内容と、参照側のセクション単位 `traceability` リンクを別々の基準で確認する。Jev は説明文や文書内の引用箇所を生成しないため、WARN/INFO の確認には対象島のセクションを読み直す。説明や引用が必要な場合は `--backend openrouter` などチャット型バックエンドを指定する。
+
+判定単位の分類と確信度は SQLite の `judge_evaluations` テーブルへ保存する。`llm-findings --min-confidence 0.70` は既定で `confirmed_violation` と `possible_violation` を検索する。`--all-outcomes` を付けると文脈不足・既知の未解決事項・問題なしも含められ、`--run-type` で監査コマンドを絞り込める。
 
 ---
 

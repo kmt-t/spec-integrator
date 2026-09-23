@@ -9,17 +9,19 @@ from pathlib import Path
 from spec_integrator.anti_sabotage.base import AntiSabotageContext
 from spec_integrator.anti_sabotage.checks import LevenshteinTypoCheck
 from spec_integrator.config import Config
+from spec_integrator.db import DocAuditDB
+from spec_integrator.document import DocumentFacade
+from spec_integrator.document.commands import cmd_build, cmd_check_doc, cmd_format_doc
 from spec_integrator.judge import (
     RiskAssessor,
     UnifiedReviewEngine,
 )
+from spec_integrator.models import JudgeResult
+from spec_integrator.source.commands import cmd_check_src, cmd_format_src
 from spec_integrator.terminology import (
     TermIndexer,
     TermVarianceJudge,
 )
-from spec_integrator.document import DocumentFacade
-from spec_integrator.document.commands import cmd_build, cmd_check_doc, cmd_format_doc
-from spec_integrator.source.commands import cmd_check_src, cmd_format_src
 
 
 def _configure_utf8_stdio() -> None:
@@ -60,10 +62,7 @@ def _load_and_parse_all(
         file_paths=file_paths,
     )
     _log(f"Parsed {len(workspace.documents)} document(s) in {_rel_path(workspace.docs_root)}.")
-    _log(
-        f"DocGraph built: {len(workspace.graph.nodes)} nodes, "
-        f"{len(workspace.graph.edges)} edges."
-    )
+    _log(f"DocGraph built: {len(workspace.graph.nodes)} nodes, {len(workspace.graph.edges)} edges.")
     return workspace.documents, workspace.graph, workspace.db, workspace.docs_root
 
 
@@ -266,6 +265,8 @@ def cmd_llm_single_review(args):
     islands = graph.extract_document_islands(min_size=1)
 
     has_failures = False
+    document_results: list[JudgeResult] = []
+    island_results: dict[str, JudgeResult] = {}
     for doc in target_docs:
         print("\n" + "=" * 80)
         print(f" Auditing Document: '{doc.file_path}' (backend: {backend})")
@@ -276,6 +277,7 @@ def cmd_llm_single_review(args):
         res_single = reviewer.review_single_document(
             doc, backend=backend, model=model, check_ids=selected_checks, dry_run=args.dry_run
         )
+        document_results.append(res_single)
         print(f"Result: {res_single.status} - {res_single.summary}")
         if res_single.issues:
             for iss in res_single.issues:
@@ -318,6 +320,7 @@ def cmd_llm_single_review(args):
                     check_ids=selected_checks,
                     dry_run=args.dry_run,
                 )
+                island_results[isl.island_id] = res_isl
                 print(f"       -> Status: {res_isl.status} ({res_isl.summary[:70]})")
                 if res_isl.issues:
                     for iss in res_isl.issues:
@@ -330,6 +333,20 @@ def cmd_llm_single_review(args):
         else:
             print("\n>>> [2/2] No connected multi-document islands found for this document.")
 
+    if not args.dry_run:
+        db.save_judge_evaluations(
+            "llm-single-review",
+            document_results,
+            backend,
+            replace_all=bool(args.all),
+        )
+        db.save_judge_evaluations(
+            "llm-single-review-island",
+            list(island_results.values()),
+            backend,
+            replace_all=bool(args.all),
+        )
+        db.commit()
     db.close()
     sys.exit(1 if has_failures else 0)
 
@@ -375,11 +392,10 @@ def cmd_llm_keyword_review(args):
     islands = graph.extract_document_islands(min_size=2)
     target_keyword_set = set(target_keywords)
     target_islands = [isl for isl in islands if target_keyword_set.intersection(isl.keywords)]
-    print(
-        f"Found {len(target_islands)} keyword island(s) for the target keywords."
-    )
+    print(f"Found {len(target_islands)} keyword island(s) for the target keywords.")
 
     has_failures = False
+    review_results: list[JudgeResult] = []
     for idx, isl in enumerate(target_islands, start=1):
         print(
             f"\n[{idx}/{len(target_islands)}] Auditing keyword island '{isl.name}' ({isl.total_docs} docs, {isl.total_sections} linked sections)...",
@@ -393,6 +409,7 @@ def cmd_llm_keyword_review(args):
             check_ids=selected_checks,
             dry_run=args.dry_run,
         )
+        review_results.append(res)
         print(f"       -> Status: {res.status} ({res.summary[:70]})")
         if res.issues:
             for iss in res.issues:
@@ -403,6 +420,14 @@ def cmd_llm_keyword_review(args):
         if res.status == "FAIL":
             has_failures = True
 
+    if not args.dry_run:
+        db.save_judge_evaluations(
+            "llm-keyword-review",
+            review_results,
+            backend,
+            replace_all=bool(args.keyword is None and args.min_risk is None),
+        )
+        db.commit()
     db.close()
     sys.exit(1 if has_failures else 0)
 
@@ -482,6 +507,7 @@ def cmd_llm_judge(args):
 
     if not args.dry_run:
         db.replace_document_judge_results(doc_results, backend)
+        db.save_judge_evaluations("llm-judge-document", doc_results, backend, replace_all=True)
         db.set_assessed_doc_hashes(
             "document_judge", {d.file_path: d.content_hash for d in doc_targets}
         )
@@ -538,11 +564,71 @@ def cmd_llm_judge(args):
 
     if not args.dry_run:
         db.replace_judge_results(island_results, backend)
+        db.save_judge_evaluations("llm-judge-island", island_results, backend, replace_all=True)
         db.set_assessed_doc_hashes("judge", covered_hashes)
         db.commit()
 
     db.close()
     sys.exit(1 if has_failures else 0)
+
+
+def cmd_llm_findings(args):
+    """Lists stored typed review decisions at or above a confidence threshold."""
+    if not 0.0 <= args.min_confidence <= 1.0:
+        print("--min-confidence must be between 0.0 and 1.0.")
+        sys.exit(2)
+
+    config = Config.load(args.config)
+    db = DocAuditDB(config.get_db_path())
+    classifications = args.classification
+    if args.all_outcomes:
+        classifications = None
+    elif not classifications:
+        classifications = ["confirmed_violation", "possible_violation"]
+    rows = db.get_judge_evaluations(
+        min_confidence=args.min_confidence,
+        classifications=classifications,
+        run_type=args.run_type,
+        limit=args.limit if args.limit > 0 else None,
+    )
+    db.close()
+
+    confidence_percent = f"{args.min_confidence:.0%}"
+    print(f"LLM review evaluations with confidence >= {confidence_percent}: showing {len(rows)}")
+    if not rows:
+        print("No matching stored evaluations. Run an LLM review to populate the confidence index.")
+        sys.exit(0)
+    print("Jev does not store rationale or citations; review each listed section manually.")
+    headers = [
+        "confidence",
+        "outcome",
+        "severity",
+        "review",
+        "record",
+        "check",
+        "location",
+        "covered files",
+        "backend",
+        "generated at",
+    ]
+    print("| " + " | ".join(headers) + " |")
+    print("| ---: | --- | --- | --- | --- | --- | --- | --- | --- |")
+    for row in rows:
+        cells = [
+            f"{row['confidence']:.0%}",
+            row["classification"],
+            row["severity"] or "-",
+            row["run_type"],
+            row["item_id"],
+            row["check_id"],
+            row["location"],
+            ", ".join(row["covered_files"]),
+            row["backend"],
+            row["generated_at"],
+        ]
+        safe_cells = [str(cell).replace("|", "\\|").replace("\n", " ") for cell in cells]
+        print("| " + " | ".join(safe_cells) + " |")
+    sys.exit(0)
 
 
 def cmd_llm_word(args):
@@ -666,7 +752,9 @@ def _add_check_doc_subparser(subparsers) -> None:
         "check-doc", help="Run static document verification & 8 quality gates"
     )
     _add_config_arg(p)
-    p.add_argument("-r", "--report", default="reports/doc_report.md", help="Markdown report output path")
+    p.add_argument(
+        "-r", "--report", default="reports/doc_report.md", help="Markdown report output path"
+    )
     p.add_argument("--clean", action="store_true", help="Clear cache DB and run clean audit")
     p.add_argument("files", nargs="*", help="Optional list of markdown documents to verify")
     p.set_defaults(func=cmd_check_doc)
@@ -910,6 +998,57 @@ def _add_llm_judge_subparser(subparsers) -> None:
     p.set_defaults(func=cmd_llm_judge)
 
 
+def _add_llm_findings_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "llm-findings",
+        help="Query persisted LLM review decisions by confidence and outcome",
+    )
+    _add_config_arg(p)
+    p.add_argument(
+        "--min-confidence",
+        type=float,
+        default=0.70,
+        help="Minimum confidence from 0.0 to 1.0 (default: 0.70)",
+    )
+    p.add_argument(
+        "--classification",
+        action="append",
+        choices=[
+            "confirmed_violation",
+            "possible_violation",
+            "documented_open_issue",
+            "insufficient_context",
+            "improvement_suggestion",
+            "no_issue",
+        ],
+        help="Filter by outcome; may be repeated. Defaults to confirmed/possible violations.",
+    )
+    p.add_argument(
+        "--all-outcomes",
+        action="store_true",
+        help="Include all outcomes, including no_issue and insufficient_context",
+    )
+    p.add_argument(
+        "--run-type",
+        choices=[
+            "llm-single-review",
+            "llm-single-review-island",
+            "llm-keyword-review",
+            "llm-judge-document",
+            "llm-judge-island",
+            "imported-level2-audit-log",
+        ],
+        help="Filter to one review command or mode",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=200,
+        help="Maximum rows to print; use 0 for all matches (default: 200)",
+    )
+    p.set_defaults(func=cmd_llm_findings)
+
+
 _SUBPARSER_BUILDERS = (
     _add_init_subparser,
     _add_build_subparser,
@@ -923,6 +1062,7 @@ _SUBPARSER_BUILDERS = (
     _add_llm_single_review_subparser,
     _add_llm_keyword_review_subparser,
     _add_llm_judge_subparser,
+    _add_llm_findings_subparser,
 )
 
 

@@ -187,6 +187,27 @@ class DocAuditDB:
                     generated_at TEXT
                 )
             """)
+            # 12a. Per-criterion LLM evaluations, including confidence values.
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS judge_evaluations (
+                    run_type TEXT NOT NULL,
+                    item_id TEXT NOT NULL,
+                    item_label TEXT NOT NULL,
+                    check_id TEXT NOT NULL,
+                    location TEXT NOT NULL,
+                    classification TEXT NOT NULL,
+                    severity TEXT,
+                    confidence REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
+                    covered_files TEXT NOT NULL,
+                    generated_at TEXT NOT NULL,
+                    backend TEXT NOT NULL,
+                    PRIMARY KEY (run_type, item_id, check_id, location, backend)
+                )
+            """)
+            self.conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_judge_evaluations_confidence
+                ON judge_evaluations (confidence DESC)
+            """)
             # 13. run_metadata
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS run_metadata (
@@ -321,6 +342,7 @@ class DocAuditDB:
                 "risk_assessments",
                 "judge_results",
                 "document_judge_results",
+                "judge_evaluations",
                 "run_metadata",
                 "assessed_doc_hashes",
             ]
@@ -719,6 +741,88 @@ class DocAuditDB:
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM document_judge_results ORDER BY item_label")
         return self._unpack_covered_files(cursor.fetchall())
+
+    def save_judge_evaluations(
+        self,
+        run_type: str,
+        rows: list[JudgeResult],
+        backend: str,
+        replace_all: bool = False,
+    ) -> None:
+        """Stores each typed criterion decision for confidence-based screening."""
+        now = self._now()
+        with self.conn:
+            if replace_all:
+                self.conn.execute(
+                    "DELETE FROM judge_evaluations WHERE run_type = ? AND backend = ?",
+                    (run_type, backend),
+                )
+            for result in rows:
+                if not result.evaluations:
+                    continue
+                self.conn.execute(
+                    "DELETE FROM judge_evaluations "
+                    "WHERE run_type = ? AND item_id = ? AND backend = ?",
+                    (run_type, result.item_id, backend),
+                )
+                covered = json.dumps(result.covered_files)
+                for evaluation in result.evaluations:
+                    self.conn.execute(
+                        """
+                        INSERT OR REPLACE INTO judge_evaluations
+                        (run_type, item_id, item_label, check_id, location, classification,
+                         severity, confidence, covered_files, generated_at, backend)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            run_type,
+                            result.item_id,
+                            result.item_label,
+                            evaluation.check_id,
+                            evaluation.location,
+                            evaluation.classification,
+                            evaluation.severity,
+                            evaluation.confidence,
+                            covered,
+                            now,
+                            backend,
+                        ),
+                    )
+            self._set_run_metadata(run_type, backend, now)
+
+    def get_judge_evaluations(
+        self,
+        min_confidence: float = 0.70,
+        classifications: list[str] | None = None,
+        run_type: str | None = None,
+        limit: int | None = 200,
+    ) -> list[dict]:
+        """Queries persisted criterion decisions by confidence and outcome."""
+        if not 0.0 <= min_confidence <= 1.0:
+            raise ValueError("min_confidence must be between 0.0 and 1.0")
+        clauses = ["confidence >= ?"]
+        parameters: list[str | float | int] = [min_confidence]
+        if classifications:
+            placeholders = ", ".join("?" for _ in classifications)
+            clauses.append(f"classification IN ({placeholders})")
+            parameters.extend(classifications)
+        if run_type:
+            clauses.append("run_type = ?")
+            parameters.append(run_type)
+        query = (
+            "SELECT * FROM judge_evaluations WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY confidence DESC, run_type, item_label, check_id"
+        )
+        if limit is not None and limit > 0:
+            query += " LIMIT ?"
+            parameters.append(limit)
+        cursor = self.conn.cursor()
+        cursor.execute(query, parameters)
+        rows = [dict(row) for row in cursor.fetchall()]
+        for row in rows:
+            row["covered_files"] = json.loads(row["covered_files"] or "[]")
+        return rows
 
     # Run provenance & staleness tracking
     # ------------------------------------------------------------------ #

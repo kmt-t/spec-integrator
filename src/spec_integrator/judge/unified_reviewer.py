@@ -5,7 +5,7 @@ import time
 from spec_integrator.config import Config, LLMCheckRule
 from spec_integrator.graph import DocumentIsland
 from spec_integrator.judge.base import BaseJudge
-from spec_integrator.models import JudgeResult, ParsedDocument, ParsedSection
+from spec_integrator.models import JudgeEvaluation, JudgeResult, ParsedDocument, ParsedSection
 
 
 class UnifiedReviewEngine(BaseJudge):
@@ -196,12 +196,16 @@ class UnifiedReviewEngine(BaseJudge):
             summary = f"[Dry Run] Generated {len(section_results)} section-level prompts."
 
         issues = [issue for _, result in section_results for issue in result.issues]
+        evaluations = [
+            evaluation for _, result in section_results for evaluation in result.evaluations
+        ]
         return JudgeResult(
             item_id=doc.file_path,
             item_label=doc.file_path,
             status=status,
             summary=summary,
             issues=issues,
+            evaluations=evaluations,
             covered_files=[doc.file_path],
         )
 
@@ -259,16 +263,11 @@ class UnifiedReviewEngine(BaseJudge):
             doc
             for doc in documents
             if declared_source
-            and (
-                doc.file_path == declared_source
-                or doc.file_path.endswith(f"/{declared_source}")
-            )
+            and (doc.file_path == declared_source or doc.file_path.endswith(f"/{declared_source}"))
         ]
         if declared_source and not exact_definition_docs and "/" not in declared_source:
             exact_definition_docs = [
-                doc
-                for doc in documents
-                if doc.file_path.rsplit("/", 1)[-1] == declared_source
+                doc for doc in documents if doc.file_path.rsplit("/", 1)[-1] == declared_source
             ]
         definition_sections = [
             (doc, sec)
@@ -284,8 +283,7 @@ class UnifiedReviewEngine(BaseJudge):
         ]
         covered_files = list(
             dict.fromkeys(
-                doc.file_path
-                for doc, _section in [*definition_sections, *reference_sections]
+                doc.file_path for doc, _section in [*definition_sections, *reference_sections]
             )
         )
         context_blocks: list[str] = [
@@ -535,8 +533,9 @@ class UnifiedReviewEngine(BaseJudge):
             )
             answers = response["answers"]
             issues: list[dict] = []
+            evaluations: list[JudgeEvaluation] = []
             decisions: list[str] = []
-            outcome_counts = {outcome: 0 for outcome in outcome_options}
+            outcome_counts = dict.fromkeys(outcome_options, 0)
             for check in checks:
                 answer = answers.get(check.id)
                 if not isinstance(answer, dict) or answer.get("type") != "choice":
@@ -553,15 +552,26 @@ class UnifiedReviewEngine(BaseJudge):
                     raise ValueError(f"Jev returned invalid confidence for '{check.id}'")
                 outcome_counts[outcome] += 1
                 decisions.append(f"{check.id}={outcome}({confidence:.0%})")
-                if outcome != "no_issue":
-                    if outcome == "confirmed_violation":
-                        severity = check.severity.upper()
-                        if severity not in ("ERROR", "WARNING"):
-                            severity = "WARNING"
-                    elif outcome in ("documented_open_issue", "improvement_suggestion"):
-                        severity = "INFO"
-                    else:
+                if outcome == "confirmed_violation":
+                    severity = check.severity.upper()
+                    if severity not in ("ERROR", "WARNING"):
                         severity = "WARNING"
+                elif outcome in ("documented_open_issue", "improvement_suggestion"):
+                    severity = "INFO"
+                elif outcome == "no_issue":
+                    severity = None
+                else:
+                    severity = "WARNING"
+                evaluations.append(
+                    JudgeEvaluation(
+                        check_id=check.id,
+                        classification=outcome,
+                        confidence=float(confidence),
+                        location=item_label,
+                        severity=severity,
+                    )
+                )
+                if outcome != "no_issue":
                     issues.append(
                         {
                             "severity": severity,
@@ -580,9 +590,7 @@ class UnifiedReviewEngine(BaseJudge):
             has_error = any(issue["severity"] == "ERROR" for issue in issues)
             has_warning = any(issue["severity"] == "WARNING" for issue in issues)
             status = "FAIL" if has_error else ("WARN" if has_warning else "PASS")
-            counts = ", ".join(
-                f"{outcome}={count}" for outcome, count in outcome_counts.items()
-            )
+            counts = ", ".join(f"{outcome}={count}" for outcome, count in outcome_counts.items())
             summary = (
                 f"Jev classified {len(checks)} typed review criteria: {counts}. "
                 f"Selections: {', '.join(decisions)}. Jev does not generate explanations or citations."
@@ -593,6 +601,7 @@ class UnifiedReviewEngine(BaseJudge):
                 status=status,
                 summary=summary,
                 issues=issues,
+                evaluations=evaluations,
                 covered_files=covered,
             )
         except Exception as e:
