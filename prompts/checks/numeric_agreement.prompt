@@ -1,2 +1,1 @@
-Verify mathematical and numeric integrity across all sections.
-- Re-calculate totals, allocations, budgets, and offsets. Verify that sub-allocations sum exactly to stated totals (e.g. 32KB RAM budgets, stack sizes, cache banks) and that identically named constants/quantities have identical values everywhere. Report any arithmetic discrepancy as an ERROR with the disagreeing sections cited.
+Recalculate totals, allocations, budgets, and offsets that are explicit in the supplied section or pair. Compare the same named quantity only where both values are supplied. Classify a discrepancy only when the operands and conflicting result are visible; do not assume missing components of a budget are zero.

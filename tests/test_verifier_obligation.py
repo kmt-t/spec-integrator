@@ -1,8 +1,8 @@
 from spec_integrator.config import Config
 from spec_integrator.db import DocAuditDB
+from spec_integrator.document.gates.obligation import ObligationVerifier
 from spec_integrator.graph import DocGraphBuilder
 from spec_integrator.parser import MarkdownParser
-from spec_integrator.document.gates.obligation import ObligationVerifier
 
 
 def _setup(tmp_path, body):
@@ -17,21 +17,21 @@ def _setup(tmp_path, body):
     return cfg, doc, db
 
 
-def _write_risk_assessment(db, assessments, doc_hashes=None, backend="sakura"):
+def _write_risk_assessment(db, assessments, doc_hashes=None, backend="jev"):
     db.replace_risk_assessments(assessments, backend)
     if doc_hashes is not None:
         db.set_assessed_doc_hashes("risk_assessment", doc_hashes)
     db.commit()
 
 
-def _write_judge_results(db, results, doc_hashes=None, backend="sakura"):
+def _write_judge_results(db, results, doc_hashes=None, backend="jev"):
     db.replace_judge_results(results, backend)
     if doc_hashes is not None:
         db.set_assessed_doc_hashes("judge", doc_hashes)
     db.commit()
 
 
-def _write_document_judge_results(db, results, doc_hashes=None, backend="sakura"):
+def _write_document_judge_results(db, results, doc_hashes=None, backend="jev"):
     db.replace_document_judge_results(results, backend)
     if doc_hashes is not None:
         db.set_assessed_doc_hashes("document_judge", doc_hashes)
@@ -456,7 +456,7 @@ def test_mock_generated_assessment_is_rejected(tmp_path):
 
 def test_real_backend_assessment_is_accepted(tmp_path):
     cfg, doc, db = _setup(tmp_path, DOC_BODY)
-    _write_risk_assessment(db, [], doc_hashes={doc.file_path: doc.content_hash}, backend="sakura")
+    _write_risk_assessment(db, [], doc_hashes={doc.file_path: doc.content_hash}, backend="jev")
     issues, _ = ObligationVerifier(cfg).verify([doc], db=db)
     assert [i for i in issues if i.rule_code == "OBLIG-ASSESSMENT-NOT-INDEPENDENT"] == []
 

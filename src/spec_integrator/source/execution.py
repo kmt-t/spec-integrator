@@ -1,5 +1,6 @@
 """External tool and test execution for source verification."""
 
+import os
 import shutil
 import subprocess
 import sys
@@ -22,7 +23,9 @@ class SourceExecution:
 
     def run_ruff(self, files: list[Path], group_name: str) -> list[SourceIssue]:
         ruff_bin = shutil.which("ruff")
-        command = [ruff_bin] if ruff_bin else ["uv", "run", "--system-certs", "--with", "ruff", "ruff"]
+        command = (
+            [ruff_bin] if ruff_bin else ["uv", "run", "--system-certs", "--with", "ruff", "ruff"]
+        )
         result = subprocess.run(
             [*command, "check", *[str(file_path) for file_path in files]],
             capture_output=True,
@@ -49,6 +52,12 @@ class SourceExecution:
         return issues
 
     def execute_python_file(self, file_path: Path, group_name: str) -> list[SourceIssue]:
+        environment = os.environ.copy()
+        root_path = str(self.root_dir)
+        existing_python_path = environment.get("PYTHONPATH")
+        environment["PYTHONPATH"] = (
+            f"{root_path}{os.pathsep}{existing_python_path}" if existing_python_path else root_path
+        )
         command = [
             "uv",
             "run",
@@ -66,6 +75,7 @@ class SourceExecution:
                 encoding="utf-8",
                 errors="replace",
                 timeout=30,
+                env=environment,
             )
             if result.returncode == 0:
                 return []

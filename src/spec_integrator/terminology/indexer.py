@@ -3,10 +3,7 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-from spec_integrator.judge.llm_backend import (
-    call_openrouter_embeddings,
-    call_sakura_embeddings,
-)
+from spec_integrator.judge.llm_backend import call_ollama_embeddings
 
 if TYPE_CHECKING:
     from spec_integrator.config import Config
@@ -38,28 +35,16 @@ class TermIndexer:
     def index_embeddings(
         self, db: DocAuditDB, model: str | None = None, batch_size: int = 32
     ) -> int:
-        """Fetches embeddings from the configured provider and stores them."""
-        selected_model = model or getattr(
-            self.config.terminology,
-            "embedding_model",
-            "nvidia/nemotron-3-embed-1b:free",
-        )
-        selected_backend = getattr(self.config.terminology, "embedding_backend", "openrouter")
+        """Fetches embeddings from Ollama and stores them."""
+        selected_model = model or self.config.terminology.embedding_model
         unembedded = db.get_unembedded_terms(selected_model)
         if not unembedded:
             return 0
 
         try:
-            if selected_backend == "openrouter":
-                vectors = call_openrouter_embeddings(
-                    self.config, unembedded, model=selected_model, batch_size=batch_size
-                )
-            elif selected_backend == "sakura":
-                vectors = call_sakura_embeddings(
-                    self.config, unembedded, model=selected_model, batch_size=batch_size
-                )
-            else:
-                raise ValueError(f"Unsupported terminology embedding backend: '{selected_backend}'")
+            vectors = call_ollama_embeddings(
+                self.config, unembedded, model=selected_model, batch_size=batch_size
+            )
             records = [
                 (term, vec, selected_model) for term, vec in zip(unembedded, vectors, strict=False)
             ]
@@ -67,22 +52,18 @@ class TermIndexer:
             db.commit()
             return len(records)
         except Exception as e:
-            print(f"[Warning] Failed to generate term embeddings via {selected_backend}: {e}")
+            print(f"[Warning] Failed to generate term embeddings via Ollama: {e}")
             return 0
 
     def compute_and_save_similarities(
         self, db: DocAuditDB, model: str | None = None, min_similarity: float | None = None
     ) -> int:
         """Calculates pairwise cosine similarity across all embedded terms and persists high-similarity pairs."""
-        selected_model = model or getattr(
-            self.config.terminology,
-            "embedding_model",
-            "nvidia/nemotron-3-embed-1b:free",
-        )
+        selected_model = model or self.config.terminology.embedding_model
         threshold = (
             min_similarity
             if min_similarity is not None
-            else getattr(self.config.terminology, "similarity_threshold", 0.80)
+            else self.config.terminology.similarity_threshold
         )
 
         embeddings_dict = db.get_all_term_embeddings(selected_model)

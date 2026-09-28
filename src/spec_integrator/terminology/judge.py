@@ -3,51 +3,12 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from spec_integrator.judge.checksheet import Checksheet, submit_checksheet
 from spec_integrator.models import VerificationIssue
-from spec_integrator.judge.llm_backend import (
-    call_ollama,
-    call_openrouter,
-    call_openrouter_jev,
-    call_sakura,
-    extract_json,
-)
 
 if TYPE_CHECKING:
     from spec_integrator.config import Config
     from spec_integrator.db import DocAuditDB
-
-TERM_JUDGE_PROMPT = """\
-You are an expert auditor for technical documentation consistency and terminology standardization.
-Compare the following two terms and the context snippets where they appear in the specification documents.
-
-[Term A]: {term_a}
-Location: {file_a}:{line_a} (Section: {heading_a})
-Context Snippet:
-{snippet_a}
-
-[Term B]: {term_b}
-Location: {file_b}:{line_b} (Section: {heading_b})
-Context Snippet:
-{snippet_b}
-
-[Audit Instructions]
-Taking the context into account, determine whether these two terms represent "undesirable term variance" (i.e. inconsistent spelling or uncoordinated synonyms referring to the exact same concept/entity that should be unified), or if they refer to distinct, legitimate technical concepts.
-- If they refer to distinct technical concepts, separate components, or deliberately different abstractions (e.g. "interrupt handler" vs "interrupt vector", or "handler" vs "handle"), it is NOT a term variance (set "is_variance": false).
-- If they refer to the identical concept/entity but differ merely in phonetic elongation (chōonpu, e.g. "ハイパーバイザ" vs "ハイパーバイザー"), okurigana variations (e.g. "割込" vs "割り込み", "切替" vs "切り替え"), or uncoordinated synonyms for the same component, it IS an undesirable term variance (set "is_variance": true).
-- Specify "confidence" as a float between 0.0 (definitely not variance) and 1.0 (certainly undesirable variance).
-- In "preferred_term", suggest which term should be the standardized canonical term.
-- In "reason", provide a concise explanation (in Japanese) of your determination.
-
-Respond strictly in the following JSON format:
-```json
-{{
-  "is_variance": true,
-  "confidence": 0.95,
-  "preferred_term": "<preferred canonical term>",
-  "reason": "<explanation in Japanese>"
-}}
-```
-"""
 
 
 class TermVarianceJudge:
@@ -55,25 +16,6 @@ class TermVarianceJudge:
 
     def __init__(self, config: Config):
         self.config = config
-
-    def _call_backend(self, prompt: str, backend: str, model: str | None) -> str:
-        b = backend.lower()
-        if b == "sakura":
-            return call_sakura(self.config, prompt, model)
-        if b == "openrouter":
-            return call_openrouter(self.config, prompt, model)
-        if b == "ollama":
-            return call_ollama(self.config, prompt, model)
-        if b == "mock":
-            return json.dumps(
-                {
-                    "is_variance": True,
-                    "confidence": 0.95,
-                    "preferred_term": "モック統一表記",
-                    "reason": "Mock term variance judgment",
-                }
-            )
-        raise ValueError(f"Unknown LLM backend: '{backend}'")
 
     def judge_similar_pairs(
         self,
@@ -84,6 +26,8 @@ class TermVarianceJudge:
     ) -> int:
         """Evaluates high-similarity pairs with LLM context check and records variance judgments."""
         used_backend = backend or self.config.llm_judge.default_backend
+        if used_backend not in ("jev", "mock"):
+            raise ValueError(f"Unsupported checksheet backend: '{used_backend}'")
         similarities = db.get_term_similarities()
 
         unjudged_pairs = [
@@ -118,24 +62,11 @@ class TermVarianceJudge:
             occ_a = occs_a[0]
             occ_b = occs_b[0]
 
-            prompt = TERM_JUDGE_PROMPT.format(
-                term_a=term_a,
-                file_a=occ_a.get("file_path", "unknown"),
-                line_a=occ_a.get("line_start", 1),
-                heading_a=occ_a.get("heading", ""),
-                snippet_a=occ_a.get("snippet", term_a),
-                term_b=term_b,
-                file_b=occ_b.get("file_path", "unknown"),
-                line_b=occ_b.get("line_start", 1),
-                heading_b=occ_b.get("heading", ""),
-                snippet_b=occ_b.get("snippet", term_b),
-            )
-
             try:
                 if used_backend == "jev":
-                    response = call_openrouter_jev(
-                        self.config,
-                        {
+                    sheet = Checksheet(
+                        name="term_variance",
+                        state={
                             "term_a": term_a,
                             "term_a_file": occ_a.get("file_path", "unknown"),
                             "term_a_heading": occ_a.get("heading", ""),
@@ -145,7 +76,7 @@ class TermVarianceJudge:
                             "term_b_heading": occ_b.get("heading", ""),
                             "term_b_context": occ_b.get("snippet", term_b),
                         },
-                        {
+                        questions={
                             "term_decision": {
                                 "type": "choice",
                                 "instructions": (
@@ -169,8 +100,8 @@ class TermVarianceJudge:
                                 },
                             }
                         },
-                        model,
                     )
+                    response = submit_checksheet(self.config, sheet, model)
                     answer = response["answers"]["term_decision"]
                     decision = answer.get("choice")
                     if decision not in (
@@ -183,22 +114,16 @@ class TermVarianceJudge:
                     confidence = float(answer["confidence"])
                     if not 0.0 <= confidence <= 1.0:
                         raise ValueError("Jev returned a confidence outside the 0-1 range")
-                    data = {
-                        "is_variance": is_variance,
-                        "confidence": confidence,
-                        "preferred_term": term_b if decision == "variance_prefer_b" else term_a,
-                        "reason": (
-                            f"Jev selected '{decision}' with {confidence:.0%} confidence; "
-                            "the decision model does not return a text rationale."
-                        ),
-                    }
+                    preferred_term = term_b if decision == "variance_prefer_b" else term_a
+                    reason = (
+                        f"Jev selected '{decision}' with {confidence:.0%} confidence; "
+                        "the decision model does not return a text rationale."
+                    )
                 else:
-                    raw = self._call_backend(prompt, used_backend, model)
-                    data = extract_json(raw)
-                is_var = bool(data.get("is_variance", False))
-                conf = float(data.get("confidence", 0.0))
-                pref = str(data.get("preferred_term", term_a))
-                reason = str(data.get("reason", ""))
+                    is_variance = True
+                    confidence = 0.95
+                    preferred_term = term_a
+                    reason = "Mock term variance judgment"
 
                 db.insert_term_variance_judgment(
                     term_a=term_a,
@@ -207,9 +132,9 @@ class TermVarianceJudge:
                     file_b=occ_b.get("file_path", ""),
                     line_a=occ_a.get("line_start", 1),
                     line_b=occ_b.get("line_start", 1),
-                    is_variance=is_var,
-                    confidence=conf,
-                    preferred_term=pref,
+                    is_variance=is_variance,
+                    confidence=confidence,
+                    preferred_term=preferred_term,
                     reason=reason,
                     backend=used_backend,
                 )
@@ -227,7 +152,7 @@ class TermVarianceJudge:
         threshold = (
             min_confidence
             if min_confidence is not None
-            else getattr(self.config.terminology, "confidence_threshold", 0.70)
+            else self.config.terminology.confidence_threshold
         )
 
         rows = db.get_high_confidence_variances(min_confidence=threshold)

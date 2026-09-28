@@ -3,10 +3,7 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-from spec_integrator.judge.llm_backend import (
-    call_openrouter_embeddings,
-    call_sakura_embeddings,
-)
+from spec_integrator.judge.llm_backend import call_ollama_embeddings
 
 if TYPE_CHECKING:
     from spec_integrator.config import Config
@@ -41,14 +38,9 @@ class SectionTopicIndexer:
         model: str | None = None,
         batch_size: int | None = None,
     ) -> int:
-        """Fetches embeddings from the configured provider for unembedded/changed sections."""
-        selected_model = model or getattr(
-            self.config.semantic_topic,
-            "embedding_model",
-            "nvidia/nemotron-3-embed-1b:free",
-        )
-        selected_backend = getattr(self.config.semantic_topic, "backend", "openrouter")
-        b_size = batch_size or getattr(self.config.semantic_topic, "batch_size", 16)
+        """Fetches embeddings from Ollama for unembedded/changed sections."""
+        selected_model = model or self.config.semantic_topic.embedding_model
+        b_size = batch_size or self.config.semantic_topic.batch_size
 
         unembedded = db.get_unembedded_sections(selected_model)
         if not unembedded:
@@ -62,18 +54,9 @@ class SectionTopicIndexer:
             batch_secs = unembedded[i : i + b_size]
             batch_texts = [f"{hd}\n{body[:350]}".strip() for _sid, _fp, hd, body, _ch in batch_secs]
             try:
-                if selected_backend == "openrouter":
-                    vectors = call_openrouter_embeddings(
-                        self.config, batch_texts, model=selected_model, batch_size=b_size
-                    )
-                elif selected_backend == "sakura":
-                    vectors = call_sakura_embeddings(
-                        self.config, batch_texts, model=selected_model, batch_size=b_size
-                    )
-                else:
-                    raise ValueError(
-                        f"Unsupported semantic topic embedding backend: '{selected_backend}'"
-                    )
+                vectors = call_ollama_embeddings(
+                    self.config, batch_texts, model=selected_model, batch_size=b_size
+                )
                 records = [
                     (sec_id, fp, hd, ch, vec, selected_model)
                     for (sec_id, fp, hd, _body, ch), vec in zip(batch_secs, vectors, strict=False)
@@ -94,15 +77,11 @@ class SectionTopicIndexer:
         min_similarity: float | None = None,
     ) -> int:
         """Calculates pairwise cosine similarity across sections in different files and persists high-similarity pairs."""
-        selected_model = model or getattr(
-            self.config.semantic_topic,
-            "embedding_model",
-            "nvidia/nemotron-3-embed-1b:free",
-        )
+        selected_model = model or self.config.semantic_topic.embedding_model
         threshold = (
             min_similarity
             if min_similarity is not None
-            else getattr(self.config.semantic_topic, "similarity_threshold", 0.80)
+            else self.config.semantic_topic.similarity_threshold
         )
 
         all_sections = db.get_all_section_embeddings(selected_model)

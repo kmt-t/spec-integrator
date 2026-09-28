@@ -99,8 +99,8 @@ co-change の依存関係は `{Keyword}` の既存トレーサビリティから
   - 各要求／設計キーワードの複雑度・設計リスクをスコアリングし、リスクが閾値以上のキーワードに `{VERIFY_LLM}` 義務を課す（Obligation Gate が読む）。結果はすべて SQLite DB に永続化。
 - **用語表記揺れ検査 (`llm-word` コマンド)**:
   - TF-IDF による抽出キーワードとエンベディング類似度・LLM による文脈判定を組み合わせ、用語表記揺れやタイポを高精度に検出。
-- **LLM as a Judge セマンティック監査 (`llm-single-review`, `llm-keyword-review` コマンド)**:
-  - 単一ドキュメント・セクションの自己一貫性監査、または高リスクキーワードが連結するドキュメント島全体のトレーサビリティ・意味的矛盾を Jev / Sakura / OpenRouter / Ollama バックエンドで診断。Jev は基準ごとの型付き判定と確率を返すが、説明文・引用箇所は生成しない。
+- **System One チェックシート監査 (`llm-single-review`, `llm-keyword-review` コマンド)**:
+  - セクションまたはキーワード定義・参照ペアを証拠単位とし、Jev の型付き設問で判定する。Jev は設問ごとの分類と確信度を返すが、説明文・引用箇所は生成しない。
 - **SQLite データベース・監査キャッシュ (`DocAuditDB`)**:
   - ドキュメント構造の高速クエリ、ハッシュ値による差分検証キャッシュに加え、`risk`/`llm-single-review`/`llm-keyword-review` の基準ごとの分類・確信度を記録するローカル生成データ。
 - **CI / GitHub Actions ファースト**:
@@ -165,11 +165,11 @@ spec-integrator graph -f json -o graph.json
 # 結果はキャッシュ DB に記録され、check-doc レポートの Risk Assessment Detail 節に反映される
 spec-integrator risk --config spec-integrator.yaml
 ```
-Fireball の設定では OpenRouter 経由の Jev を既定で使うため、`OPENROUTER_API_KEY` を環境変数に設定する。必要に応じて `--backend openrouter` などを指定できる。`llm-word` の用語候補抽出にも OpenRouter の多言語埋め込みモデルを使い、別の `SAKURA_API_KEY` は要求しない。
+判定には OpenRouter 経由の Jev (`typesafe/jev-1.13`) の System One API を使う。埋め込み生成にはローカル Ollama の `qwen3-embedding` を使う。OpenRouter には `OPENROUTER_API_KEY` を設定する。Ollama の接続先は `embeddings.endpoint` で指定する。初回は `ollama pull qwen3-embedding` で埋め込みモデルを取得する。
 
 ### 8. 用語表記揺れチェック (`llm-word`)
 ```bash
-# 用語の LLM 文脈判定をスキップ (未作成の埋め込みがあれば embedding API は呼び出す)
+# 用語の LLM 文脈判定をスキップ (未作成の埋め込みがあればローカル Ollama を呼び出す)
 spec-integrator llm-word --quick
 
 # エンベディング + LLM 文脈判定込み
@@ -187,9 +187,11 @@ spec-integrator llm-keyword-review --keyword SCHED_DISPATCH_TIMEOUT
 # 確信度70%以上の違反候補をDBから検索（API呼び出しなし）
 spec-integrator llm-findings --min-confidence 0.70
 ```
-Jev は各レビュー基準を個別に分類し、選択肢ごとの確信度を返す。結果は「明確な違反」「違反の可能性」「既知の未解決事項」「文脈不足」「改善提案」「問題なし」に分かれ、明確な違反だけを設定済み重大度で FAIL/WARN にし、可能性や文脈不足は WARN、未解決事項と改善提案は INFO として残す。
+文書レビューのチェックシートは各基準を個別に分類し、確信度を記録する。結果は「明確な違反」「違反の可能性」「既知の未解決事項」「文脈不足」「改善提案」「問題なし」に分かれる。明確な違反は設定済み重大度で FAIL/WARN とし、可能性や文脈不足は WARN、未解決事項と改善提案は INFO として残す。
 
-キーワード監査では、キーワード台帳が指定する定義元セクションと参照セクションを1組ずつ `DEFINITION` / `REFERENCE` と明示して Jev に渡す。定義の置き場所・内容と、対応する参照のセクション単位 `traceability` リンクを各ペアで確認する。Jev は説明文や文書内の引用箇所を生成しないため、WARN/INFO の確認には結果に記録された定義・参照セクションを読み直す。説明や引用が必要な場合は `--backend openrouter` などチャット型バックエンドを指定する。
+キーワード監査では、文書内の `definition` 宣言を持つセクションと `traceability` 参照セクションを1組ずつ `DEFINITION` / `REFERENCE` と明示して Jev に渡す。WARN/INFO の根拠確認には結果に記録されたセクションを読み直す。
+
+監査基準の ID・対象モード・重大度はルートの `spec-integrator.yaml` を正本とし、個別の判定指示は `prompts/checks/` に置く。リスク評価・用語判定・文書レビューはいずれも証拠と型付き設問を持つチェックシートとして送信する。`--dry-run` は送信するチェックシートを表示する。
 
 判定単位の分類と確信度は SQLite の `judge_evaluations` テーブルへ保存する。`llm-findings --min-confidence 0.70` は既定で `confirmed_violation` と `possible_violation` を検索する。`--all-outcomes` を付けると文脈不足・既知の未解決事項・問題なしも含められ、`--run-type` で監査コマンドを絞り込める。
 
@@ -262,16 +264,12 @@ llm_judge:
       api_key_env: "OPENROUTER_API_KEY"
       endpoint: "https://openrouter.ai/api/alpha/decisions"
       model: "typesafe/jev-1.13"
-    sakura:
-      api_key_env: "SAKURA_API_KEY"
-      model: "preview/gemma-4-31B-it"
-    ollama:
-      endpoint: "http://localhost:11434"
-      model: "llama3"
+
+embeddings:
+  endpoint: "http://localhost:11434"
 
 terminology:
-  embedding_backend: "openrouter"
-  embedding_model: "nvidia/nemotron-3-embed-1b:free"
+  embedding_model: "qwen3-embedding"
 ```
 
 ---

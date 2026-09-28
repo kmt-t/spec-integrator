@@ -1,8 +1,8 @@
 import pytest
 from spec_integrator.anti_sabotage.checks.consist_symbol_drift import normalize_value
 from spec_integrator.config import Config, KeywordRule
-from spec_integrator.parser import MarkdownParser
 from spec_integrator.document.gates.consistency import ConsistencyVerifier
+from spec_integrator.parser import MarkdownParser
 
 
 def _docs(tmp_path, files: dict[str, str]):
@@ -207,9 +207,9 @@ def test_duplicate_keyword_definition_is_reported(tmp_path):
                 "## 3.1 機能要求\n"
                 "| キーワード | 内容 | 優先度 |\n"
                 "| :--- | :--- | :--- |\n"
-                "| `{HAL_Interface}` | 物理デバイス操作を抽象化する。 | 高 |\n"
-                "| `{OtherThing}` | 別の要求。 | 中 |\n"
-                "| `{HAL_Interface}` | 物理デバイス操作を抽象化する。 | 高 |\n"
+                "| {HAL_Interface} | 物理デバイス操作を抽象化する。 <!-- definition: {HAL_Interface} --> | 高 |\n"
+                "| {OtherThing} | 別の要求。 | 中 |\n"
+                "| {HAL_Interface} | 物理デバイス操作を抽象化する。 <!-- definition: {HAL_Interface} --> | 高 |\n"
             ),
         },
     )
@@ -221,8 +221,7 @@ def test_duplicate_keyword_definition_is_reported(tmp_path):
 
 
 def test_a_keyword_defined_once_is_not_reported(tmp_path):
-    """Citing a keyword inside another row, or in prose, is an ordinary reference
-    and must not be mistaken for a second definition."""
+    """Traceability comments and inline code do not create duplicate definitions."""
     cfg, parsed, docs_dir = _docs(
         tmp_path,
         {
@@ -231,9 +230,10 @@ def test_a_keyword_defined_once_is_not_reported(tmp_path):
                 "## 3.1 機能要求\n"
                 "| キーワード | 内容 | 優先度 |\n"
                 "| :--- | :--- | :--- |\n"
-                "| `{HAL_Interface}` | 物理デバイス操作を抽象化する。 | 高 |\n"
-                "| `{OtherThing}` | `{HAL_Interface}` を利用する別の要求。 | 中 |\n"
-                "\n本文中で `{HAL_Interface}` に言及する。\n"
+                "| {HAL_Interface} | 物理デバイス操作を抽象化する。 | 高 |\n"
+                "| {OtherThing} | 物理デバイス操作を利用する別の要求。 | 中 |\n"
+                "<!-- traceability: {HAL_Interface} -->\n"
+                "\n本文中でHAL_Interfaceに言及する。\n"
             ),
         },
     )
@@ -241,9 +241,8 @@ def test_a_keyword_defined_once_is_not_reported(tmp_path):
     assert [i for i in issues if i.rule_code == "CONSIST-DUPLICATE-DEFINITION"] == []
 
 
-def test_a_duplicate_outside_a_definition_file_is_not_reported(tmp_path):
-    """Design documents restate keywords in tables all the time; only the
-    definition source can hold a duplicate *definition*."""
+def test_inline_markers_outside_the_indexed_source_are_not_definitions(tmp_path):
+    """An inline marker elsewhere cannot relocate the keyword's definition."""
     cfg, parsed, docs_dir = _docs(
         tmp_path,
         {
@@ -252,8 +251,8 @@ def test_a_duplicate_outside_a_definition_file_is_not_reported(tmp_path):
                 "## 1. 概要\n"
                 "| キーワード | 内容 |\n"
                 "| :--- | :--- |\n"
-                "| `{HAL_Interface}` | ここでの説明。 |\n"
-                "| `{HAL_Interface}` | 別の観点からの説明。 |\n"
+                "| {HAL_Interface} | ここでの説明。 |\n"
+                "| {HAL_Interface} | 別の観点からの説明。 |\n"
             ),
         },
     )

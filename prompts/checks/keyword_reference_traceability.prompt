@@ -3,7 +3,6 @@ Review the supplied `REFERENCE SECTION` against its separately labelled `DEFINIT
 Check that:
 - The reference section places the keyword in the section-level `<!-- traceability: {Keyword} -->` comment immediately associated with that section.
 - A keyword appearing only in ordinary prose, a table value, or an inline list is not treated as a valid reference link.
-- The reference section uses the definition rather than silently introducing a competing definition or contradicting it.
-- Do not infer or require other references outside this pair, and do not report style preferences.
+- Do not infer or require other references outside this pair, and do not report style preferences. Leave competing definitions and contradictory meaning to `keyword_definition_integrity` and `vertical_consistency`.
 
-The project rule is defined in `docs/architecture/document_structure.md` section 4.4. Use the explicit `DEFINITION` and `REFERENCE` labels in the supplied context; do not infer a section's role from its wording alone.
+Use the explicit `DEFINITION` and `REFERENCE` labels in the supplied context; do not infer a section's role from its wording alone.

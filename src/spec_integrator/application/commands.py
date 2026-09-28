@@ -23,6 +23,8 @@ from spec_integrator.terminology import (
     TermVarianceJudge,
 )
 
+CHECKSHEET_BACKENDS = ("jev", "mock")
+
 
 def _configure_utf8_stdio() -> None:
     """Ensure UTF-8 output on Windows consoles."""
@@ -108,20 +110,6 @@ tiers:
     path_pattern: '(architecture|plans)/.*\.md'
     description: "Architecture & Plans"
 
-keywords:
-  meta:
-    pattern: '^META_[A-Za-z0-9_]+$'
-    defined_in: 'architecture/document_structure\.md'
-  global:
-    pattern: '^GLOBAL_[A-Za-z0-9_]+$'
-    defined_in: 'architecture/document_structure\.md'
-  local:
-    # Allows hyphens: hyphenated per-component GOTCHA-ID keywords
-    # (SCHED-GOTCHA-01, DBG-GOTCHA-01, ...) are a common convention and must
-    # be classifiable as local keywords to ever resolve as "defined".
-    pattern: '^[A-Za-z0-9_-]+$'
-    defined_in: 'requires/.*\.md'
-
 formal_verification:
   model_dir_name: "formal"
   tag: "{VERIFY_FORMAL}"
@@ -140,16 +128,12 @@ llm_judge:
       api_key_env: "OPENROUTER_API_KEY"
       endpoint: "https://openrouter.ai/api/alpha/decisions"
       model: "typesafe/jev-1.13"
-    sakura:
-      api_key_env: "SAKURA_API_KEY"
-      model: "sakura-ai-model"
-    ollama:
-      endpoint: "http://localhost:11434"
-      model: "llama3"
+
+embeddings:
+  endpoint: "http://localhost:11434"
 
 terminology:
-  embedding_backend: "openrouter"
-  embedding_model: "nvidia/nemotron-3-embed-1b:free"
+  embedding_model: "qwen3-embedding"
 
 evidence:
   enabled: true
@@ -624,7 +608,9 @@ def cmd_llm_findings(args):
     if not rows:
         print("No matching stored evaluations. Run an LLM review to populate the confidence index.")
         sys.exit(0)
-    print("Jev does not store rationale or citations; review each listed section manually.")
+    print(
+        "Typed decision backends do not store rationale or citations; review each listed section manually."
+    )
     headers = [
         "confidence",
         "outcome",
@@ -663,8 +649,7 @@ def cmd_llm_word(args):
     documents, _graph, db, _docs_root = _load_and_parse_all(config)
 
     indexer = TermIndexer(config)
-    embedding_backend = config.terminology.embedding_backend
-    _log(f">>> [1/3] Generating term embeddings via {embedding_backend}...")
+    _log(">>> [1/3] Generating term embeddings via Ollama...")
     new_embeddings = indexer.index_embeddings(db, model=args.embedding_model)
     _log(f"✔ Indexed {new_embeddings} new term embedding(s).")
 
@@ -828,7 +813,7 @@ def _add_risk_subparser(subparsers) -> None:
     _add_config_arg(p)
     p.add_argument(
         "--backend",
-        choices=["jev", "openrouter", "sakura", "ollama", "mock"],
+        choices=CHECKSHEET_BACKENDS,
         help="Risk assessor backend",
     )
     p.add_argument("--model", help="LLM model name override")
@@ -861,7 +846,7 @@ def _add_llm_word_subparser(subparsers) -> None:
     _add_config_arg(p)
     p.add_argument(
         "--backend",
-        choices=["jev", "openrouter", "sakura", "ollama", "mock"],
+        choices=CHECKSHEET_BACKENDS,
         help="LLM backend",
     )
     p.add_argument("--model", help="LLM model name override")
@@ -929,7 +914,7 @@ def _add_llm_single_review_subparser(subparsers) -> None:
     )
     p.add_argument(
         "--backend",
-        choices=["jev", "openrouter", "sakura", "ollama", "mock"],
+        choices=CHECKSHEET_BACKENDS,
         help="LLM backend override",
     )
     p.add_argument("--model", help="LLM model name override")
@@ -967,7 +952,7 @@ def _add_llm_keyword_review_subparser(subparsers) -> None:
     )
     p.add_argument(
         "--backend",
-        choices=["jev", "openrouter", "sakura", "ollama", "mock"],
+        choices=CHECKSHEET_BACKENDS,
         help="LLM backend override",
     )
     p.add_argument("--model", help="LLM model name override")
@@ -1017,7 +1002,7 @@ def _add_llm_judge_subparser(subparsers) -> None:
     )
     p.add_argument(
         "--backend",
-        choices=["jev", "openrouter", "sakura", "ollama", "mock"],
+        choices=CHECKSHEET_BACKENDS,
         help="LLM backend override",
     )
     p.add_argument("--model", help="LLM model name override")

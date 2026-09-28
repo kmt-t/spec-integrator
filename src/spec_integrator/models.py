@@ -45,6 +45,9 @@ class ParsedSection:
     keywords: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)  # {VERIFY_FORMAL}, {VERIFY_LLM}, etc.
     links: list[ParsedLink] = field(default_factory=list)
+    definition_keywords: list[str] = field(default_factory=list)
+    canonical_definition_keywords: list[str] = field(default_factory=list)
+    reference_keywords: list[str] = field(default_factory=list)
 
 
 @dataclass

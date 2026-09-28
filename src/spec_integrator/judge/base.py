@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import time
-from typing import Any
-
 from spec_integrator.config import Config
-from spec_integrator.judge import llm_backend
+from spec_integrator.judge.checksheet import Checksheet, submit_checksheet
 from spec_integrator.models import ParsedDocument, ParsedSection
 
 
 class BaseJudge:
     """Base class for LLM-based judges and risk assessors.
 
-    Provides unified LLM communication, retry logic, prompt budgeting,
-    JSON parsing, and document/subgraph lookup helpers.
+    Provides checksheet submission, content budgeting, and document lookup helpers.
     """
 
     def __init__(self, config: Config):
@@ -30,54 +26,8 @@ class BaseJudge:
             "report the truncation as a limitation instead.]"
         )
 
-    def _call_sakura(self, prompt: str, model: str | None) -> str:
-        return llm_backend.call_sakura(self.config, prompt, model)
-
-    def _call_openrouter(self, prompt: str, model: str | None) -> str:
-        return llm_backend.call_openrouter(self.config, prompt, model)
-
-    def _call_jev(
-        self, state: str | dict, questions: dict[str, dict], model: str | None = None
-    ) -> dict:
-        return llm_backend.call_openrouter_jev(self.config, state, questions, model)
-
-    def _call_ollama(self, prompt: str, model: str | None) -> str:
-        return llm_backend.call_ollama(self.config, prompt, model)
-
-    def _call_llm_with_retry(
-        self,
-        prompt: str,
-        backend: str | None = None,
-        model: str | None = None,
-        max_attempts: int = 3,
-        retry_delay: float = 2.0,
-    ) -> str:
-        """Dispatches prompt to the specified backend with automatic retry."""
-        selected_backend = backend or self.config.llm_judge.default_backend
-        if selected_backend not in ("sakura", "openrouter", "ollama"):
-            raise ValueError(f"Unsupported LLM backend: '{selected_backend}'")
-
-        last_err: Exception | None = None
-        for attempt in range(max_attempts):
-            try:
-                if selected_backend == "sakura":
-                    return self._call_sakura(prompt, model)
-                elif selected_backend == "openrouter":
-                    return self._call_openrouter(prompt, model)
-                elif selected_backend == "ollama":
-                    return self._call_ollama(prompt, model)
-            except Exception as e:
-                last_err = e
-                if attempt < max_attempts - 1:
-                    time.sleep(retry_delay)
-
-        raise RuntimeError(
-            f"Failed to query LLM backend '{selected_backend}' after {max_attempts} attempts: {last_err}"
-        )
-
-    def _extract_json(self, raw_text: str) -> dict[str, Any]:
-        """Extracts JSON object from LLM response."""
-        return llm_backend.extract_json(raw_text)
+    def _submit_checksheet(self, sheet: Checksheet, model: str | None = None) -> dict:
+        return submit_checksheet(self.config, sheet, model)
 
     @staticmethod
     def _find_doc_and_sec(

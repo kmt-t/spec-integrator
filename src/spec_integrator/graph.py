@@ -60,7 +60,6 @@ class Graph:
         """Create one keyword group containing the sections linked to that keyword."""
         meta_docs = {
             "architecture/document_structure.md",
-            "architecture/keyword_dictionary.md",
             "requires/requirement_list.md",
         }
         keyword_files: dict[str, set[str]] = {}
@@ -220,10 +219,12 @@ class DocGraphBuilder:
                 parent_id = section_stack[-1][1] if section_stack else file_node_id
                 graph.add_edge(Edge(source=parent_id, target=sec_node_id, relation="contains"))
                 section_stack.append((sec.level, sec_node_id))
-                # Check if this document/section is the definition source for any keyword
-                for kw in sec.keywords:
+                # The index locates a source; only its inline marker creates a definition edge.
+                for kw in sorted(set(sec.keywords)):
                     item_id = f"item:{kw}"
-                    is_definition = self.config.is_keyword_definition(kw, doc.file_path)
+                    is_definition = self.config.is_keyword_definition(
+                        kw, doc.file_path, sec.canonical_definition_keywords
+                    )
                     graph.add_node(
                         Node(
                             id=item_id,
@@ -233,12 +234,8 @@ class DocGraphBuilder:
                             line=sec.line_start,
                         )
                     )
-                    if is_definition:
-                        graph.add_edge(Edge(source=sec_node_id, target=item_id, relation="defines"))
-                    else:
-                        graph.add_edge(
-                            Edge(source=sec_node_id, target=item_id, relation="refers_to")
-                        )
+                    relation = "defines" if is_definition else "refers_to"
+                    graph.add_edge(Edge(source=sec_node_id, target=item_id, relation=relation))
 
         # 3. Resolve Markdown links
         for doc in documents:
@@ -276,16 +273,6 @@ class DocGraphBuilder:
                         )
                     )
         return graph
-
-    def _is_keyword_definition(self, keyword: str, file_path: str) -> bool:
-        # Check rule mapping in config
-        for _k_type, rule in self.config.keywords.items():
-            import re
-
-            if re.match(rule.pattern, keyword):
-                if rule.is_definition_file(file_path):
-                    return True
-        return False
 
     def _find_section_for_line(self, doc: ParsedDocument, line_num: int) -> str:
         for sec in doc.sections:

@@ -85,6 +85,11 @@ class HierarchyCheck(AntiSabotageCheck):
         self, keyword: str, ctx: AntiSabotageContext
     ) -> int | str | None:
         for doc in ctx.documents:
-            if ctx.config.is_keyword_definition(keyword, doc.file_path):
+            if any(
+                ctx.config.is_keyword_definition(
+                    keyword, doc.file_path, section.canonical_definition_keywords
+                )
+                for section in doc.sections
+            ):
                 return doc.tier
         return None

@@ -171,13 +171,11 @@ class LLMCheckRule:
     severity: str = "ERROR"  # "ERROR" | "WARNING"
     prompt: str = ""
     prompt_file: str = ""
-    tags: list[str] = field(default_factory=list)
 
     def get_prompt_text(self, config_dir: Path) -> str:
         if self.prompt_file:
             path = (config_dir / self.prompt_file).resolve()
-            if path.exists():
-                return path.read_text(encoding="utf-8").strip()
+            return path.read_text(encoding="utf-8").strip()
         return self.prompt.strip()
 
 
@@ -188,6 +186,13 @@ class LLMJudgeConfig:
     backends: dict[str, LLMBackendConfig] = field(default_factory=dict)
     section_char_budget: int = 8000
     checks: list[LLMCheckRule] = field(default_factory=list)
+
+
+@dataclass
+class EmbeddingConfig:
+    """Ollama endpoint shared by terminology and section embeddings."""
+
+    endpoint: str = "http://localhost:11434"
 
 
 @dataclass
@@ -276,8 +281,7 @@ class TerminologyConfig:
     """Configuration for terminology variance detection."""
 
     enabled: bool = True
-    embedding_model: str = "nvidia/nemotron-3-embed-1b:free"
-    embedding_backend: str = "openrouter"
+    embedding_model: str = "qwen3-embedding"
     similarity_threshold: float = 0.90
     confidence_threshold: float = 0.70
     max_terms: int = 500
@@ -292,8 +296,7 @@ class SemanticTopicConfig:
     similarity_threshold: float = 0.80
     unlinked_warning_threshold: float = 0.82
     duplicate_warning_threshold: float = 0.90
-    embedding_model: str = "nvidia/nemotron-3-embed-1b:free"
-    backend: str = "openrouter"
+    embedding_model: str = "qwen3-embedding"
     batch_size: int = 16
     max_pairs: int = 1000
 
@@ -380,12 +383,14 @@ class Config:
     project: ProjectConfig = field(default_factory=ProjectConfig)
     tiers: list[TierConfig] = field(default_factory=list)
     keywords: dict[str, KeywordRule] = field(default_factory=dict)
+    keyword_registry_sources: dict[str, str | None] = field(default_factory=dict)
     formal_verification: FormalVerificationConfig = field(default_factory=FormalVerificationConfig)
     wit_verification: WITVerificationConfig = field(default_factory=WITVerificationConfig)
     benchmark_verification: BenchmarkVerificationConfig = field(
         default_factory=BenchmarkVerificationConfig
     )
     llm_judge: LLMJudgeConfig = field(default_factory=LLMJudgeConfig)
+    embeddings: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     evidence: EvidenceConfig = field(default_factory=EvidenceConfig)
     obligation: ObligationConfig = field(default_factory=ObligationConfig)
     consistency: ConsistencyConfig = field(default_factory=ConsistencyConfig)
@@ -461,7 +466,6 @@ class Config:
         keywords: dict[str, KeywordRule] = {}
         for k_type, k_data in data.get("keywords", {}).items():
             keywords[k_type] = _load_dataclass_from_dict(KeywordRule, k_data)
-
         # 4. LLM Judge Backends & Modular Checks
         llm_data = data.get("llm_judge", {})
         backends: dict[str, LLMBackendConfig] = {}
@@ -558,6 +562,7 @@ class Config:
                 BenchmarkVerificationConfig, data.get("benchmark_verification")
             ),
             llm_judge=llm_judge,
+            embeddings=_load_dataclass_from_dict(EmbeddingConfig, data.get("embeddings")),
             evidence=_load_dataclass_from_dict(EvidenceConfig, data.get("evidence")),
             obligation=_load_dataclass_from_dict(ObligationConfig, data.get("obligation")),
             consistency=consistency,
@@ -587,11 +592,44 @@ class Config:
                 return t.tier
         return None
 
-    def is_keyword_definition(self, keyword: str, file_path: str) -> bool:
-        """Checks if a given file_path is the definition source for the keyword."""
-        for _k_type, rule in self.keywords.items():
-            if re.match(rule.pattern, keyword):
-                return rule.is_definition_file(file_path)
+    def is_keyword_definition(
+        self,
+        keyword: str,
+        file_path: str,
+        declared_definitions: list[str] | None = None,
+    ) -> bool:
+        """Check an in-document definition declaration, with legacy config compatibility."""
+
+        if declared_definitions is not None:
+            return keyword in declared_definitions
+
+        # Older external configurations can still provide source locators while migrating.
+        return self._is_legacy_keyword_source(keyword, file_path)
+
+    def _is_legacy_keyword_source(self, keyword: str, file_path: str) -> bool:
+        """Resolve a source locator supplied by an older external configuration."""
+
+        if self.keyword_registry_sources:
+            if keyword not in self.keyword_registry_sources:
+                return False
+            indexed_source = self.keyword_registry_sources[keyword]
+            if indexed_source is None:
+                return False
+            path = Path(file_path)
+            if path.is_absolute():
+                try:
+                    relative_path = path.resolve().relative_to(self.get_docs_dir()).as_posix()
+                except ValueError:
+                    return False
+            else:
+                relative_path = normalize_rel_path(file_path)
+                if relative_path.startswith("docs/"):
+                    relative_path = relative_path[5:]
+            return relative_path == indexed_source
+
+        for rule in self.keywords.values():
+            if re.match(rule.pattern, keyword) and rule.is_definition_file(file_path):
+                return True
         return False
 
     def get_docs_dir(self) -> Path:
@@ -611,6 +649,7 @@ __all__ = [
     "BenchmarkVerificationConfig",
     "Config",
     "ConsistencyConfig",
+    "EmbeddingConfig",
     "EvidenceConfig",
     "FormalVerificationConfig",
     "KeywordRule",

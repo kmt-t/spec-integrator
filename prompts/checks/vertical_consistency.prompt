@@ -1,2 +1,2 @@
-Audit whether the supplied reference section strictly conforms to its paired DEFINITION / UPPER-TIER SPEC section.
-- Detect conflicting assumptions, mismatched parameters, invalidated preconditions, or broken invariants.
+Compare the supplied DEFINITION SECTION with its paired REFERENCE SECTION.
+Flag a concrete conflict in assumptions, values, register or buffer assignments, call signatures, state names, ordering guarantees, preconditions, or invariants. Require explicit evidence on both sides. Do not infer mismatches with sections outside this pair.

@@ -1,9 +1,13 @@
 from pathlib import Path
 
-from spec_integrator.config import Config, PysimImportConfig, PysimImportTierConfig
+from spec_integrator.config import (
+    Config,
+    PysimImportConfig,
+    PysimImportTierConfig,
+    SourceGroupConfig,
+)
 from spec_integrator.source import SourceIssue
 from spec_integrator.source.analyzer import SourceAnalyzer
-from spec_integrator.source.coordinator import SourceVerifier
 
 
 def _check_python(tmp_path: Path, source: str, rules: list[str]) -> list[SourceIssue]:
@@ -35,12 +39,30 @@ value_with_alias: type_api.Any
     ]
 
 
+def test_explicit_source_files_respect_group_include_directories(tmp_path: Path) -> None:
+    docs_file = tmp_path / "docs" / "sample_concept.py"
+    pysim_file = tmp_path / "experiments" / "pysim" / "sample.py"
+    docs_file.parent.mkdir(parents=True)
+    pysim_file.parent.mkdir(parents=True)
+    docs_file.write_text("pass\n", encoding="utf-8")
+    pysim_file.write_text("pass\n", encoding="utf-8")
+
+    config = Config()
+    config.config_dir = tmp_path
+    config.source_verification.groups["python_pysim"] = SourceGroupConfig(
+        include_dirs=["experiments/pysim"], extensions=[".py"]
+    )
+    files = SourceAnalyzer(config).collect_files_for_group("python_pysim", [docs_file, pysim_file])
+
+    assert files == [pysim_file.resolve()]
+
+
 def test_python_static_checks_use_ast_for_empty_functions_and_guards(
     tmp_path: Path,
 ) -> None:
     issues = _check_python(
         tmp_path,
-        '''def placeholder():
+        """def placeholder():
     pass
 
 def omitted():
@@ -50,7 +72,7 @@ def build_model(guards: bool):
     return guards
 
 build_model(guards=False)
-''',
+""",
         ["empty_function", "mutation_guards_required"],
     )
 
@@ -63,14 +85,14 @@ build_model(guards=False)
 def test_python_static_checks_allow_protocol_contract_bodies(tmp_path: Path) -> None:
     issues = _check_python(
         tmp_path,
-        '''from typing import Protocol
+        """from typing import Protocol
 
 class Contract(Protocol):
     def required(self, value: int) -> str: ...
 
 def placeholder() -> None:
     ...
-''',
+""",
         ["empty_function"],
     )
 
@@ -89,12 +111,12 @@ def test_python_static_checks_report_ast_syntax_errors(tmp_path: Path) -> None:
 def test_python_pysim_rejects_builtin_list_dict_and_set(tmp_path: Path) -> None:
     issues = _check_python(
         tmp_path,
-        '''
+        """
 values: list[int] = [1, 2]
 mapping = dict()
 flags = {1, 2}
 items = list(values)
-''',
+""",
         ["forbid_builtin_containers"],
     )
 
@@ -110,14 +132,14 @@ items = list(values)
 def test_python_pysim_rejects_tuple_rebuild_and_concat(tmp_path: Path) -> None:
     issues = _check_python(
         tmp_path,
-        '''
+        """
 values: tuple[int, ...] = (1,)
 other: tuple[int, ...] = (2,)
 merged = values + other
 rebuilt = tuple(values)
 generated = tuple(value for value in values)
 expanded = (*values, *other)
-''',
+""",
         ["forbid_builtin_containers"],
     )
 
@@ -159,7 +181,7 @@ def test_python_pysim_rejects_runtime_string_members_but_allows_constants(
 ) -> None:
     issues = _check_python(
         tmp_path,
-        '''class Metadata:
+        """class Metadata:
     name: str
     labels: ReadOnlyFlatMapView[int, str]
     constant_name: str = "ROM_NAME"
@@ -169,7 +191,7 @@ def test_python_pysim_rejects_runtime_string_members_but_allows_constants(
 
 def local(value: str) -> int:
     return 0
-''',
+""",
         ["forbid_string_members"],
     )
 
@@ -198,7 +220,7 @@ def test_python_pysim_rejects_non_none_union_in_special_method_signature(
 def test_python_pysim_rejects_raise_but_allows_except(tmp_path: Path) -> None:
     issues = _check_python(
         tmp_path,
-        '''def catches(value: int) -> int:
+        """def catches(value: int) -> int:
     try:
         return int(value)
     except ValueError:
@@ -206,7 +228,7 @@ def test_python_pysim_rejects_raise_but_allows_except(tmp_path: Path) -> None:
 
 def sends(value: int) -> int:
     raise ValueError(value)
-''',
+""",
         ["forbid_raise"],
     )
 
@@ -218,12 +240,12 @@ def sends(value: int) -> int:
 def test_python_pysim_rejects_rtti_and_in_operator(tmp_path: Path) -> None:
     issues = _check_python(
         tmp_path,
-        '''def lookup(value: int, values: tuple[int, ...]) -> bool:
+        """def lookup(value: int, values: tuple[int, ...]) -> bool:
     return value in values
 
 def inspect(value: int) -> bool:
     return isinstance(value, int)
-''',
+""",
         ["forbid_rtti", "forbid_in_operator"],
     )
 
@@ -251,7 +273,9 @@ def test_pysim_import_check_uses_configured_file_tiers(tmp_path: Path) -> None:
     pysim_root = tmp_path / "experiments" / "pysim"
     (pysim_root / "tier1").mkdir(parents=True)
     (pysim_root / "tier2").mkdir(parents=True)
-    (pysim_root / "tier1" / "contract.py").write_text("from implementation import Value\n", encoding="utf-8")
+    (pysim_root / "tier1" / "contract.py").write_text(
+        "from implementation import Value\n", encoding="utf-8"
+    )
     (pysim_root / "tier2" / "implementation.py").write_text("class Value: pass\n", encoding="utf-8")
 
     config = Config()
@@ -266,6 +290,4 @@ def test_pysim_import_check_uses_configured_file_tiers(tmp_path: Path) -> None:
 
     issues = SourceAnalyzer(config)._check_pysim_imports("python_pysim")
 
-    assert [(issue.rule, issue.line) for issue in issues] == [
-        ("PYSIM-IMPORT-DIRECTION", 1)
-    ]
+    assert [(issue.rule, issue.line) for issue in issues] == [("PYSIM-IMPORT-DIRECTION", 1)]

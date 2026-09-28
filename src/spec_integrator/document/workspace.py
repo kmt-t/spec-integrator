@@ -68,10 +68,12 @@ def load_workspace(
                 section.body_text,
                 section_hash,
             )
-            for keyword in section.keywords:
+            for keyword in sorted(set(section.keywords)):
                 relation = (
                     "defines"
-                    if config.is_keyword_definition(keyword, document.file_path)
+                    if config.is_keyword_definition(
+                        keyword, document.file_path, section.canonical_definition_keywords
+                    )
                     else "refers_to"
                 )
                 db.insert_keyword_reference(

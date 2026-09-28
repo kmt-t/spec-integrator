@@ -12,12 +12,12 @@ def test_claim_evidence_criterion_is_configured():
     rule = next((r for r in config.llm_judge.checks if r.id == "claim_substantiation"), None)
     assert rule is not None
     prompt_text = rule.get_prompt_text(config.config_dir)
-    assert "Unbacked Verification Claim" in prompt_text
-    assert "Unsourced Metric / Measurement" in prompt_text
+    assert "completed proof" in prompt_text
+    assert "empirical measurement" in prompt_text
 
 
-def test_claim_evidence_criterion_reaches_the_prompt():
-    """Verify that the criterion actually reaches the review prompt."""
+def test_claim_evidence_criterion_reaches_the_checksheet():
+    """Verify that the criterion reaches the typed review checksheet."""
     repo_root = Path(__file__).resolve().parent.parent.parent.parent
     yaml_path = repo_root / "spec-integrator.yaml"
     config = Config.load(yaml_path)
@@ -25,7 +25,10 @@ def test_claim_evidence_criterion_reaches_the_prompt():
 
     checks = reviewer.get_effective_checks("link_pair", check_ids=["claim_substantiation"])
     assert len(checks) == 1
-    prompt = reviewer.assemble_prompt("link_pair", "Test Link Pair", "Some section context", checks)
-    assert "Claim-Evidence Substantiation" in prompt
-    assert "Unbacked Verification Claim" in prompt
-    assert "=== OUTPUT FORMAT ===" in prompt
+    sheet = reviewer.build_checksheet(
+        "link_pair", "Test Link Pair", "Some section context", checks, ["test.md"]
+    )
+    question = sheet.questions["claim_substantiation"]
+    assert "Claim-Evidence Substantiation" in question["instructions"]
+    assert "completed proof" in question["instructions"]
+    assert sheet.state["specification_content"] == "Some section context"

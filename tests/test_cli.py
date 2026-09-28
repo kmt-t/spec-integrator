@@ -20,10 +20,16 @@ def _scaffold(tmp_path):
     docs_dir = tmp_path / "docs"
     req_dir = docs_dir / "requires"
     req_dir.mkdir(parents=True)
-    (req_dir / "req.md").write_text("# Requirements\n## Feat {REQ_01}\nDef.", encoding="utf-8")
+    (req_dir / "req.md").write_text(
+        "# Requirements\n## Feat\n<!-- definition: {REQ_01} -->\n{REQ_01}: Def.",
+        encoding="utf-8",
+    )
     comp_dir = docs_dir / "components" / "tier1_core"
     comp_dir.mkdir(parents=True)
-    (comp_dir / "sched.md").write_text("# Sched\n## Design\nImplements {REQ_01}.", encoding="utf-8")
+    (comp_dir / "sched.md").write_text(
+        "# Sched\n## Design\n<!-- traceability: {REQ_01} -->\nImplements the requirement.",
+        encoding="utf-8",
+    )
     return docs_dir
 
 
@@ -54,7 +60,7 @@ def _write_clean_assessment(tmp_path, docs_dir):
                 "covered_files": ["requires/req.md"],
             }
         ],
-        "sakura",
+        "jev",
     )
     db.set_assessed_doc_hashes("risk_assessment", hashes)
     db.commit()
@@ -167,8 +173,10 @@ def test_cli_format_doc(monkeypatch, tmp_path):
         files = None
 
     monkeypatch.chdir(tmp_path)
+
     class ArgsInit:
         pass
+
     with pytest.raises(SystemExit):
         cmd_init(ArgsInit())
 
@@ -186,8 +194,10 @@ def test_cli_format_src(monkeypatch, tmp_path):
         files = None
 
     monkeypatch.chdir(tmp_path)
+
     class ArgsInit:
         pass
+
     with pytest.raises(SystemExit):
         cmd_init(ArgsInit())
 
@@ -204,8 +214,10 @@ def test_cli_check_src(monkeypatch, tmp_path):
         files = None
 
     monkeypatch.chdir(tmp_path)
+
     class ArgsInit:
         pass
+
     with pytest.raises(SystemExit):
         cmd_init(ArgsInit())
 

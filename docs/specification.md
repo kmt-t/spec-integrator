@@ -57,7 +57,7 @@ $$E = E_{\text{contain}} \cup E_{\text{define}} \cup E_{\text{refer}} \cup E_{\t
 - **`links_to`**: Markdown 相対リンク `[text](path.md#anchor)` による直接参照。
 
 ### (3) 局所サブグラフ $G_r$ の抽出（LLM 評価空間）
-特定の要件・キーワード $r \in V_{\text{item}}$ に対し、定義元セクション群 $\text{Def}(r)$ と参照設計セクション群 $\text{Ref}(r)$ を抽出します。定義元ファイルは `keyword_dictionary.md` の「定義元正本」欄から取得し、各定義セクションと各参照セクションを1組ずつ評価します。
+特定の要件・キーワード $r \in V_{\text{item}}$ に対し、定義元セクション群 $\text{Def}(r)$ と参照設計セクション群 $\text{Ref}(r)$ を抽出します。定義元は各文書内の `<!-- definition: {Keyword} -->` 宣言から取得し、各定義セクションと各参照セクションを1組ずつ評価します。
 
 リンクペアレビューでは、定義の内容・配置・単一正本性と、対応する参照セクションの `traceability` リンクを評価します。各問い合わせには定義セクションと参照セクションを1つずつ含め、別の参照セクションは含めません。これにより、LLM as a Judge に与える**役割を区別したセクション単位の評価コンテキスト**を生成します。
 
@@ -102,19 +102,6 @@ tiers:
     path_pattern: "docs/{architecture,plans}/**/*.md"
     description: "全体アーキテクチャ・開発計画"
 
-# キーワードの定義元と分類
-keywords:
-  meta:
-    pattern: "^META_[A-Za-z0-9_]+$"
-    defined_in: "docs/architecture/document_structure.md"
-  global:
-    pattern: "^GLOBAL_[A-Za-z0-9_]+$"
-    defined_in: "docs/architecture/document_structure.md"
-  local:
-    # GOTCHA / TEST / BENCHMARK IDs use component-qualified hyphenated names.
-    pattern: "^[A-Za-z0-9_-]+$"
-    defined_in: "docs/requires/**/*.md または docs/architecture/keyword_dictionary.md"
-
 # 形式検証 (pyModelChecking) の設定
 formal_verification:
   model_dir_name: "formal"           # 各コンポーネントディレクトリ配下のモデル配置先
@@ -124,25 +111,21 @@ formal_verification:
 # LLM as a Judge の設定
 llm_judge:
   tag: "{VERIFY_LLM}"
-  default_backend: "jev"             # OpenRouter Decisions API を使う型付き判定モデル
+  default_backend: "jev"             # System One API 経由の型付き判定モデル
   backends:
     jev:
       api_key_env: "OPENROUTER_API_KEY"
       endpoint: "https://openrouter.ai/api/alpha/decisions"
       model: "typesafe/jev-1.13"
-    sakura:
-      api_key_env: "SAKURA_API_KEY"
-      model: "sakura-ai-model"
-    ollama:
-      endpoint: "http://localhost:11434"
-      model: "llama3"
+
+embeddings:
+  endpoint: "http://localhost:11434"
 
 terminology:
-  embedding_backend: "openrouter"
-  embedding_model: "nvidia/nemotron-3-embed-1b:free"
+  embedding_model: "qwen3-embedding"
 ```
 
-Jev は各レビュー基準に対して次のいずれかを選び、確信度を返します。`confirmed_violation` は設定された重大度で判定し、`possible_violation` と `insufficient_context` は WARN、`documented_open_issue` と `improvement_suggestion` は INFO、`no_issue` は結果詳細へ追加しません。
+Jev の System One チェックシートは各レビュー基準に対して次のいずれかを選び、確信度を返す。`confirmed_violation` は設定された重大度で判定し、`possible_violation` と `insufficient_context` は WARN、`documented_open_issue` と `improvement_suggestion` は INFO、`no_issue` は結果詳細へ追加しない。
 
 - `confirmed_violation`: 明確に確認できる違反
 - `possible_violation`: 違反の可能性があり、人手の確認が必要
@@ -318,7 +301,7 @@ CREATE INDEX idx_judge_evaluations_confidence
     ON judge_evaluations (confidence DESC);
 ```
 
-Jevの判定をチェック単位で記録する。`confidence` は0.0〜1.0の実数で保存し、`llm-findings --min-confidence 0.70` からしきい値検索できる。
+型付き判定バックエンドの結果をチェック単位で記録する。`confidence` は0.0〜1.0の実数で保存し、`llm-findings --min-confidence 0.70` からしきい値検索できる。
 
 ---
 
@@ -379,7 +362,7 @@ spec-integrator risk [OPTIONS]
 ```
 - **オプション**:
   - `-c, --config PATH`: 設定ファイルパス
-  - `--backend [jev|sakura|openrouter|ollama|mock]`: LLM バックエンド指定。Jev は型付き判定を返し、説明文や引用箇所は生成しない
+  - `--backend [jev|mock]`: チェックシートの判定バックエンド。Jev は説明文や引用箇所を生成しない
   - `--model TEXT`: モデル名の明示的オーバーライド
   - `-r, --report PATH`: リスクレポート出力先
 
@@ -390,7 +373,7 @@ TF-IDF 抽出キーワードのエンベディング類似度および LLM に�
 spec-integrator llm-word [OPTIONS]
 ```
 - **オプション**:
-  - `--quick`: 用語の LLM 文脈判定をスキップする。未作成の埋め込みがある場合は、設定済み埋め込み API を呼び出す
+  - `--quick`: 用語の LLM 文脈判定をスキップする。未作成の埋め込みがある場合は Ollama を呼び出す
   - `--threshold FLOAT`: 類似度判定閾値
   - `--backend NAME`: 用語判定バックエンド（既定値は設定の `llm_judge.default_backend`）
   - `--model TEXT`: 用語判定モデルの上書き

@@ -1,8 +1,3 @@
-Review only the text supplied in `specification_content`. Flag a clarity/completeness issue only when the supplied wording leaves two materially different interpretations of a stated behavior, or when two supplied statements directly conflict.
+Check the supplied section or pair for a locally visible ambiguity or contradiction. A finding requires two materially different interpretations of a stated behavior, incompatible explicit statements, or a decision branch whose missing outcome blocks the next stated step.
 
-Count only concrete, locally visible defects such as:
-- A condition, actor, or result in a stated procedure has two materially different interpretations, and the supplied text does not resolve which one applies.
-- Two explicit statements in the supplied text give incompatible conditions, values, or outcomes.
-- A described decision branch leaves its outcome unresolved even though the next stated step depends on that outcome.
-
-Do not infer requirements from common practice, another document that is not included, or an unstated design intention. Do not flag details that could be added for completeness, wording that could merely be clearer, or a boundary/fallback case that the supplied text does not claim to cover. Leave spelling, missing characters or words, and punctuation defects to the dedicated typo/omission check. Ignore intentional fragments in table cells and bullets and valid code/API symbols. If you cannot identify an unmistakable ambiguity or contradiction in the supplied text, treat the criterion as satisfied.
+Do not infer an unstated requirement or demand a fallback that the text does not claim to cover. Leave spelling and punctuation to the typo check. If no concrete ambiguity or contradiction is visible, mark this criterion satisfied.

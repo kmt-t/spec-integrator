@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import time
+import json
 from dataclasses import dataclass
 
-from spec_integrator.config import Config, LLMCheckRule
+from spec_integrator.config import LLMCheckRule
 from spec_integrator.graph import KeywordGroup
 from spec_integrator.judge.base import BaseJudge
+from spec_integrator.judge.checksheet import Checksheet
 from spec_integrator.models import JudgeEvaluation, JudgeResult, ParsedDocument, ParsedSection
 
 
@@ -16,8 +17,16 @@ class _KeywordLinkPair:
     item_label: str
     definition: tuple[ParsedDocument, ParsedSection] | None
     reference: tuple[ParsedDocument, ParsedSection]
-    registry_entry: dict[str, str] | None
-    declared_source: str
+
+
+REVIEW_OUTCOMES = {
+    "confirmed_violation": "A specific, unmistakable defect is directly visible and this criterion applies.",
+    "possible_violation": "Specific evidence suggests a defect, but a human must confirm it.",
+    "documented_open_issue": "The text explicitly leaves this matter unresolved or out of scope.",
+    "insufficient_context": "The supplied sections do not provide enough information to judge this criterion.",
+    "improvement_suggestion": "The criterion is met, but a non-blocking improvement is possible.",
+    "no_issue": "The supplied evidence supports no issue for this criterion.",
+}
 
 
 class UnifiedReviewEngine(BaseJudge):
@@ -27,9 +36,6 @@ class UnifiedReviewEngine(BaseJudge):
     - Definition/reference keyword link-pair review
     - Modular, configurable check rules defined strictly in configuration
     """
-
-    def __init__(self, config: Config):
-        super().__init__(config)
 
     def get_effective_checks(
         self,
@@ -51,69 +57,38 @@ class UnifiedReviewEngine(BaseJudge):
             selected.append(r)
         return selected
 
-    def assemble_prompt(
+    def build_checksheet(
         self,
         mode: str,
         target_name: str,
         sections_context: str,
         checks: list[LLMCheckRule],
-        extra_instructions: str = "",
-    ) -> str:
-        """Dynamically assembles the review prompt for single-section or link-pair mode."""
-        lines: list[str] = [
-            "You are a strict, formal System Specification Verification Judge and Auditor.",
-            f"Your mission is to perform an exhaustive, evidence-based audit for: {target_name}",
-            f"Audit Mode: {'[SINGLE SECTION REVIEW]' if mode == 'single' else '[KEYWORD LINK-PAIR REVIEW]'}",
-            "",
-            "=== SPECIFICATION CONTENT TO AUDIT ===",
-            sections_context,
-            "",
-            "=== EVALUATION CRITERIA ===",
-            f"Perform your audit systematically against the following {len(checks)} evaluation rule(s):",
-            "",
-        ]
-
-        config_dir = self.config.config_dir
-        for idx, rule in enumerate(checks, start=1):
-            rule_text = rule.get_prompt_text(config_dir)
-            lines.append(f"{idx}. [{rule.id}] {rule.name} (Severity: {rule.severity}):")
-            for sub_line in rule_text.splitlines():
-                lines.append(f"   {sub_line}")
-            lines.append("")
-
-        if extra_instructions:
-            lines.append("=== ADDITIONAL INSTRUCTIONS ===")
-            lines.append(extra_instructions)
-            lines.append("")
-
-        lines.extend(
-            [
-                "=== AUDITOR RULES ===",
-                "- Literal Evaluation: Judge what the text actually and explicitly states, not what it might have intended.",
-                "- No Vacuous Confirmation: Restating a claim back as confirmation is not an audit.",
-                "- Specific Citations: When reporting contradictions, duplicates, or missing citations, always cite the specific file and section heading.",
-                "- Accurate Rule Tagging: Always tag each reported issue with the corresponding 'check_id' from the evaluation criteria.",
-                "- No False Positives: If the text meets all criteria, state so concisely as PASS; do not manufacture non-existent issues.",
-                "",
-                "=== OUTPUT FORMAT ===",
-                "Respond ONLY with a valid JSON object in English in the following format:",
-                "```json",
-                "{",
-                '  "status": "PASS" | "WARN" | "FAIL",',
-                '  "summary": "Concise explanation of the evaluation result in English",',
-                '  "issues": [',
-                "    {",
-                '      "severity": "ERROR" | "WARNING",',
-                '      "check_id": "rule_id_from_criteria",',
-                '      "location": "File or Section name",',
-                '      "description": "Detailed explanation of contradiction, unbacked claim, or ambiguity in English"',
-                "    }",
-                "  ]",
-                "}",
-                "```",
-            ]
+        covered_files: list[str],
+    ) -> Checksheet:
+        """Build the same typed checksheet used for dry runs and live reviews."""
+        questions: dict[str, dict[str, object]] = {}
+        for check in checks:
+            questions[check.id] = {
+                "type": "choice",
+                "instructions": (
+                    "Using only `specification_content`, classify the evidence for this review "
+                    f"criterion: {check.name}. Select one outcome. Do not infer requirements "
+                    "or defects from absent context. Prefer `possible_violation` or "
+                    "`insufficient_context` when evidence is ambiguous. "
+                    f"Criterion instructions: {check.get_prompt_text(self.config.config_dir)}"
+                ),
+                "criteria": REVIEW_OUTCOMES,
+            }
+        return Checksheet(
+            name="document_review",
+            state={
+                "review_target": target_name,
+                "review_mode": mode,
+                "covered_files": covered_files,
+                "specification_content": sections_context,
+            },
+            questions=questions,
         )
-        return "\n".join(lines)
 
     def review_single_document(
         self,
@@ -158,30 +133,30 @@ class UnifiedReviewEngine(BaseJudge):
                 context_lines.append(f"Section Keywords: {', '.join(sec.keywords)}")
             context_lines.extend(["", self._budgeted(sec.body_text)])
             context_text = "\n".join(context_lines)
-            prompt = self.assemble_prompt("single", section_ref, context_text, checks)
+            sheet = self.build_checksheet(
+                "single", section_ref, context_text, checks, [doc.file_path]
+            )
 
             if dry_run:
-                print(f"=== DRY-RUN PROMPT FOR SECTION: {section_ref} ===")
-                print(prompt)
+                print(f"=== DRY-RUN CHECKSHEET FOR SECTION: {section_ref} ===")
+                print(json.dumps(sheet.payload(), ensure_ascii=False, indent=2))
                 print("=" * 80)
                 result = JudgeResult(
                     item_id=f"{doc.file_path}::{sec.section_id}",
                     item_label=section_ref,
                     status="PASS",
-                    summary="[Dry Run] Section prompt generated successfully.",
+                    summary="[Dry Run] Section checksheet generated successfully.",
                     covered_files=[doc.file_path],
                 )
             else:
-                result = self._run_judge_llm(
-                    prompt,
+                result = self._run_checksheet(
+                    sheet,
                     f"{doc.file_path}::{sec.section_id}",
                     section_ref,
                     [doc.file_path],
                     selected_backend,
                     model,
                     checks=checks,
-                    context_text=context_text,
-                    mode="single",
                 )
                 for issue in result.issues:
                     if not issue.get("location"):
@@ -205,7 +180,7 @@ class UnifiedReviewEngine(BaseJudge):
             f"{counts['SKIPPED']} SKIPPED."
         )
         if dry_run:
-            summary = f"[Dry Run] Generated {len(section_results)} section-level prompts."
+            summary = f"[Dry Run] Generated {len(section_results)} section checksheets."
 
         issues = [issue for _, result in section_results for issue in result.issues]
         evaluations = [
@@ -261,43 +236,32 @@ class UnifiedReviewEngine(BaseJudge):
         for index, pair in enumerate(pairs, start=1):
             print(f"  [{index}/{len(pairs)}] {pair.item_label}", flush=True)
             context_text = self._keyword_link_pair_context(pair)
-            prompt = self.assemble_prompt(
-                "link_pair",
-                pair.item_label,
-                context_text,
-                checks,
-                extra_instructions=(
-                    "Evaluate only this one definition/reference link pair. Do not infer or report "
-                    "relationships with other sections in the keyword group. Keep every finding at "
-                    "the section level; do not report sentence-level locations. Cite the implicated "
-                    "definition or reference section by file and heading."
-                ),
+            sheet = self.build_checksheet(
+                "link_pair", pair.item_label, context_text, checks, self._pair_covered_files(pair)
             )
             if dry_run:
                 print(
-                    f"=== DRY-RUN LINK-PAIR PROMPT [{index}/{len(pairs)}]: "
+                    f"=== DRY-RUN LINK-PAIR CHECKSHEET [{index}/{len(pairs)}]: "
                     f"{pair.item_label} ({pair.item_id}) ==="
                 )
-                print(prompt)
+                print(json.dumps(sheet.payload(), ensure_ascii=False, indent=2))
                 print("=" * 80)
                 result = JudgeResult(
                     item_id=pair.item_id,
                     item_label=pair.item_label,
                     status="PASS",
-                    summary="[Dry Run] Definition/reference link-pair prompt generated.",
+                    summary="[Dry Run] Definition/reference link-pair checksheet generated.",
                     covered_files=self._pair_covered_files(pair),
                 )
             else:
-                result = self._run_judge_llm(
-                    prompt,
+                result = self._run_checksheet(
+                    sheet,
                     pair.item_id,
                     pair.item_label,
                     self._pair_covered_files(pair),
                     selected_backend,
                     model,
                     checks=checks,
-                    context_text=context_text,
-                    mode="link_pair",
                 )
                 reference_doc, reference_section = pair.reference
                 default_location = f"{reference_doc.file_path} :: {reference_section.heading}"
@@ -319,37 +283,15 @@ class UnifiedReviewEngine(BaseJudge):
             for section in document.sections
             if section.section_id in linked_section_ids
         ]
-        registry_entry = self._keyword_registry_entry(documents, group.keyword)
-        declared_source = (
-            registry_entry["definition_source"].strip("`").replace("\\", "/")
-            if registry_entry
-            else ""
-        )
-        source_suffixes = {declared_source}
-        if declared_source.startswith("docs/"):
-            source_suffixes.add(declared_source.removeprefix("docs/"))
-        definition_docs = [
-            document
-            for document in documents
-            if any(
-                document.file_path == source or document.file_path.endswith(f"/{source}")
-                for source in source_suffixes
-            )
-        ]
-        if declared_source and not definition_docs:
-            basename_matches = [
-                document
-                for document in documents
-                if document.file_path.rsplit("/", 1)[-1] == declared_source.rsplit("/", 1)[-1]
-            ]
-            if len(basename_matches) == 1:
-                definition_docs = basename_matches
         definitions = sorted(
             [
                 (document, section)
-                for document in definition_docs
+                for document in documents
                 for section in document.sections
-                if group.keyword in section.keywords
+                # The declaration travels with its source section; the LLM sees only its text.
+                if self.config.is_keyword_definition(
+                    group.keyword, document.file_path, section.canonical_definition_keywords
+                )
             ],
             key=lambda pair: (pair[0].file_path, pair[1].line_start, pair[1].section_id),
         )
@@ -359,6 +301,7 @@ class UnifiedReviewEngine(BaseJudge):
                 (document, section)
                 for document, section in linked_sections
                 if section.section_id not in definition_section_ids
+                and group.keyword in section.reference_keywords
             ],
             key=lambda pair: (pair[0].file_path, pair[1].line_start, pair[1].section_id),
         )
@@ -388,8 +331,6 @@ class UnifiedReviewEngine(BaseJudge):
                         item_label=item_label,
                         definition=definition,
                         reference=reference,
-                        registry_entry=registry_entry,
-                        declared_source=declared_source,
                     )
                 )
         return pairs
@@ -398,28 +339,17 @@ class UnifiedReviewEngine(BaseJudge):
         lines = [
             f"Keyword: {{{pair.keyword}}}",
             "Evaluation unit: one definition section paired with one reference section.",
-            f"Declared definition source: {pair.declared_source or '(not found in keyword registry)'}",
-            "Definition source metadata is read from docs/architecture/keyword_dictionary.md.",
-            "Definitions use the keyword inline in their source section; references use the "
-            "section-level <!-- traceability: {Keyword} --> comment.",
+            "Definitions are identified by a section-level definition declaration and substantive text in that section.",
+            "References are identified by the section-level traceability comment.",
             "",
         ]
-        if pair.registry_entry:
-            lines.extend(
-                [
-                    "### KEYWORD REGISTRY ENTRY",
-                    f"- Target component: {pair.registry_entry['target_component']}",
-                    f"- Summary: {pair.registry_entry['summary']}",
-                    "",
-                ]
-            )
 
         def append_section(
             role: str, section_pair: tuple[ParsedDocument, ParsedSection] | None
         ) -> None:
             lines.append(f"### {role} SECTION")
             if section_pair is None:
-                lines.extend(["(not found in the declared definition source)", ""])
+                lines.extend(["(no definition declaration was found)", ""])
                 return
             document, section = section_pair
             keywords = f" [Keywords: {', '.join(section.keywords)}]" if section.keywords else ""
@@ -444,19 +374,17 @@ class UnifiedReviewEngine(BaseJudge):
             files.insert(0, pair.definition[0].file_path)
         return list(dict.fromkeys(files))
 
-    def _run_judge_llm(
+    def _run_checksheet(
         self,
-        prompt: str,
+        sheet: Checksheet,
         item_id: str,
         item_label: str,
         covered: list[str],
         backend: str,
         model: str | None,
-        checks: list[LLMCheckRule] | None = None,
-        context_text: str = "",
-        mode: str = "single",
+        checks: list[LLMCheckRule],
     ) -> JudgeResult:
-        """Executes prompt against backend and parses structured JSON verdict."""
+        """Classify one evidence unit with its checksheet."""
         if backend == "mock":
             return JudgeResult(
                 item_id=item_id,
@@ -466,90 +394,20 @@ class UnifiedReviewEngine(BaseJudge):
                 issues=[],
                 covered_files=covered,
             )
-        if backend == "jev":
-            return self._run_jev_review(
-                item_id,
-                item_label,
-                covered,
-                checks or [],
-                context_text,
-                mode,
-                model,
-            )
-        if backend not in ("sakura", "ollama", "openrouter"):
-            return JudgeResult(
-                item_id=item_id,
-                item_label=item_label,
-                status="SKIPPED",
-                summary=f"Unknown backend '{backend}'.",
-                issues=[],
-                covered_files=covered,
-            )
-
-        last_err: Exception | None = None
-        parsed: dict | None = None
-        for attempt in range(3):
-            try:
-                if backend == "sakura":
-                    raw_resp = self._call_sakura(prompt, model)
-                elif backend == "openrouter":
-                    raw_resp = self._call_openrouter(prompt, model)
-                else:
-                    raw_resp = self._call_ollama(prompt, model)
-                candidate = self._extract_json(raw_resp)
-                if not candidate.get("status"):
-                    raise ValueError("response JSON has no 'status' field")
-                parsed = candidate
-                break
-            except Exception as e:
-                last_err = e
-                if attempt < 2:
-                    time.sleep(2)
-
-        if parsed is None:
-            return JudgeResult(
-                item_id=item_id,
-                item_label=item_label,
-                status="FAIL",
-                summary=f"Judge error after 3 attempts: {last_err}",
-                issues=[
-                    {
-                        "severity": "ERROR",
-                        "check_id": "runtime_error",
-                        "location": item_label,
-                        "description": f"No usable verdict after 3 attempts: {last_err}",
-                    }
-                ],
-                covered_files=covered,
-            )
-
-        issues = parsed.get("issues", []) or []
-        status = parsed["status"]
-        if status == "PASS" and any(
-            str(i.get("severity", "")).upper() == "ERROR" for i in issues if isinstance(i, dict)
-        ):
-            status = "FAIL"
-
-        return JudgeResult(
-            item_id=item_id,
-            item_label=item_label,
-            status=status,
-            summary=parsed.get("summary", ""),
-            issues=issues,
-            covered_files=covered,
-        )
+        if backend != "jev":
+            raise ValueError(f"Unsupported checksheet backend: '{backend}'")
+        return self._run_jev_review(sheet, item_id, item_label, covered, checks, model)
 
     def _run_jev_review(
         self,
+        sheet: Checksheet,
         item_id: str,
         item_label: str,
         covered: list[str],
         checks: list[LLMCheckRule],
-        context_text: str,
-        mode: str,
         model: str | None,
     ) -> JudgeResult:
-        """Classifies each Jev review criterion into a review outcome."""
+        """Classifies each typed decision review criterion into a review outcome."""
         if not checks:
             return JudgeResult(
                 item_id=item_id,
@@ -560,71 +418,19 @@ class UnifiedReviewEngine(BaseJudge):
                 covered_files=covered,
             )
 
-        outcome_options = {
-            "confirmed_violation": (
-                "A specific, unmistakable defect or contradiction is directly visible in the "
-                "supplied section(s), and the criterion clearly applies."
-            ),
-            "possible_violation": (
-                "Specific evidence suggests a defect, but interpretation or a missing link means "
-                "a human should confirm it before treating it as a violation."
-            ),
-            "documented_open_issue": (
-                "The supplied text explicitly marks the matter as unresolved, under study, or out "
-                "of scope; that status alone is not a defect unless the text contradicts it."
-            ),
-            "insufficient_context": (
-                "The supplied section(s) do not contain enough information to judge this criterion, "
-                "and no direct violation is visible in the available text."
-            ),
-            "improvement_suggestion": (
-                "The text meets the criterion, but a non-blocking style or clarity improvement "
-                "could be suggested."
-            ),
-            "no_issue": (
-                "No concrete violation, unresolved-status concern, context gap, or useful "
-                "improvement is supported by the supplied text."
-            ),
-        }
-        questions: dict[str, dict] = {}
-        for check in checks:
-            questions[check.id] = {
-                "type": "choice",
-                "instructions": (
-                    "Using only `specification_content`, classify the evidence for this review "
-                    f"criterion: {check.name}. Select exactly one best-fitting outcome. Treat the "
-                    "outcomes as mutually exclusive. Do not infer missing requirements, intended "
-                    "wording, or defects from common practice or absent context. Ignore valid "
-                    "technical identifiers. A matter explicitly marked unresolved is not itself "
-                    "a violation. Prefer `possible_violation` or `insufficient_context` over "
-                    "`confirmed_violation` whenever the evidence is ambiguous. "
-                    f"Criterion instructions: {check.get_prompt_text(self.config.config_dir)}"
-                ),
-                "criteria": outcome_options,
-            }
-
         try:
-            response = self._call_jev(
-                {
-                    "review_target": item_label,
-                    "review_mode": mode,
-                    "covered_files": covered,
-                    "specification_content": context_text,
-                },
-                questions,
-                model,
-            )
+            response = self._submit_checksheet(sheet, model)
             answers = response["answers"]
             issues: list[dict] = []
             evaluations: list[JudgeEvaluation] = []
             decisions: list[str] = []
-            outcome_counts = dict.fromkeys(outcome_options, 0)
+            outcome_counts = dict.fromkeys(REVIEW_OUTCOMES, 0)
             for check in checks:
                 answer = answers.get(check.id)
                 if not isinstance(answer, dict) or answer.get("type") != "choice":
                     raise ValueError(f"Jev response has no valid Choice answer for '{check.id}'")
                 outcome = answer.get("choice")
-                if outcome not in outcome_options:
+                if outcome not in REVIEW_OUTCOMES:
                     raise ValueError(f"Jev returned an unknown review outcome for '{check.id}'")
                 confidence = answer.get("confidence")
                 if (
@@ -703,36 +509,6 @@ class UnifiedReviewEngine(BaseJudge):
                 ],
                 covered_files=covered,
             )
-
-    @staticmethod
-    def _keyword_registry_entry(
-        documents: list[ParsedDocument], keyword: str
-    ) -> dict[str, str] | None:
-        """Returns the registry's definition source and summary for one keyword."""
-        registry = next(
-            (
-                doc
-                for doc in documents
-                if doc.file_path.endswith("architecture/keyword_dictionary.md")
-            ),
-            None,
-        )
-        if registry is None:
-            return None
-
-        expected_label = f"{{{keyword}}}"
-        for line in registry.content.splitlines():
-            if not line.lstrip().startswith("|"):
-                continue
-            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-            if len(cells) < 4 or cells[0].strip("`") != expected_label:
-                continue
-            return {
-                "definition_source": cells[1],
-                "target_component": cells[2],
-                "summary": cells[3],
-            }
-        return None
 
 
 __all__ = ["UnifiedReviewEngine"]

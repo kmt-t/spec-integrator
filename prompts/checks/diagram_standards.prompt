@@ -1,5 +1,1 @@
-Verify architectural diagram rules:
-- Responsibilities across components / actors MUST use Sequence Diagrams (`sequenceDiagram`).
-- Sequential procedural logic inside a single component MUST use Flowcharts (`flowchart TD`).
-- State machines MUST use `stateDiagram-v2`.
-- Node labels with special characters (parentheses, brackets) must be properly quoted.
+Apply diagram rules only to a diagram present in the supplied text. Use `sequenceDiagram` for interactions across actors or components, `flowchart TD` for a single component's procedure, and `stateDiagram-v2` for a state machine. Check that labels with Mermaid special characters are quoted. Do not require a diagram when the supplied section does not describe a complex dynamic process.

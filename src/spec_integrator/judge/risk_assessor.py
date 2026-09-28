@@ -1,43 +1,12 @@
 from __future__ import annotations
 
-from spec_integrator.config import Config
 from spec_integrator.judge.base import BaseJudge
+from spec_integrator.judge.checksheet import Checksheet
 from spec_integrator.models import (
     KeywordRiskAssessment,
     ParsedDocument,
     RiskAssessmentReport,
 )
-
-ASSESS_PROMPT_TEMPLATE = """You are a Principal Embedded Systems Architect and Formal Verification Expert.
-Score the complexity and design risk of the following requirement/design keyword, based on its
-definition and how it is used across the specification. Score only -- do not recommend a
-verification method; that decision belongs to the author, not this triage.
-
-Keyword: {{{item_label}}}
-Referenced in {ref_count} section(s).
-
-=== DEFINITION ===
-{definition_texts}
-
-=== REFERENCING CONTEXT ===
-{referencing_texts}
-
-=== EVALUATION CRITERIA ===
-1. Complexity (1-5): State space size, asynchronous/coroutine behavior, zero-copy ownership
-   transfer, cache lifecycle, low-level hardware interaction.
-2. Design Risk (1-5): Deadlock, race condition, memory corruption, starvation, unhandled
-   failure modes, ambiguous/unspecified assumptions, missing error recovery.
-
-=== OUTPUT FORMAT ===
-Respond ONLY with a valid JSON object in English:
-```json
-{{
-  "complexity_score": 1 to 5,
-  "risk_score": 1 to 5,
-  "summary": "One-sentence justification in English"
-}}
-```
-"""
 
 
 class RiskAssessor(BaseJudge):
@@ -46,9 +15,6 @@ class RiskAssessor(BaseJudge):
     A high risk_score is the signal consumed by the Obligation Gate
     to demand {VERIFY_LLM}.
     """
-
-    def __init__(self, config: Config):
-        super().__init__(config)
 
     def assess_subgraphs(
         self,
@@ -59,12 +25,11 @@ class RiskAssessor(BaseJudge):
         max_keywords: int = 15,
         exhaustive: bool = False,
         min_references: int = 0,
-        include_meta: bool = False,
-        include_reqs: bool = False,
-        target_tiers: list[int | str] | None = None,
     ) -> RiskAssessmentReport:
         report = RiskAssessmentReport()
         selected_backend = backend or self.config.llm_judge.default_backend
+        if selected_backend not in ("jev", "mock"):
+            raise ValueError(f"Unsupported checksheet backend: '{selected_backend}'")
 
         candidates: list[dict] = [
             sg for sg in subgraphs if len(sg.get("referenced_in", [])) >= min_references
@@ -118,14 +83,6 @@ class RiskAssessor(BaseJudge):
             for s in sg.get("referenced_in", [])
         ]
 
-        prompt = ASSESS_PROMPT_TEMPLATE.format(
-            item_label=keyword,
-            ref_count=len(sg.get("referenced_in", [])),
-            definition_texts="\n\n".join(t for t in def_texts if t)
-            or "(No explicit definition section)",
-            referencing_texts="\n\n".join(t for t in ref_texts if t) or "(No referencing sections)",
-        )
-
         if backend == "mock":
             return KeywordRiskAssessment(
                 item_id=sg["item_id"],
@@ -141,14 +98,15 @@ class RiskAssessor(BaseJudge):
 
         try:
             if backend == "jev":
-                response = self._call_jev(
-                    {
+                sheet = Checksheet(
+                    name="risk_assessment",
+                    state={
                         "keyword": f"{{{keyword}}}",
                         "reference_count": len(sg.get("referenced_in", [])),
                         "definition_sections": def_texts or ["(No explicit definition section)"],
                         "referencing_sections": ref_texts or ["(No referencing sections)"],
                     },
-                    {
+                    questions={
                         "complexity": {
                             "type": "score",
                             "instructions": (
@@ -183,15 +141,15 @@ class RiskAssessor(BaseJudge):
                             ],
                         },
                     },
-                    model,
                 )
+                response = self._submit_checksheet(sheet, model)
                 answers = response["answers"]
                 complexity_value = float(answers["complexity"]["score"])
                 risk_value = float(answers["design_risk"]["score"])
                 if not 0.0 <= complexity_value <= 4.0 or not 0.0 <= risk_value <= 4.0:
                     raise ValueError("Jev returned a score outside the configured 0-4 range")
-                complexity_score = min(5, max(1, int(round(complexity_value)) + 1))
-                risk_score = min(5, max(1, int(round(risk_value)) + 1))
+                complexity_score = min(5, max(1, round(complexity_value) + 1))
+                risk_score = min(5, max(1, round(risk_value) + 1))
                 return KeywordRiskAssessment(
                     item_id=sg["item_id"],
                     keyword=keyword,
@@ -206,27 +164,7 @@ class RiskAssessor(BaseJudge):
                         f"design risk {risk_value:.2f}/4. Jev does not provide a text rationale."
                     ),
                 )
-            elif backend == "sakura":
-                raw_resp = self._call_sakura(prompt, model)
-            elif backend == "openrouter":
-                raw_resp = self._call_openrouter(prompt, model)
-            elif backend == "ollama":
-                raw_resp = self._call_ollama(prompt, model)
-            else:
-                raw_resp = self._call_sakura(prompt, model)
-
-            parsed = self._extract_json(raw_resp)
-            return KeywordRiskAssessment(
-                item_id=sg["item_id"],
-                keyword=keyword,
-                file_path=file_path,
-                tier=tier,
-                complexity_score=int(parsed.get("complexity_score", 3)),
-                risk_score=int(parsed.get("risk_score", 3)),
-                line=line,
-                covered_files=covered,
-                summary=str(parsed.get("summary", "")),
-            )
+            raise ValueError(f"Unsupported checksheet backend: '{backend}'")
         except Exception as e:
             return KeywordRiskAssessment(
                 item_id=sg["item_id"],

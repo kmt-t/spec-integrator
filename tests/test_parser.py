@@ -27,3 +27,27 @@ Details here.
     assert len(doc.all_links) == 1
     assert doc.all_links[0].target_path == "design.md"
     assert doc.all_links[0].target_anchor == "details"
+
+
+def test_keyword_definitions_and_references_have_distinct_source_syntax(tmp_path):
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    source = docs_dir / "source.md"
+    source.write_text(
+        """# Keywords
+## Source
+The definition is {REQ_DEFINED}.
+<!-- traceability: {REQ_REFERENCED} -->
+```text
+{REQ_FENCED}
+```
+""",
+        encoding="utf-8",
+    )
+
+    parsed = MarkdownParser(Config()).parse_file(source, docs_dir)
+    section = parsed.sections[1]
+
+    assert section.definition_keywords == ["REQ_DEFINED"]
+    assert section.reference_keywords == ["REQ_REFERENCED"]
+    assert set(parsed.all_keywords) == {"REQ_DEFINED", "REQ_REFERENCED"}

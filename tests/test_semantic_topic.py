@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 from spec_integrator.config import Config, SemanticTopicConfig
 from spec_integrator.db import DocAuditDB
-from spec_integrator.terminology.section_indexer import SectionTopicIndexer, cosine_similarity
 from spec_integrator.document.gates.section_verifier import SectionTopicVerifier
+from spec_integrator.terminology.section_indexer import SectionTopicIndexer, cosine_similarity
 
 
 def test_cosine_similarity():
@@ -58,7 +58,7 @@ def test_section_topic_indexing_and_verification(tmp_path):
 
     # Mock embeddings API returning similar vectors
     indexer = SectionTopicIndexer(config)
-    with patch("spec_integrator.terminology.section_indexer.call_sakura_embeddings") as mock_embed:
+    with patch("spec_integrator.terminology.section_indexer.call_ollama_embeddings") as mock_embed:
         mock_embed.return_value = [
             [0.9, 0.1, 0.0],
             [0.88, 0.12, 0.0],

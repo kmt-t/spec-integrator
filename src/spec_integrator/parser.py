@@ -14,6 +14,13 @@ __all__ = ["MarkdownParser", "ParsedDocument", "ParsedLink", "ParsedSection"]
 
 class MarkdownParser:
     KEYWORD_REGEX = re.compile(r"\{([A-Za-z0-9_\-]+)\}")
+    HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+    DEFINITION_COMMENT_RE = re.compile(
+        r"<!--\s*definition:\s*(.*?)\s*-->", re.DOTALL | re.IGNORECASE
+    )
+    TRACEABILITY_COMMENT_RE = re.compile(
+        r"<!--\s*traceability:\s*(.*?)\s*-->", re.DOTALL | re.IGNORECASE
+    )
     EVIDENCE_BLOCK_RE = re.compile(r"<!--\s*evidence:\s*(.*?)\s*-->", re.DOTALL | re.IGNORECASE)
     TEMPLATE_PREFIXES = (
         "Decision_",
@@ -173,7 +180,7 @@ class MarkdownParser:
             if stripped.startswith("```"):
                 in_code_block = not in_code_block
                 continue
-            # Keywords and tags extraction (only outside code blocks)
+            # Keywords and verification tags remain visible outside fenced code.
             if not in_code_block:
                 for m in self.KEYWORD_REGEX.finditer(line):
                     kw_val = m.group(1)
@@ -181,7 +188,7 @@ class MarkdownParser:
                     if full_kw.startswith("{VERIFY_"):
                         tags.append(full_kw)
                     elif (
-                        any(kw_val.startswith(p) for p in self.TEMPLATE_PREFIXES)
+                        any(kw_val.startswith(prefix) for prefix in self.TEMPLATE_PREFIXES)
                         or kw_val == "concept"
                     ):
                         continue
@@ -197,7 +204,8 @@ class MarkdownParser:
                 elif link_url and (link_url in line) and (f"[{link_text}]" in line):
                     matched = True
                 elif f"[{link_text}]" in line and (
-                    (target_file and target_file in line) or (target_anchor and target_anchor in line)
+                    (target_file and target_file in line)
+                    or (target_anchor and target_anchor in line)
                 ):
                     matched = True
 
@@ -211,6 +219,9 @@ class MarkdownParser:
                     )
                     if parsed_link not in links:
                         links.append(parsed_link)
+        definition_keywords = self._extract_definition_keywords(body_text)
+        canonical_definition_keywords = self._extract_canonical_definition_keywords(body_text)
+        reference_keywords = self._extract_reference_keywords(body_text)
         return ParsedSection(
             section_id=section_id,
             file_path=rel_path,
@@ -222,7 +233,68 @@ class MarkdownParser:
             keywords=keywords,
             tags=tags,
             links=links,
+            definition_keywords=definition_keywords,
+            canonical_definition_keywords=canonical_definition_keywords,
+            reference_keywords=reference_keywords,
         )
+
+    def _extract_definition_keywords(self, body_text: str) -> list[str]:
+        """Return inline keyword markers, excluding comments and code blocks."""
+
+        definition_keywords: list[str] = []
+        in_code_block = False
+        for line in self.HTML_COMMENT_RE.sub("", body_text).splitlines():
+            if line.strip().startswith("```"):
+                in_code_block = not in_code_block
+                continue
+            if in_code_block:
+                continue
+            for match in self.KEYWORD_REGEX.finditer(line):
+                keyword = match.group(1)
+                if keyword.startswith("VERIFY_"):
+                    continue
+                if any(keyword.startswith(prefix) for prefix in self.TEMPLATE_PREFIXES):
+                    continue
+                if keyword != "concept":
+                    definition_keywords.append(keyword)
+        return definition_keywords
+
+    def _extract_canonical_definition_keywords(self, body_text: str) -> list[str]:
+        """Return explicitly declared canonical definitions from section metadata."""
+
+        definitions: list[str] = []
+        in_code_block = False
+        for line in body_text.splitlines():
+            if line.strip().startswith("```"):
+                in_code_block = not in_code_block
+                continue
+            if in_code_block:
+                continue
+            for comment in self.DEFINITION_COMMENT_RE.finditer(line):
+                for match in self.KEYWORD_REGEX.finditer(comment.group(1)):
+                    keyword = match.group(1)
+                    if keyword.startswith("VERIFY_"):
+                        continue
+                    if any(keyword.startswith(prefix) for prefix in self.TEMPLATE_PREFIXES):
+                        continue
+                    if keyword != "concept":
+                        definitions.append(keyword)
+        return definitions
+
+    def _extract_reference_keywords(self, body_text: str) -> list[str]:
+        """Return keyword markers from traceability comments only."""
+
+        references: list[str] = []
+        for comment in self.TRACEABILITY_COMMENT_RE.finditer(body_text):
+            for match in self.KEYWORD_REGEX.finditer(comment.group(1)):
+                keyword = match.group(1)
+                if keyword.startswith("VERIFY_"):
+                    continue
+                if any(keyword.startswith(prefix) for prefix in self.TEMPLATE_PREFIXES):
+                    continue
+                if keyword != "concept":
+                    references.append(keyword)
+        return references
 
     def _extract_links_from_tokens(self, tokens: list[dict]) -> list[tuple[str, str]]:
         """Extracts (link_text, url) pairs from mistune AST tokens."""

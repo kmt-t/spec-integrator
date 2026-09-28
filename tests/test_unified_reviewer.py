@@ -17,17 +17,15 @@ def test_config_checks_loaded_from_project_yaml():
     assert len(rules) >= 9
     ids = {r.id for r in rules}
     assert "vertical_consistency" in ids
-    assert "cross_doc_consistency" in ids
-    assert "internal_consistency" in ids
     assert "numeric_agreement" in ids
+    assert "clarity_completeness" in ids
     assert "natural_language_standards" in ids
     assert "reference_by_keyword_or_filename" in ids
-    assert "rationale_over_history" in ids
     assert "readability_structure" in ids
     readability = next(rule for rule in rules if rule.id == "readability_structure")
     readability_prompt = readability.get_prompt_text(config.config_dir)
-    assert "separate concise bullet lists" in readability_prompt
-    assert "preserves every requirement" in readability_prompt
+    assert "preserves every stated requirement" in readability_prompt
+    assert "current design rationale" in readability_prompt
 
 
 def test_effective_checks_filtering(tmp_path: Path):
@@ -176,6 +174,7 @@ llm_judge:
                 line_start=3,
                 line_end=4,
                 body_text="Text A",
+                canonical_definition_keywords=["TestKW"],
             )
         ],
     )
@@ -197,6 +196,7 @@ llm_judge:
                 line_start=3,
                 line_end=4,
                 body_text="Text B",
+                reference_keywords=["TestKW"],
             )
         ],
     )
@@ -214,7 +214,7 @@ llm_judge:
     )
 
     results = reviewer.review_keyword_link_pairs(group, [doc_a, doc_b], dry_run=True)
-    assert len(results) == 2
+    assert len(results) == 1
     assert all(result.status == "PASS" for result in results)
     assert all("Dry Run" in result.summary for result in results)
 
@@ -260,4 +260,4 @@ llm_judge:
 
     res = reviewer.review_single_document(doc, backend="mock")
     assert res.status == "PASS"
-    assert "Mock evaluation passed" in res.summary
+    assert "Reviewed 1 sections independently" in res.summary

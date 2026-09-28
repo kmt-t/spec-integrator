@@ -51,12 +51,20 @@ class SourceDiscovery:
             return extensions_match and patterns_match
 
         if explicit_files:
+            include_dirs = [
+                (self.root_dir / include_dir).resolve() for include_dir in group_config.include_dirs
+            ]
             return sorted(
                 {
                     path
                     for item in explicit_files
                     for path in [Path(item).resolve()]
-                    if path.is_file() and matches(path)
+                    if path.is_file()
+                    and matches(path)
+                    and (
+                        not include_dirs
+                        or any(path.is_relative_to(directory) for directory in include_dirs)
+                    )
                 }
             )
 
@@ -66,9 +74,7 @@ class SourceDiscovery:
             if not directory.exists():
                 continue
             collected.extend(
-                path.resolve()
-                for path in directory.rglob("*")
-                if path.is_file() and matches(path)
+                path.resolve() for path in directory.rglob("*") if path.is_file() and matches(path)
             )
         return sorted(set(collected))
 

@@ -1,9 +1,9 @@
 import sys
 
 from spec_integrator.config import Config, KeywordRule, TierConfig
+from spec_integrator.document.gates.static import StaticVerifier
 from spec_integrator.graph import DocGraphBuilder
 from spec_integrator.parser import MarkdownParser
-from spec_integrator.document.gates.static import StaticVerifier
 
 
 def test_static_verifier_gates(tmp_path):
@@ -20,10 +20,13 @@ def test_static_verifier_gates(tmp_path):
     # 1. Tier 0
     (docs_dir / "requires").mkdir()
     (docs_dir / "requires" / "req.md").write_text(
-        """# System Reqs
-## Sched {REQ_COOS_SCHED}
-## Unreferenced {REQ_UNREF}
-""",
+        "# System Reqs\n"
+        "## Sched\n"
+        "<!-- definition: {REQ_COOS_SCHED} -->\n"
+        "{REQ_COOS_SCHED}: Scheduler contract.\n"
+        "## Unreferenced\n"
+        "<!-- definition: {REQ_UNREF} -->\n"
+        "{REQ_UNREF}: Separate requirement.\n",
         encoding="utf-8",
     )
     # 2. Tier 1 (Valid reference, but has broken link and undefined keyword)
@@ -31,7 +34,8 @@ def test_static_verifier_gates(tmp_path):
     (docs_dir / "tier1_core" / "sched.md").write_text(
         """# Core Scheduler
 ## Implementation
-Implements {REQ_COOS_SCHED} and undefined {REQ_NON_EXIST}.
+Implements the scheduler contract.
+<!-- traceability: {REQ_COOS_SCHED} {REQ_NON_EXIST} -->
 Broken link to [Missing](non_existing.md).
 Broken anchor to [Req](../requires/req.md#missing-anchor).
 Valid link to [Req](../requires/req.md#sched).
@@ -50,11 +54,14 @@ Runtime details.
     )
     # Modify Tier 0 to contain a reverse link to Tier 2
     (docs_dir / "requires" / "req.md").write_text(
-        """# System Reqs
-## Sched {REQ_COOS_SCHED}
-## Unreferenced {REQ_UNREF}
-Direct link to [Loader](../tier2_runtime/loader.md).
-""",
+        "# System Reqs\n"
+        "## Sched\n"
+        "<!-- definition: {REQ_COOS_SCHED} -->\n"
+        "{REQ_COOS_SCHED}: Scheduler contract.\n"
+        "## Unreferenced\n"
+        "<!-- definition: {REQ_UNREF} -->\n"
+        "{REQ_UNREF}: Separate requirement.\n"
+        "Direct link to [Loader](../tier2_runtime/loader.md).\n",
         encoding="utf-8",
     )
     # Parse and build graph
@@ -72,6 +79,37 @@ Direct link to [Loader](../tier2_runtime/loader.md).
     assert "TRACE-UNDEFINED-KEYWORD" in rule_codes
     assert "TRACE-UNREFERENCED-REQUIREMENT" in rule_codes
     assert "HIERARCHY-REVERSE-DEPENDENCY" in rule_codes
+
+
+def test_keyword_index_location_without_inline_marker_is_not_a_definition(tmp_path):
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    indexed_file = docs_dir / "indexed.md"
+    indexed_file.write_text(
+        """# Indexed
+## Mention
+<!-- traceability: {REQ_INDEX_ONLY} -->
+""",
+        encoding="utf-8",
+    )
+    consumer_file = docs_dir / "consumer.md"
+    consumer_file.write_text(
+        """# Consumer
+## Use
+<!-- traceability: {REQ_INDEX_ONLY} -->
+""",
+        encoding="utf-8",
+    )
+
+    cfg = Config()
+    cfg.keyword_registry_sources = {"REQ_INDEX_ONLY": "indexed.md"}
+    parser = MarkdownParser(cfg)
+    docs = [parser.parse_file(indexed_file, docs_dir), parser.parse_file(consumer_file, docs_dir)]
+    graph = DocGraphBuilder(cfg).build(docs, docs_dir)
+    issues = StaticVerifier(cfg).verify(docs, graph, docs_dir)
+
+    assert any(issue.rule_code == "TRACE-UNDEFINED-KEYWORD" for issue in issues)
+    assert any(issue.rule_code == "TRACE-INDEX-WITHOUT-DEFINITION" for issue in issues)
 
 
 def test_static_verifier_catches_invalid_mermaid(tmp_path):

@@ -1,9 +1,3 @@
-Audit the document's information structure for human readability.
-- When a passage contains procedures and cautions, require either separate concise bullet lists for procedures and cautions, or a concise main-line explanation followed by grouped bullets for supplementary conditions.
-- Do not accept a dense paragraph that combines the main procedure, prerequisites, constraints, exceptions, rationale, and verification instructions when those elements can be separated without losing meaning.
-- Order supplementary conditions by impact and importance. Use this default priority: scope and applicability, safety and ownership, correctness and contractual constraints, performance and resource limits, then implementation notes. Use a document-specific risk order when it is more important.
-- Check that restructuring preserves every requirement, prerequisite, constraint, exception, rationale, and verification condition. Report omissions, duplicated conditions, or changed meaning separately from style issues.
-- Reasons may be stated as concise current-design rationale. Flag historical background, work history, chronological change narratives, and meeting-log prose; the dedicated rationale-over-history check also applies.
-- Do not flag a short definition, single fact, or genuinely linear sentence merely because it is prose. Flag only passages whose mixed information types or length materially obstruct human reading.
+Flag a passage only when mixing a procedure, prerequisites, exceptions, rationale, and verification conditions materially obstructs reading. Identify the mixed information types and a grouping that preserves every stated requirement. Prefer the main procedure first, followed by conditions ordered by impact. A short definition or linear explanation needs no restructuring.
 
-When reporting an issue, cite the section and identify the information types that are improperly mixed or missing. A PASS requires both readable grouping and preservation of the original information.
+Specifications should state current design rationale, not a chronological work log. Flag history only when it displaces the present contract or its reason.
