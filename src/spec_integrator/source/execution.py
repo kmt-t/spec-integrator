@@ -10,6 +10,40 @@ from spec_integrator.config import Config
 from spec_integrator.source.models import SourceIssue
 
 
+def _pysim_failure_details(stdout: str, stderr: str) -> str:
+    lines = stdout.splitlines()
+    failure_sections: list[str] = []
+    index = 0
+    while index < len(lines):
+        if not lines[index].lstrip().startswith("[FAIL]"):
+            index += 1
+            continue
+
+        end = index + 1
+        while end < len(lines):
+            line = lines[end].lstrip()
+            if line.startswith(("[PASS]", "[FAIL]")) or "Unit Test Summary:" in line:
+                break
+            end += 1
+        failure_sections.append("\n".join(lines[index:end]).strip())
+        index = end
+
+    summary = next(
+        (line.strip() for line in reversed(lines) if "Unit Test Summary:" in line),
+        "",
+    )
+    if failure_sections:
+        details = "\n".join((*failure_sections, summary) if summary else failure_sections)
+    else:
+        details = stderr.strip() or stdout.strip()
+
+    if not details:
+        return "Exit code non-zero"
+    if len(details) > 4000:
+        details = f"{details[:1900]}\n... failure output truncated ...\n{details[-1900:]}"
+    return details
+
+
 class SourceExecution:
     """Runs external source tools and translates failures into source issues."""
 
@@ -133,15 +167,14 @@ class SourceExecution:
             )
             if result.returncode == 0:
                 return []
-            error = result.stderr.strip() or result.stdout.strip()
-            last_line = error.splitlines()[-1] if error else "Exit code non-zero"
+            failure_details = _pysim_failure_details(result.stdout, result.stderr)
             return [
                 SourceIssue(
                     file_path=self._relative_path(runner),
                     line=1,
                     rule="PYSIM-TEST-FAILED",
                     severity="ERROR",
-                    message=f"Pysim test suite failed: {last_line}",
+                    message=f"Pysim test suite failed:\n{failure_details}",
                     group=group_name,
                 )
             ]
