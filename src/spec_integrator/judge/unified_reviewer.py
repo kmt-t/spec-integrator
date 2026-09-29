@@ -7,6 +7,7 @@ from spec_integrator.config import LLMCheckRule
 from spec_integrator.graph import KeywordGroup
 from spec_integrator.judge.base import BaseJudge
 from spec_integrator.judge.checksheet import Checksheet
+from spec_integrator.judge.llm_backend import LLMBackendError
 from spec_integrator.models import JudgeEvaluation, JudgeResult, ParsedDocument, ParsedSection
 
 
@@ -493,6 +494,8 @@ class UnifiedReviewEngine(BaseJudge):
                 evaluations=evaluations,
                 covered_files=covered,
             )
+        except LLMBackendError:
+            raise
         except Exception as e:
             return JudgeResult(
                 item_id=item_id,

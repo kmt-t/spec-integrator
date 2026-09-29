@@ -11,6 +11,10 @@ RETRIES = 3
 RETRY_SLEEP_SECONDS = 2
 
 
+class LLMBackendError(RuntimeError):
+    """A backend request did not produce a usable checksheet response."""
+
+
 def call_ollama_embeddings(
     config: Config,
     texts: list[str],
@@ -94,6 +98,10 @@ def call_system_one(
         try:
             resp = requests.post(endpoint, json=payload, headers=headers, timeout=90)
             if resp.status_code != 200:
+                if 400 <= resp.status_code < 500 and resp.status_code != 429:
+                    raise LLMBackendError(
+                        f"OpenRouter Jev API returned status {resp.status_code}: {resp.text}"
+                    )
                 raise RuntimeError(
                     f"OpenRouter Jev API returned status {resp.status_code}: {resp.text}"
                 )
@@ -101,9 +109,13 @@ def call_system_one(
             if not isinstance(data, dict) or not isinstance(data.get("answers"), dict):
                 raise ValueError("OpenRouter Jev API response has no 'answers' object")
             return data
+        except LLMBackendError:
+            raise
         except Exception as e:
             last_err = e
             if attempt < RETRIES - 1:
                 time.sleep(RETRY_SLEEP_SECONDS)
 
-    raise RuntimeError(f"Failed to call OpenRouter Jev API after {RETRIES} attempts: {last_err}")
+    raise LLMBackendError(
+        f"Failed to call OpenRouter Jev API after {RETRIES} attempts: {last_err}"
+    ) from last_err

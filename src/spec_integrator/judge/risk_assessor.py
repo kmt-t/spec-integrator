@@ -166,17 +166,9 @@ class RiskAssessor(BaseJudge):
                 )
             raise ValueError(f"Unsupported checksheet backend: '{backend}'")
         except Exception as e:
-            return KeywordRiskAssessment(
-                item_id=sg["item_id"],
-                keyword=keyword,
-                file_path=file_path,
-                tier=tier,
-                complexity_score=3,
-                risk_score=3,
-                line=line,
-                covered_files=covered,
-                summary=f"Assessment error: {e}",
-            )
+            raise RuntimeError(
+                f"Risk assessment failed for '{{{keyword}}}' through backend '{backend}': {e}"
+            ) from e
 
 
 __all__ = ["KeywordRiskAssessment", "RiskAssessmentReport", "RiskAssessor"]
