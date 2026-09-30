@@ -9,6 +9,9 @@ from spec_integrator.config import Config
 
 RETRIES = 3
 RETRY_SLEEP_SECONDS = 2
+SYSTEM_ONE_BACKENDS = ("jev", "nimble")
+BACKEND_LABELS = {"jev": "Jev", "nimble": "Nimble"}
+BACKEND_DEFAULT_MODELS = {"jev": "typesafe/jev-1.13", "nimble": "nimble"}
 
 
 class LLMBackendError(RuntimeError):
@@ -69,28 +72,41 @@ def call_system_one(
     state: str | dict,
     questions: dict[str, dict],
     model: str | None = None,
+    backend: str = "jev",
 ) -> dict:
-    """Submit typed checksheet questions to Jev through OpenRouter."""
-    b_config = config.llm_judge.backends.get("jev")
-    api_key_env = b_config.api_key_env if b_config else "OPENROUTER_API_KEY"
-    api_key = os.environ.get(api_key_env, "")
-    if not api_key:
-        raise ValueError(f"OpenRouter API key environment variable '{api_key_env}' is not set.")
+    """Submit a typed checksheet through a configured System One-compatible backend."""
+    if backend not in SYSTEM_ONE_BACKENDS:
+        raise ValueError(f"Unsupported System One backend: '{backend}'")
+
+    b_config = config.llm_judge.backends.get(backend)
+    if b_config is None and backend != "jev":
+        raise ValueError(f"System One backend '{backend}' is not configured.")
+
+    api_key_env = (
+        b_config.api_key_env if b_config and b_config.api_key_env else "OPENROUTER_API_KEY"
+    )
+    requires_api_key = b_config.requires_api_key if b_config else True
+    api_key = os.environ.get(api_key_env, "") if requires_api_key else ""
+    if requires_api_key and not api_key:
+        raise ValueError(
+            f"API key environment variable '{api_key_env}' is not set for '{backend}'."
+        )
 
     selected_model = model or (
-        b_config.model if (b_config and b_config.model) else "typesafe/jev-1.13"
+        b_config.model if (b_config and b_config.model) else BACKEND_DEFAULT_MODELS[backend]
     )
-    endpoint = (
-        b_config.endpoint
-        if (b_config and b_config.endpoint)
-        else "https://openrouter.ai/api/alpha/decisions"
-    )
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": getattr(config.project, "url", "https://github.com/spec-integrator"),
-        "X-Title": f"{config.project.name} Spec Integrator",
-    }
+    default_endpoint = "https://openrouter.ai/api/alpha/decisions" if backend == "jev" else ""
+    endpoint = b_config.endpoint if (b_config and b_config.endpoint) else default_endpoint
+    if not endpoint:
+        raise ValueError(f"System One endpoint is not configured for '{backend}'.")
+
+    headers = {"Content-Type": "application/json"}
+    if requires_api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+        headers["HTTP-Referer"] = getattr(
+            config.project, "url", "https://github.com/spec-integrator"
+        )
+        headers["X-Title"] = f"{config.project.name} Spec Integrator"
     payload = {"model": selected_model, "state": state, "questions": questions}
 
     last_err: Exception | None = None
@@ -100,14 +116,14 @@ def call_system_one(
             if resp.status_code != 200:
                 if 400 <= resp.status_code < 500 and resp.status_code != 429:
                     raise LLMBackendError(
-                        f"OpenRouter Jev API returned status {resp.status_code}: {resp.text}"
+                        f"{BACKEND_LABELS[backend]} API returned status {resp.status_code}: {resp.text}"
                     )
                 raise RuntimeError(
-                    f"OpenRouter Jev API returned status {resp.status_code}: {resp.text}"
+                    f"{BACKEND_LABELS[backend]} API returned status {resp.status_code}: {resp.text}"
                 )
             data = resp.json()
             if not isinstance(data, dict) or not isinstance(data.get("answers"), dict):
-                raise ValueError("OpenRouter Jev API response has no 'answers' object")
+                raise ValueError(f"{BACKEND_LABELS[backend]} API response has no 'answers' object")
             return data
         except LLMBackendError:
             raise
@@ -117,5 +133,5 @@ def call_system_one(
                 time.sleep(RETRY_SLEEP_SECONDS)
 
     raise LLMBackendError(
-        f"Failed to call OpenRouter Jev API after {RETRIES} attempts: {last_err}"
+        f"Failed to call {BACKEND_LABELS[backend]} API after {RETRIES} attempts: {last_err}"
     ) from last_err

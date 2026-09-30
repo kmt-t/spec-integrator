@@ -4,6 +4,7 @@ import json
 from typing import TYPE_CHECKING
 
 from spec_integrator.judge.checksheet import Checksheet, submit_checksheet
+from spec_integrator.judge.llm_backend import BACKEND_LABELS, SYSTEM_ONE_BACKENDS
 from spec_integrator.models import VerificationIssue
 
 if TYPE_CHECKING:
@@ -26,12 +27,14 @@ class TermVarianceJudge:
     ) -> int:
         """Evaluates high-similarity pairs with LLM context check and records variance judgments."""
         used_backend = backend or self.config.llm_judge.default_backend
-        if used_backend not in ("jev", "mock"):
+        if used_backend not in (*SYSTEM_ONE_BACKENDS, "mock"):
             raise ValueError(f"Unsupported checksheet backend: '{used_backend}'")
         similarities = db.get_term_similarities()
 
         unjudged_pairs = [
-            row for row in similarities if not db.is_similarity_judged(row["term_a"], row["term_b"])
+            row
+            for row in similarities
+            if not db.is_similarity_judged(row["term_a"], row["term_b"], backend=used_backend)
         ]
 
         if max_pairs > 0:
@@ -63,7 +66,11 @@ class TermVarianceJudge:
             occ_b = occs_b[0]
 
             try:
-                if used_backend == "jev":
+                if used_backend in SYSTEM_ONE_BACKENDS:
+                    backend_label = BACKEND_LABELS[used_backend]
+                    metric_label = (
+                        "probability concentration" if used_backend == "nimble" else "confidence"
+                    )
                     sheet = Checksheet(
                         name="term_variance",
                         state={
@@ -101,7 +108,7 @@ class TermVarianceJudge:
                             }
                         },
                     )
-                    response = submit_checksheet(self.config, sheet, model)
+                    response = submit_checksheet(self.config, sheet, model, used_backend)
                     answer = response["answers"]["term_decision"]
                     decision = answer.get("choice")
                     if decision not in (
@@ -109,14 +116,19 @@ class TermVarianceJudge:
                         "variance_prefer_a",
                         "variance_prefer_b",
                     ):
-                        raise ValueError(f"Jev returned an unknown term decision: {decision!r}")
+                        raise ValueError(
+                            f"{backend_label} returned an unknown term decision: {decision!r}"
+                        )
                     is_variance = decision != "no_variance"
                     confidence = float(answer["confidence"])
                     if not 0.0 <= confidence <= 1.0:
-                        raise ValueError("Jev returned a confidence outside the 0-1 range")
+                        raise ValueError(
+                            f"{backend_label} returned {metric_label} outside the 0-1 range"
+                        )
                     preferred_term = term_b if decision == "variance_prefer_b" else term_a
                     reason = (
-                        f"Jev selected '{decision}' with {confidence:.0%} confidence; "
+                        f"{backend_label} selected '{decision}' with {confidence:.0%} "
+                        f"{metric_label}; "
                         "the decision model does not return a text rationale."
                     )
                 else:
@@ -146,22 +158,29 @@ class TermVarianceJudge:
         return judged_count
 
     def generate_verification_issues(
-        self, db: DocAuditDB, min_confidence: float | None = None
+        self,
+        db: DocAuditDB,
+        min_confidence: float | None = None,
+        backend: str | None = None,
     ) -> list[VerificationIssue]:
-        """Generates VerificationIssue warnings for high-confidence term variances."""
+        """Generates warnings for term-variance scores from the selected backend."""
         threshold = (
             min_confidence
             if min_confidence is not None
             else self.config.terminology.confidence_threshold
         )
 
-        rows = db.get_high_confidence_variances(min_confidence=threshold)
+        selected_backend = backend or self.config.llm_judge.default_backend
+        rows = db.get_high_confidence_variances(min_confidence=threshold, backend=selected_backend)
         issues: list[VerificationIssue] = []
 
         for r in rows:
             conf_pct = int(r["confidence"] * 100)
+            backend_label = BACKEND_LABELS.get(selected_backend, selected_backend)
+            metric_label = "確率集中度" if selected_backend == "nimble" else "確度"
             msg = (
-                f"用語表記揺れの可能性 (確度: {conf_pct}%): '{r['term_a']}' vs '{r['term_b']}' "
+                f"用語表記揺れの可能性 ({backend_label} {metric_label}: {conf_pct}%): "
+                f"'{r['term_a']}' vs '{r['term_b']}' "
                 f"({r['file_b']}:{r['line_b']})。推奨表記: '{r['preferred_term']}'。理由: {r['reason']}"
             )
             issues.append(

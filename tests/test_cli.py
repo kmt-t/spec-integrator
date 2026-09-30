@@ -1,10 +1,15 @@
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
+from spec_integrator.application import commands
 from spec_integrator.cli import (
     cmd_check_doc,
     cmd_check_src,
     cmd_format_doc,
     cmd_format_src,
     cmd_init,
+    cmd_llm_word,
 )
 from spec_integrator.db import DocAuditDB
 
@@ -289,10 +294,13 @@ def test_cli_subparsers_args():
     assert args_risk.max_keywords == 5
     assert args_risk.exhaustive is True
 
-    args_word = parser.parse_args(["llm-word", "--quick", "--threshold", "0.85"])
+    args_word = parser.parse_args(
+        ["llm-word", "--quick", "--threshold", "0.85", "--backend", "nimble"]
+    )
     assert args_word.subcommand == "llm-word"
     assert args_word.quick is True
     assert args_word.threshold == 0.85
+    assert args_word.backend == "nimble"
 
     args_single = parser.parse_args(["llm-single-review", "--all", "--dry-run"])
     assert args_single.subcommand == "llm-single-review"
@@ -310,3 +318,60 @@ def test_cli_subparsers_args():
     assert args_keyword.subcommand == "llm-keyword-review"
     assert args_keyword.keyword == "JIT"
     assert args_keyword.dry_run is True
+
+
+def test_llm_word_report_uses_backend_override_for_stored_variances(monkeypatch, capsys):
+    from spec_integrator.config import Config
+
+    config = Config()
+    config.llm_judge.default_backend = "jev"
+    db = DocAuditDB(":memory:")
+    for backend, term_a, term_b in (
+        ("jev", "scheduler", "dispatcher"),
+        ("nimble", "memory manager", "allocator"),
+    ):
+        db.insert_term_variance_judgment(
+            term_a=term_a,
+            term_b=term_b,
+            file_a="a.md",
+            file_b="b.md",
+            line_a=1,
+            line_b=2,
+            is_variance=True,
+            confidence=0.86,
+            preferred_term=term_a,
+            reason=f"{backend} decision",
+            backend=backend,
+        )
+
+    monkeypatch.setattr(commands.Config, "load", lambda _path: config)
+    monkeypatch.setattr(
+        commands,
+        "_load_and_parse_all",
+        lambda _config: ([], None, db, Path.cwd()),
+    )
+    monkeypatch.setattr(commands.TermIndexer, "index_embeddings", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(
+        commands.TermIndexer,
+        "compute_and_save_similarities",
+        lambda *_args, **_kwargs: 0,
+    )
+    monkeypatch.setattr(commands.LevenshteinTypoCheck, "check", lambda *_args: [])
+    args = SimpleNamespace(
+        config="spec-integrator.yaml",
+        backend="nimble",
+        quick=True,
+        embedding_model="qwen3-embedding",
+        threshold=0.8,
+        max_pairs=20,
+        model=None,
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cmd_llm_word(args)
+
+    assert exc_info.value.code == 0
+    output = capsys.readouterr().out
+    assert "Nimble probability concentration" in output
+    assert "memory manager" in output
+    assert "scheduler" not in output

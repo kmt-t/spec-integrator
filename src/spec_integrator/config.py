@@ -158,6 +158,8 @@ class LLMBackendConfig:
     api_key_env: str = ""
     endpoint: str = ""
     model: str = ""
+    requires_api_key: bool = True
+    context_window_tokens: int | None = None
 
 
 @dataclass

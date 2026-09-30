@@ -16,6 +16,7 @@ from spec_integrator.judge import (
     RiskAssessor,
     UnifiedReviewEngine,
 )
+from spec_integrator.judge.llm_backend import BACKEND_LABELS
 from spec_integrator.models import JudgeResult
 from spec_integrator.source.commands import cmd_check_src, cmd_format_src
 from spec_integrator.terminology import (
@@ -23,7 +24,7 @@ from spec_integrator.terminology import (
     TermVarianceJudge,
 )
 
-CHECKSHEET_BACKENDS = ("jev", "mock")
+CHECKSHEET_BACKENDS = ("jev", "nimble", "mock")
 
 
 def _configure_utf8_stdio() -> None:
@@ -128,6 +129,11 @@ llm_judge:
       api_key_env: "OPENROUTER_API_KEY"
       endpoint: "https://openrouter.ai/api/alpha/decisions"
       model: "typesafe/jev-1.13"
+    nimble:
+      endpoint: "http://localhost:11434/v1/systemone"
+      model: "nimble"
+      requires_api_key: false
+      context_window_tokens: 8192
 
 embeddings:
   endpoint: "http://localhost:11434"
@@ -216,7 +222,7 @@ def cmd_llm_single_review(args):
         sys.exit(0)
 
     documents, graph, db, _docs_root = _load_and_parse_all(config)
-    backend = args.backend or config.llm_judge.default_backend
+    backend = getattr(args, "backend", None) or config.llm_judge.default_backend
     model = args.model
     selected_checks = [args.check] if args.check else None
     high_risk_threshold = getattr(args, "risk_threshold", None) or config.obligation.risk_threshold
@@ -361,7 +367,7 @@ def cmd_llm_keyword_review(args):
         sys.exit(0)
 
     documents, graph, db, _docs_root = _load_and_parse_all(config)
-    backend = args.backend or config.llm_judge.default_backend
+    backend = getattr(args, "backend", None) or config.llm_judge.default_backend
     model = args.model
     selected_checks = [args.check] if args.check else None
     min_risk = args.min_risk if args.min_risk is not None else config.obligation.risk_threshold
@@ -583,12 +589,13 @@ def cmd_llm_judge(args):
 
 
 def cmd_llm_findings(args):
-    """Lists stored typed review decisions at or above a confidence threshold."""
+    """Lists stored typed review decisions at or above a backend-specific score threshold."""
     if not 0.0 <= args.min_confidence <= 1.0:
         print("--min-confidence must be between 0.0 and 1.0.")
         sys.exit(2)
 
     config = Config.load(args.config)
+    backend = getattr(args, "backend", None) or config.llm_judge.default_backend
     db = DocAuditDB(config.get_db_path())
     classifications = args.classification
     if args.all_outcomes:
@@ -600,19 +607,32 @@ def cmd_llm_findings(args):
         classifications=classifications,
         run_type=args.run_type,
         limit=args.limit if args.limit > 0 else None,
+        backend=backend,
     )
     db.close()
 
-    confidence_percent = f"{args.min_confidence:.0%}"
-    print(f"LLM review evaluations with confidence >= {confidence_percent}: showing {len(rows)}")
+    backend_label = BACKEND_LABELS.get(backend, backend)
+    confidence_metric = "probability concentration" if backend == "nimble" else "confidence"
+    score_percent = f"{args.min_confidence:.0%}"
+    print(
+        f"LLM review evaluations for {backend_label} with {confidence_metric} >= "
+        f"{score_percent}: showing {len(rows)}"
+    )
     if not rows:
-        print("No matching stored evaluations. Run an LLM review to populate the confidence index.")
+        print(
+            "No matching stored evaluations. Run a review with this backend to populate its index."
+        )
         sys.exit(0)
     print(
         "Typed decision backends do not store rationale or citations; review each listed section manually."
     )
+    if backend == "nimble":
+        print(
+            "Nimble probability concentration describes how concentrated its choice probabilities "
+            "are; it is not the probability that the selected answer is correct."
+        )
     headers = [
-        "confidence",
+        confidence_metric,
         "outcome",
         "severity",
         "review",
@@ -624,7 +644,7 @@ def cmd_llm_findings(args):
         "generated at",
     ]
     print("| " + " | ".join(headers) + " |")
-    print("| ---: | --- | --- | --- | --- | --- | --- | --- | --- |")
+    print("| ---: | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for row in rows:
         cells = [
             f"{row['confidence']:.0%}",
@@ -646,6 +666,7 @@ def cmd_llm_findings(args):
 def cmd_llm_word(args):
     """Executes terminology embedding, pairwise similarity indexing, LLM variance judgment, and report."""
     config = Config.load(args.config)
+    used_backend = args.backend or config.llm_judge.default_backend
     documents, _graph, db, _docs_root = _load_and_parse_all(config)
 
     indexer = TermIndexer(config)
@@ -661,7 +682,6 @@ def cmd_llm_word(args):
 
     if not args.quick:
         judge = TermVarianceJudge(config)
-        used_backend = args.backend or config.llm_judge.default_backend
         _log(
             f">>> [3/3] Judging term variance via LLM (backend: {used_backend}, max: {args.max_pairs} pairs)..."
         )
@@ -697,18 +717,22 @@ def cmd_llm_word(args):
 
     # 2. LLM Semantic Variance Judgments
     variances = db.get_high_confidence_variances(
-        min_confidence=config.terminology.confidence_threshold
+        min_confidence=config.terminology.confidence_threshold,
+        backend=used_backend,
     )
     conf_thresh = int(config.terminology.confidence_threshold * 100)
+    backend_label = BACKEND_LABELS.get(used_backend, used_backend)
+    metric_label = "probability concentration" if used_backend == "nimble" else "confidence"
     print(
-        f"\n### 2. LLM Contextual Term Variances (Confidence >= {conf_thresh}%: {len(variances)} detected)"
+        f"\n### 2. LLM Contextual Term Variances ({backend_label} {metric_label} >= "
+        f"{conf_thresh}%: {len(variances)} detected)"
     )
     if variances:
         print("-" * 80)
         for r in variances:
             conf_pct = int(r["confidence"] * 100)
             pref = r["preferred_term"] or "N/A"
-            print(f"  [WARN] '{r['term_a']}' vs '{r['term_b']}' (Confidence: {conf_pct}%)")
+            print(f"  [WARN] '{r['term_a']}' vs '{r['term_b']}' ({metric_label}: {conf_pct}%)")
             print(f"         Location: {r['file_a']}:{r['line_a']} vs {r['file_b']}:{r['line_b']}")
             print(f"         Preferred: '{pref}'")
             print(f"         Reason: {r['reason']}\n")
@@ -1012,14 +1036,19 @@ def _add_llm_judge_subparser(subparsers) -> None:
 def _add_llm_findings_subparser(subparsers) -> None:
     p = subparsers.add_parser(
         "llm-findings",
-        help="Query persisted LLM review decisions by confidence and outcome",
+        help="Query persisted LLM review decisions by backend-specific score and outcome",
     )
     _add_config_arg(p)
     p.add_argument(
         "--min-confidence",
         type=float,
         default=0.70,
-        help="Minimum confidence from 0.0 to 1.0 (default: 0.70)",
+        help="Minimum backend-specific score from 0.0 to 1.0 (default: 0.70)",
+    )
+    p.add_argument(
+        "--backend",
+        choices=CHECKSHEET_BACKENDS,
+        help="Filter by backend (defaults to the configured LLM backend)",
     )
     p.add_argument(
         "--classification",

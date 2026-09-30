@@ -245,3 +245,34 @@ def test_term_variance_judge_and_issues():
     assert issue.line == 15
     assert "コンテキスト切替" in issue.message
     assert "コンテキストスイッチ" in issue.message
+
+
+def test_term_variance_issues_use_the_configured_backend_metric():
+    config = Config()
+    config.llm_judge.default_backend = "nimble"
+    db = DocAuditDB(":memory:")
+    for backend, term_a, term_b in (
+        ("jev", "scheduler", "dispatcher"),
+        ("nimble", "memory manager", "allocator"),
+    ):
+        db.insert_term_variance_judgment(
+            term_a=term_a,
+            term_b=term_b,
+            file_a="a.md",
+            file_b="b.md",
+            line_a=1,
+            line_b=2,
+            is_variance=True,
+            confidence=0.86,
+            preferred_term=term_a,
+            reason=f"{backend} decision",
+            backend=backend,
+        )
+
+    issues = TermVarianceJudge(config).generate_verification_issues(db)
+
+    assert len(issues) == 1
+    assert "memory manager" in issues[0].message
+    assert "Nimble 確率集中度: 86%" in issues[0].message
+    assert "scheduler" not in issues[0].message
+    db.close()

@@ -26,8 +26,10 @@ class BaseJudge:
             "report the truncation as a limitation instead.]"
         )
 
-    def _submit_checksheet(self, sheet: Checksheet, model: str | None = None) -> dict:
-        return submit_checksheet(self.config, sheet, model)
+    def _submit_checksheet(
+        self, sheet: Checksheet, model: str | None = None, backend: str = "jev"
+    ) -> dict:
+        return submit_checksheet(self.config, sheet, model, backend)
 
     @staticmethod
     def _find_doc_and_sec(

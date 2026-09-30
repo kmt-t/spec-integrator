@@ -18,7 +18,6 @@ from spec_integrator.models import (
     ConsistencySummary,
     FormalModelResult,
     ObligationSummary,
-    ParsedDocument,
     VerificationIssue,
     WITFileResult,
 )
@@ -107,6 +106,7 @@ class DocumentPipeline:
                 TermVarianceJudge(self.config).generate_verification_issues(
                     workspace.db,
                     min_confidence=self.config.terminology.confidence_threshold,
+                    backend=self.config.llm_judge.default_backend,
                 )
             )
         if getattr(self.config.semantic_topic, "enabled", True):
@@ -135,9 +135,7 @@ class DocumentPipeline:
 
     def build_terms(self, workspace: DocumentWorkspace) -> int:
         """Extract and persist document terminology for the build command."""
-        return TermExtractor(self.config).extract_and_save(
-            workspace.documents, workspace.db
-        )
+        return TermExtractor(self.config).extract_and_save(workspace.documents, workspace.db)
 
     def format(
         self,

@@ -7,7 +7,11 @@ from spec_integrator.config import LLMCheckRule
 from spec_integrator.graph import KeywordGroup
 from spec_integrator.judge.base import BaseJudge
 from spec_integrator.judge.checksheet import Checksheet
-from spec_integrator.judge.llm_backend import LLMBackendError
+from spec_integrator.judge.llm_backend import (
+    BACKEND_LABELS,
+    SYSTEM_ONE_BACKENDS,
+    LLMBackendError,
+)
 from spec_integrator.models import JudgeEvaluation, JudgeResult, ParsedDocument, ParsedSection
 
 
@@ -395,32 +399,37 @@ class UnifiedReviewEngine(BaseJudge):
                 issues=[],
                 covered_files=covered,
             )
-        if backend != "jev":
+        if backend not in SYSTEM_ONE_BACKENDS:
             raise ValueError(f"Unsupported checksheet backend: '{backend}'")
-        return self._run_jev_review(sheet, item_id, item_label, covered, checks, model)
+        return self._run_system_one_review(
+            sheet, item_id, item_label, covered, backend, checks, model
+        )
 
-    def _run_jev_review(
+    def _run_system_one_review(
         self,
         sheet: Checksheet,
         item_id: str,
         item_label: str,
         covered: list[str],
+        backend: str,
         checks: list[LLMCheckRule],
         model: str | None,
     ) -> JudgeResult:
         """Classifies each typed decision review criterion into a review outcome."""
+        backend_label = BACKEND_LABELS[backend]
+        metric_label = "probability concentration" if backend == "nimble" else "confidence"
         if not checks:
             return JudgeResult(
                 item_id=item_id,
                 item_label=item_label,
                 status="SKIPPED",
-                summary="No configured checks were available for Jev review.",
+                summary=f"No configured checks were available for {backend_label} review.",
                 issues=[],
                 covered_files=covered,
             )
 
         try:
-            response = self._submit_checksheet(sheet, model)
+            response = self._submit_checksheet(sheet, model, backend)
             answers = response["answers"]
             issues: list[dict] = []
             evaluations: list[JudgeEvaluation] = []
@@ -429,19 +438,25 @@ class UnifiedReviewEngine(BaseJudge):
             for check in checks:
                 answer = answers.get(check.id)
                 if not isinstance(answer, dict) or answer.get("type") != "choice":
-                    raise ValueError(f"Jev response has no valid Choice answer for '{check.id}'")
+                    raise ValueError(
+                        f"{backend_label} response has no valid Choice answer for '{check.id}'"
+                    )
                 outcome = answer.get("choice")
                 if outcome not in REVIEW_OUTCOMES:
-                    raise ValueError(f"Jev returned an unknown review outcome for '{check.id}'")
+                    raise ValueError(
+                        f"{backend_label} returned an unknown review outcome for '{check.id}'"
+                    )
                 confidence = answer.get("confidence")
                 if (
                     isinstance(confidence, bool)
                     or not isinstance(confidence, (int, float))
                     or not 0.0 <= confidence <= 1.0
                 ):
-                    raise ValueError(f"Jev returned invalid confidence for '{check.id}'")
+                    raise ValueError(
+                        f"{backend_label} returned an invalid {metric_label} for '{check.id}'"
+                    )
                 outcome_counts[outcome] += 1
-                decisions.append(f"{check.id}={outcome}({confidence:.0%})")
+                decisions.append(f"{check.id}={outcome}({metric_label} {confidence:.0%})")
                 if outcome == "confirmed_violation":
                     severity = check.severity.upper()
                     if severity not in ("ERROR", "WARNING"):
@@ -470,9 +485,9 @@ class UnifiedReviewEngine(BaseJudge):
                             "classification": outcome,
                             "confidence": confidence,
                             "description": (
-                                f"Jev classified this criterion as '{outcome}' with "
-                                f"{confidence:.0%} confidence. Jev returns no rationale or source "
-                                "location; inspect the linked section(s) manually."
+                                f"{backend_label} classified this criterion as '{outcome}' with "
+                                f"{metric_label} {confidence:.0%}. The decision backend returns "
+                                "no rationale or source location; inspect the linked section(s) manually."
                             ),
                         }
                     )
@@ -482,8 +497,9 @@ class UnifiedReviewEngine(BaseJudge):
             status = "FAIL" if has_error else ("WARN" if has_warning else "PASS")
             counts = ", ".join(f"{outcome}={count}" for outcome, count in outcome_counts.items())
             summary = (
-                f"Jev classified {len(checks)} typed review criteria: {counts}. "
-                f"Selections: {', '.join(decisions)}. Jev does not generate explanations or citations."
+                f"{backend_label} classified {len(checks)} typed review criteria: {counts}. "
+                f"Selections: {', '.join(decisions)}. The decision backend does not generate "
+                "explanations or citations."
             )
             return JudgeResult(
                 item_id=item_id,
@@ -501,13 +517,13 @@ class UnifiedReviewEngine(BaseJudge):
                 item_id=item_id,
                 item_label=item_label,
                 status="FAIL",
-                summary=f"Jev review error: {e}",
+                summary=f"{backend_label} review error: {e}",
                 issues=[
                     {
                         "severity": "ERROR",
                         "check_id": "runtime_error",
                         "location": item_label,
-                        "description": f"No usable Jev verdict was returned: {e}",
+                        "description": f"No usable {backend_label} verdict was returned: {e}",
                     }
                 ],
                 covered_files=covered,

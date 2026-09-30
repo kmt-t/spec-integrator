@@ -18,6 +18,11 @@ class Checksheet:
         return {"state": self.state, "questions": self.questions}
 
 
-def submit_checksheet(config: Config, sheet: Checksheet, model: str | None = None) -> dict:
+def submit_checksheet(
+    config: Config,
+    sheet: Checksheet,
+    model: str | None = None,
+    backend: str = "jev",
+) -> dict:
     """Submit one checksheet through the configured System One endpoint."""
-    return call_system_one(config, sheet.state, sheet.questions, model)
+    return call_system_one(config, sheet.state, sheet.questions, model, backend)

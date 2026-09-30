@@ -117,6 +117,11 @@ llm_judge:
       api_key_env: "OPENROUTER_API_KEY"
       endpoint: "https://openrouter.ai/api/alpha/decisions"
       model: "typesafe/jev-1.13"
+    nimble:
+      endpoint: "http://localhost:11434/v1/systemone"
+      model: "nimble"
+      requires_api_key: false
+      context_window_tokens: 8192
 
 embeddings:
   endpoint: "http://localhost:11434"
@@ -125,7 +130,11 @@ terminology:
   embedding_model: "qwen3-embedding"
 ```
 
-Jev の System One チェックシートは各レビュー基準に対して次のいずれかを選び、確信度を返す。`confirmed_violation` は設定された重大度で判定し、`possible_violation` と `insufficient_context` は WARN、`documented_open_issue` と `improvement_suggestion` は INFO、`no_issue` は結果詳細へ追加しない。
+Jev と Nimble はSystem One形式のチェックシートを処理する。既定のバックエンドはJevであり、Nimbleは `--backend nimble` で選択する。JevはAPIの確信度を返す。Nimbleは選択確率の集中度を返す。この値は正答確率を表さない。両モデルとも説明文や引用箇所を生成しない。
+
+既定の `nimble` モデルは `num_ctx: 8194` であり、NimbleのSystem Oneプロンプトは8,192 token、本文は64 KiBまでである。`llm_judge.section_char_budget` は各セクションの文字数を制限する設定で、コンテキスト長を変更しない。モデルの上限を変える場合はOllamaのModelfileで `PARAMETER num_ctx` を指定したモデルを作り、バックエンド設定の `model` と `context_window_tokens` を一致させる。リスク評価は定義・参照を各最大4セクションに標本化し、各セクションを500文字×(`context_window_tokens` / 8,192)または設定された `section_char_budget` の小さい方に抑える。本文上限に近づく場合はさらに短縮し、省略・短縮した範囲を保存済み評価の要約に記録する。
+
+各レビュー基準は次のいずれかに分類される。`confirmed_violation` は設定された重大度で判定し、`possible_violation` と `insufficient_context` は WARN、`documented_open_issue` と `improvement_suggestion` は INFO、`no_issue` は結果詳細へ追加しない。
 
 - `confirmed_violation`: 明確に確認できる違反
 - `possible_violation`: 違反の可能性があり、人手の確認が必要
@@ -301,7 +310,7 @@ CREATE INDEX idx_judge_evaluations_confidence
     ON judge_evaluations (confidence DESC);
 ```
 
-型付き判定バックエンドの結果をチェック単位で記録する。`confidence` は0.0〜1.0の実数で保存し、`llm-findings --min-confidence 0.70` からしきい値検索できる。
+型付き判定バックエンドの結果をチェック単位で記録する。バックエンド固有のスコアは0.0〜1.0の実数で保存する。`llm-findings --min-confidence 0.70` は既定バックエンドだけを検索する。`--backend nimble` を指定するとNimbleの結果を検索する。
 
 ---
 
@@ -362,7 +371,7 @@ spec-integrator risk [OPTIONS]
 ```
 - **オプション**:
   - `-c, --config PATH`: 設定ファイルパス
-  - `--backend [jev|mock]`: チェックシートの判定バックエンド。Jev は説明文や引用箇所を生成しない
+  - `--backend [jev|nimble|mock]`: チェックシートの判定バックエンド。JevとNimbleは説明文や引用箇所を生成しない
   - `--model TEXT`: モデル名の明示的オーバーライド
   - `-r, --report PATH`: リスクレポート出力先
 
@@ -403,15 +412,17 @@ spec-integrator llm-keyword-review [OPTIONS]
   - `--check CHECK_ID`: 実行する監査チェック ID を限定
 
 ### (9) `spec-integrator llm-findings`
-DBに保存されたLLM判定を確信度と分類で検索します。LLM APIは呼び出しません。
+DBに保存されたLLM判定をバックエンド固有スコアと分類で検索します。LLM APIは呼び出しません。
 
 ```bash
 spec-integrator llm-findings --min-confidence 0.70
 spec-integrator llm-findings --min-confidence 0.70 --run-type llm-keyword-review
 spec-integrator llm-findings --min-confidence 0.70 --all-outcomes --limit 0
+spec-integrator llm-findings --backend nimble --min-confidence 0.70
 ```
 - **オプション**:
-  - `--min-confidence FLOAT`: 最小確信度（0.0〜1.0、既定値: 0.70）
+  - `--min-confidence FLOAT`: 最小バックエンド固有スコア（0.0〜1.0、既定値: 0.70）
+  - `--backend NAME`: 判定バックエンド。既定値は `llm_judge.default_backend`
   - `--classification OUTCOME`: 分類を限定。複数指定できる
   - `--all-outcomes`: 問題なし・文脈不足なども含める
   - `--run-type TYPE`: 監査コマンド／モードを限定

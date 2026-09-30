@@ -100,9 +100,9 @@ co-change の依存関係は `{Keyword}` の既存トレーサビリティから
 - **用語表記揺れ検査 (`llm-word` コマンド)**:
   - TF-IDF による抽出キーワードとエンベディング類似度・LLM による文脈判定を組み合わせ、用語表記揺れやタイポを高精度に検出。
 - **System One チェックシート監査 (`llm-single-review`, `llm-keyword-review` コマンド)**:
-  - セクションまたはキーワード定義・参照ペアを証拠単位とし、Jev の型付き設問で判定する。Jev は設問ごとの分類と確信度を返すが、説明文・引用箇所は生成しない。
+  - セクションまたはキーワード定義・参照ペアを証拠単位とし、選択したSystem Oneバックエンドの型付き設問で判定する。Jevは確信度、Nimbleは選択確率の集中度を返す。いずれも説明文・引用箇所は生成しない。
 - **SQLite データベース・監査キャッシュ (`DocAuditDB`)**:
-  - ドキュメント構造の高速クエリ、ハッシュ値による差分検証キャッシュに加え、`risk`/`llm-single-review`/`llm-keyword-review` の基準ごとの分類・確信度を記録するローカル生成データ。
+  - ドキュメント構造の高速クエリ、ハッシュ値による差分検証キャッシュに加え、`risk`/`llm-single-review`/`llm-keyword-review` の基準ごとの分類・バックエンド固有スコアを記録するローカル生成データ。
 - **CI / GitHub Actions ファースト**:
   - 検査器リビジョン刻印（Rule R9 準拠）、サマリー表、違反詳細、トレーサビリティマトリクス、リスク評価・LLM 判定結果を集約した単一 Markdown レポートを出力。
 
@@ -164,8 +164,10 @@ spec-integrator graph -f json -o graph.json
 # --backend を省略すると spec-integrator.yaml の llm_judge.default_backend が使われる
 # 結果はキャッシュ DB に記録され、check-doc レポートの Risk Assessment Detail 節に反映される
 spec-integrator risk --config spec-integrator.yaml
+# Same risk assessment through local Nimble
+spec-integrator risk --backend nimble
 ```
-判定には OpenRouter 経由の Jev (`typesafe/jev-1.13`) の System One API を使う。埋め込み生成にはローカル Ollama の `qwen3-embedding` を使う。OpenRouter には `OPENROUTER_API_KEY` を設定する。Ollama の接続先は `embeddings.endpoint` で指定する。初回は `ollama pull qwen3-embedding` で埋め込みモデルを取得する。
+既定の判定には OpenRouter 経由の Jev (`typesafe/jev-1.13`) の System One API を使う。`--backend nimble` を指定すると、ローカル Ollama の `nimble` モデルへ送信する。Nimble には Ollama 0.35 以降が必要であり、初回は `ollama pull nimble` で取得する。既定の `nimble` モデルは `num_ctx: 8194` であり、System One の各プロンプトは8,192 token、リクエスト本文は64 KiBまでである。モデルのコンテキスト長を増やす場合は、Ollama の Modelfile で `PARAMETER num_ctx` を設定したモデルを作り、`llm_judge.backends.nimble.model` と `context_window_tokens` を合わせる。リスク評価は定義・参照をそれぞれ最大4セクションまで標本化し、各セクションを最大500文字または `llm_judge.section_char_budget` の小さい方に制限する。本文上限に達する場合はさらに短縮し、省略・短縮した範囲を評価要約に記録する。埋め込み生成には引き続きローカル Ollama の `qwen3-embedding` を使う。OpenRouter には Jev を使う場合だけ `OPENROUTER_API_KEY` を設定する。Ollama の接続先は `llm_judge.backends.nimble.endpoint` および `embeddings.endpoint` で指定する。
 
 ### 8. 用語表記揺れチェック (`llm-word`)
 ```bash
@@ -180,20 +182,24 @@ spec-integrator llm-word
 ```bash
 # 単一ドキュメント／セクション監査
 spec-integrator llm-single-review --file docs/components/tier1_core/os_scheduler.md
+# Same single-document review through local Nimble
+spec-integrator llm-single-review --file docs/components/tier1_core/os_scheduler.md --backend nimble
 
 # 高リスクキーワードの定義・参照ペア監査
 spec-integrator llm-keyword-review --keyword SCHED_DISPATCH_TIMEOUT
 
 # 確信度70%以上の違反候補をDBから検索（API呼び出しなし）
 spec-integrator llm-findings --min-confidence 0.70
+# Nimble の保存済み判定だけを検索
+spec-integrator llm-findings --backend nimble --min-confidence 0.70
 ```
-文書レビューのチェックシートは各基準を個別に分類し、確信度を記録する。結果は「明確な違反」「違反の可能性」「既知の未解決事項」「文脈不足」「改善提案」「問題なし」に分かれる。明確な違反は設定済み重大度で FAIL/WARN とし、可能性や文脈不足は WARN、未解決事項と改善提案は INFO として残す。
+文書レビューのチェックシートは各基準を個別に分類し、バックエンド固有のスコアを記録する。Jev はAPIの確信度を返す。Nimble は選択確率の集中度を返し、正答確率を表さない。`llm-findings` は既定で現在の判定バックエンドの記録だけを検索する。別のバックエンドを検索する場合は `--backend` を指定する。結果は「明確な違反」「違反の可能性」「既知の未解決事項」「文脈不足」「改善提案」「問題なし」に分かれる。明確な違反は設定済み重大度で FAIL/WARN とし、可能性や文脈不足は WARN、未解決事項と改善提案は INFO として残す。
 
-キーワード監査では、文書内の `definition` 宣言を持つセクションと `traceability` 参照セクションを1組ずつ `DEFINITION` / `REFERENCE` と明示して Jev に渡す。WARN/INFO の根拠確認には結果に記録されたセクションを読み直す。
+キーワード監査では、文書内の `definition` 宣言を持つセクションと `traceability` 参照セクションを1組ずつ `DEFINITION` / `REFERENCE` と明示して選択中の判定バックエンドに渡す。WARN/INFO の根拠確認には結果に記録されたセクションを読み直す。
 
 監査基準の ID・対象モード・重大度はルートの `spec-integrator.yaml` を正本とし、個別の判定指示は `prompts/checks/` に置く。リスク評価・用語判定・文書レビューはいずれも証拠と型付き設問を持つチェックシートとして送信する。`--dry-run` は送信するチェックシートを表示する。
 
-判定単位の分類と確信度は SQLite の `judge_evaluations` テーブルへ保存する。`llm-findings --min-confidence 0.70` は既定で `confirmed_violation` と `possible_violation` を検索する。`--all-outcomes` を付けると文脈不足・既知の未解決事項・問題なしも含められ、`--run-type` で監査コマンドを絞り込める。
+判定単位の分類とスコアは SQLite の `judge_evaluations` テーブルへ保存する。`llm-findings --min-confidence 0.70` は既定バックエンドの `confirmed_violation` と `possible_violation` を検索する。`--backend` でスコアの種類を揃え、`--all-outcomes` で文脈不足・既知の未解決事項・問題なしも含められる。`--run-type` で監査コマンドを絞り込める。
 
 ---
 
@@ -264,6 +270,11 @@ llm_judge:
       api_key_env: "OPENROUTER_API_KEY"
       endpoint: "https://openrouter.ai/api/alpha/decisions"
       model: "typesafe/jev-1.13"
+    nimble:
+      endpoint: "http://localhost:11434/v1/systemone"
+      model: "nimble"
+      requires_api_key: false
+      context_window_tokens: 8192
 
 embeddings:
   endpoint: "http://localhost:11434"

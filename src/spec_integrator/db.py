@@ -42,6 +42,7 @@ class DocAuditDB:
         self.conn.execute("PRAGMA synchronous = OFF")
         self.conn.execute("PRAGMA journal_mode = MEMORY")
         self.create_tables()
+        self._migrate_term_variance_backend_key()
 
     def create_tables(self):
         with self.conn:
@@ -274,8 +275,8 @@ class DocAuditDB:
                     preferred_term TEXT,
                     reason TEXT,
                     judged_at TEXT,
-                    backend TEXT,
-                    UNIQUE(term_a, term_b, file_a, file_b)
+                    backend TEXT NOT NULL DEFAULT 'jev',
+                    UNIQUE(term_a, term_b, file_a, file_b, backend)
                 )
             """)
             # 21. section_embeddings
@@ -305,6 +306,62 @@ class DocAuditDB:
                     UNIQUE(section_a, section_b, model)
                 )
             """)
+
+    def _migrate_term_variance_backend_key(self) -> None:
+        """Preserve per-backend term judgments when upgrading legacy databases."""
+        table = "term_variance_judgments"
+        columns = {
+            str(row["name"]) for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if "backend" not in columns:
+            with self.conn:
+                self.conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN backend TEXT NOT NULL DEFAULT 'jev'"
+                )
+
+        unique_column_sets: set[frozenset[str]] = set()
+        indexes = self.conn.execute(f"PRAGMA index_list({table})").fetchall()
+        for index in indexes:
+            if not index["unique"]:
+                continue
+            index_name = str(index["name"])
+            index_columns = self.conn.execute(f"PRAGMA index_info('{index_name}')").fetchall()
+            unique_column_sets.add(frozenset(str(column["name"]) for column in index_columns))
+
+        backend_key = frozenset({"term_a", "term_b", "file_a", "file_b", "backend"})
+        legacy_key = frozenset({"term_a", "term_b", "file_a", "file_b"})
+        if backend_key in unique_column_sets and legacy_key not in unique_column_sets:
+            return
+
+        with self.conn:
+            self.conn.execute("""
+                CREATE TABLE term_variance_judgments_backend (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    term_a TEXT,
+                    term_b TEXT,
+                    file_a TEXT,
+                    file_b TEXT,
+                    line_a INTEGER,
+                    line_b INTEGER,
+                    is_variance INTEGER,
+                    confidence REAL,
+                    preferred_term TEXT,
+                    reason TEXT,
+                    judged_at TEXT,
+                    backend TEXT NOT NULL DEFAULT 'jev',
+                    UNIQUE(term_a, term_b, file_a, file_b, backend)
+                )
+            """)
+            self.conn.execute(f"""
+                INSERT INTO term_variance_judgments_backend
+                    (id, term_a, term_b, file_a, file_b, line_a, line_b, is_variance,
+                     confidence, preferred_term, reason, judged_at, backend)
+                SELECT id, term_a, term_b, file_a, file_b, line_a, line_b, is_variance,
+                       confidence, preferred_term, reason, judged_at, COALESCE(backend, 'jev')
+                FROM {table}
+            """)
+            self.conn.execute(f"DROP TABLE {table}")
+            self.conn.execute(f"ALTER TABLE term_variance_judgments_backend RENAME TO {table}")
 
     def _now(self) -> str:
         return datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -750,7 +807,7 @@ class DocAuditDB:
         replace_all: bool = False,
         replace_keywords: list[str] | None = None,
     ) -> None:
-        """Stores each typed criterion decision for confidence-based screening."""
+        """Stores each typed criterion decision with its backend-specific score."""
         now = self._now()
         with self.conn:
             if replace_all:
@@ -806,8 +863,9 @@ class DocAuditDB:
         classifications: list[str] | None = None,
         run_type: str | None = None,
         limit: int | None = 200,
+        backend: str | None = None,
     ) -> list[dict]:
-        """Queries persisted criterion decisions by confidence and outcome."""
+        """Queries persisted criterion decisions by score, backend, and outcome."""
         if not 0.0 <= min_confidence <= 1.0:
             raise ValueError("min_confidence must be between 0.0 and 1.0")
         clauses = ["confidence >= ?"]
@@ -819,6 +877,9 @@ class DocAuditDB:
         if run_type:
             clauses.append("run_type = ?")
             parameters.append(run_type)
+        if backend:
+            clauses.append("backend = ?")
+            parameters.append(backend)
         query = (
             "SELECT * FROM judge_evaluations WHERE "
             + " AND ".join(clauses)
@@ -998,27 +1059,39 @@ class DocAuditDB:
                 (term_a, term_b, term_b, term_a),
             )
 
-    def is_similarity_judged(self, term_a: str, term_b: str) -> bool:
+    def is_similarity_judged(self, term_a: str, term_b: str, backend: str | None = None) -> bool:
         cursor = self.conn.cursor()
+        backend_filter = " AND backend = ?" if backend else ""
+        parameters: tuple[str, ...] = (term_a, term_b, term_b, term_a)
+        if backend:
+            parameters += (backend,)
         cursor.execute(
-            """
+            f"""
             SELECT 1 FROM term_variance_judgments
-            WHERE (term_a = ? AND term_b = ?) OR (term_a = ? AND term_b = ?)
+            WHERE ((term_a = ? AND term_b = ?) OR (term_a = ? AND term_b = ?))
+            {backend_filter}
             LIMIT 1
             """,
-            (term_a, term_b, term_b, term_a),
+            parameters,
         )
         return cursor.fetchone() is not None
 
-    def get_high_confidence_variances(self, min_confidence: float = 0.70) -> list[sqlite3.Row]:
+    def get_high_confidence_variances(
+        self, min_confidence: float = 0.70, backend: str | None = None
+    ) -> list[sqlite3.Row]:
         cursor = self.conn.cursor()
+        backend_filter = " AND backend = ?" if backend else ""
+        parameters: tuple[float | str, ...] = (min_confidence,)
+        if backend:
+            parameters += (backend,)
         cursor.execute(
-            """
+            f"""
             SELECT * FROM term_variance_judgments
             WHERE is_variance = 1 AND confidence >= ?
+            {backend_filter}
             ORDER BY confidence DESC
             """,
-            (min_confidence,),
+            parameters,
         )
         return cursor.fetchall()
 
