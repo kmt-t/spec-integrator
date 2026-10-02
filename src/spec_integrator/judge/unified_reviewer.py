@@ -32,6 +32,9 @@ REVIEW_OUTCOMES = {
     "improvement_suggestion": "The criterion is met, but a non-blocking improvement is possible.",
     "no_issue": "The supplied evidence supports no issue for this criterion.",
 }
+NIMBLE_DEFAULT_CONTEXT_TOKENS = 8192
+NIMBLE_REVIEW_CONTEXT_CHAR_BUDGET = 3000
+NIMBLE_CHECKS_PER_REQUEST = 2
 
 
 class UnifiedReviewEngine(BaseJudge):
@@ -124,6 +127,7 @@ class UnifiedReviewEngine(BaseJudge):
             )
 
         selected_backend = backend or self.config.llm_judge.default_backend
+        section_char_budget = self._section_content_budget(selected_backend, 1)
         section_results: list[tuple[str, JudgeResult]] = []
         for sec in doc.sections:
             section_ref = f"{doc.file_path}#{sec.heading}"
@@ -136,7 +140,7 @@ class UnifiedReviewEngine(BaseJudge):
             ]
             if sec.keywords:
                 context_lines.append(f"Section Keywords: {', '.join(sec.keywords)}")
-            context_lines.extend(["", self._budgeted(sec.body_text)])
+            context_lines.extend(["", self._budgeted(sec.body_text, section_char_budget)])
             context_text = "\n".join(context_lines)
             sheet = self.build_checksheet(
                 "single", section_ref, context_text, checks, [doc.file_path]
@@ -154,7 +158,7 @@ class UnifiedReviewEngine(BaseJudge):
                     covered_files=[doc.file_path],
                 )
             else:
-                result = self._run_checksheet(
+                result = self._run_checksheet_batches(
                     sheet,
                     f"{doc.file_path}::{sec.section_id}",
                     section_ref,
@@ -236,11 +240,12 @@ class UnifiedReviewEngine(BaseJudge):
             ]
 
         selected_backend = backend or self.config.llm_judge.default_backend
+        section_char_budget = self._section_content_budget(selected_backend, 2)
         results: list[JudgeResult] = []
         print(f"Reviewing {len(pairs)} definition/reference link pair(s)...", flush=True)
         for index, pair in enumerate(pairs, start=1):
             print(f"  [{index}/{len(pairs)}] {pair.item_label}", flush=True)
-            context_text = self._keyword_link_pair_context(pair)
+            context_text = self._keyword_link_pair_context(pair, section_char_budget)
             sheet = self.build_checksheet(
                 "link_pair", pair.item_label, context_text, checks, self._pair_covered_files(pair)
             )
@@ -259,7 +264,7 @@ class UnifiedReviewEngine(BaseJudge):
                     covered_files=self._pair_covered_files(pair),
                 )
             else:
-                result = self._run_checksheet(
+                result = self._run_checksheet_batches(
                     sheet,
                     pair.item_id,
                     pair.item_label,
@@ -340,7 +345,9 @@ class UnifiedReviewEngine(BaseJudge):
                 )
         return pairs
 
-    def _keyword_link_pair_context(self, pair: _KeywordLinkPair) -> str:
+    def _keyword_link_pair_context(
+        self, pair: _KeywordLinkPair, section_char_budget: int | None = None
+    ) -> str:
         lines = [
             f"Keyword: {{{pair.keyword}}}",
             "Evaluation unit: one definition section paired with one reference section.",
@@ -363,7 +370,7 @@ class UnifiedReviewEngine(BaseJudge):
                     f"File: {document.file_path} (Tier: {document.tier})",
                     f"Section: {section.heading} (ID: {section.section_id}; "
                     f"lines {section.line_start}-{section.line_end}){keywords}",
-                    self._budgeted(section.body_text),
+                    self._budgeted(section.body_text, section_char_budget),
                     "",
                 ]
             )
@@ -371,6 +378,28 @@ class UnifiedReviewEngine(BaseJudge):
         append_section("DEFINITION", pair.definition)
         append_section("REFERENCE", pair.reference)
         return "\n".join(lines)
+
+    def _section_content_budget(self, backend: str, section_count: int) -> int | None:
+        """Bound Nimble evidence to its configured context window."""
+        if backend != "nimble":
+            return None
+        assert section_count > 0
+        backend_config = self.config.llm_judge.backends.get("nimble")
+        context_window_tokens = (
+            backend_config.context_window_tokens
+            if backend_config and backend_config.context_window_tokens is not None
+            else NIMBLE_DEFAULT_CONTEXT_TOKENS
+        )
+        assert context_window_tokens > 0
+        total_budget = (
+            NIMBLE_REVIEW_CONTEXT_CHAR_BUDGET
+            * context_window_tokens
+            // NIMBLE_DEFAULT_CONTEXT_TOKENS
+        )
+        configured_budget = self.config.llm_judge.section_char_budget
+        if configured_budget > 0:
+            total_budget = min(total_budget, configured_budget)
+        return max(1, total_budget // section_count)
 
     @staticmethod
     def _pair_covered_files(pair: _KeywordLinkPair) -> list[str]:
@@ -404,6 +433,80 @@ class UnifiedReviewEngine(BaseJudge):
         return self._run_system_one_review(
             sheet, item_id, item_label, covered, backend, checks, model
         )
+
+    def _run_checksheet_batches(
+        self,
+        sheet: Checksheet,
+        item_id: str,
+        item_label: str,
+        covered: list[str],
+        backend: str,
+        model: str | None,
+        checks: list[LLMCheckRule],
+    ) -> JudgeResult:
+        """Split Nimble reviews so each request stays within its prompt window."""
+        check_batch_size = self._checks_per_request(backend, len(checks))
+        assert check_batch_size > 0
+
+        results: list[JudgeResult] = []
+        for start in range(0, len(checks), check_batch_size):
+            check_batch = checks[start : start + check_batch_size]
+            batch_sheet = sheet
+            if len(check_batch) < len(checks):
+                questions = {check.id: sheet.questions[check.id] for check in check_batch}
+                batch_sheet = Checksheet(sheet.name, sheet.state, questions)
+            results.append(
+                self._run_checksheet(
+                    batch_sheet,
+                    item_id,
+                    item_label,
+                    covered,
+                    backend,
+                    model,
+                    checks=check_batch,
+                )
+            )
+
+        if len(results) == 1:
+            return results[0]
+        statuses = [result.status for result in results]
+        if "FAIL" in statuses:
+            status = "FAIL"
+        elif "WARN" in statuses:
+            status = "WARN"
+        elif all(result_status == "SKIPPED" for result_status in statuses):
+            status = "SKIPPED"
+        else:
+            status = "PASS"
+        counts = {value: statuses.count(value) for value in ("PASS", "WARN", "FAIL", "SKIPPED")}
+        return JudgeResult(
+            item_id=item_id,
+            item_label=item_label,
+            status=status,
+            summary=(
+                f"Reviewed {len(checks)} checks in {len(results)} bounded requests: "
+                f"{counts['PASS']} PASS, {counts['WARN']} WARN, {counts['FAIL']} FAIL, "
+                f"{counts['SKIPPED']} SKIPPED."
+            ),
+            issues=[issue for result in results for issue in result.issues],
+            covered_files=covered,
+            evaluations=[evaluation for result in results for evaluation in result.evaluations],
+        )
+
+    def _checks_per_request(self, backend: str, check_count: int) -> int:
+        """Use one full request when Nimble has a larger configured context."""
+        assert check_count > 0
+        if backend != "nimble":
+            return check_count
+        backend_config = self.config.llm_judge.backends.get("nimble")
+        context_window_tokens = (
+            backend_config.context_window_tokens
+            if backend_config and backend_config.context_window_tokens is not None
+            else NIMBLE_DEFAULT_CONTEXT_TOKENS
+        )
+        if context_window_tokens >= NIMBLE_DEFAULT_CONTEXT_TOKENS * 2:
+            return check_count
+        return min(NIMBLE_CHECKS_PER_REQUEST, check_count)
 
     def _run_system_one_review(
         self,

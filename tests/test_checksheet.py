@@ -191,3 +191,72 @@ def test_nimble_review_labels_its_native_confidence_metric():
     assert "probability concentration 82%" in result.issues[0]["description"]
     assert "Jev" not in result.issues[0]["description"]
     assert call.call_args.args[4] == "nimble"
+
+
+def test_nimble_review_evidence_budget_fits_configured_context_window():
+    config = Config()
+    config.llm_judge.backends["nimble"] = LLMBackendConfig(
+        endpoint="http://localhost:11434/v1/systemone",
+        model="nimble",
+        requires_api_key=False,
+        context_window_tokens=8192,
+    )
+    reviewer = UnifiedReviewEngine(config)
+
+    assert reviewer._section_content_budget("nimble", 1) == 3000
+    assert reviewer._section_content_budget("nimble", 2) == 1500
+    assert reviewer._section_content_budget("jev", 1) is None
+    assert reviewer._checks_per_request("nimble", 5) == 2
+    assert reviewer._checks_per_request("jev", 5) == 5
+    limited = reviewer._budgeted("evidence " * 1000, 3000)
+    assert len(limited) > 3000
+    assert "[TRUNCATED:" in limited
+
+    config.llm_judge.section_char_budget = 0
+    config.llm_judge.backends["nimble"].context_window_tokens = 16384
+    assert reviewer._section_content_budget("nimble", 1) == 6000
+    assert reviewer._checks_per_request("nimble", 5) == 5
+
+
+def test_nimble_review_splits_checks_into_context_bounded_requests():
+    config = Config()
+    config.llm_judge.checks = [
+        LLMCheckRule(id=f"check_{index}", name=f"Check {index}", mode=["single"])
+        for index in range(5)
+    ]
+    section = ParsedSection(
+        section_id="sec:sample.md#Meaning",
+        file_path="sample.md",
+        heading="Meaning",
+        level=2,
+        line_start=2,
+        line_end=3,
+        body_text="Evidence is present.",
+    )
+    document = ParsedDocument(
+        file_path="sample.md",
+        full_path=None,
+        tier=1,
+        component="sample",
+        content="## Meaning\nEvidence is present.",
+        content_hash="sample-hash",
+        sections=[section],
+    )
+    reviewer = UnifiedReviewEngine(config)
+    no_issue = {"type": "choice", "choice": "no_issue", "confidence": 0.9}
+    responses = [
+        {"answers": {"check_0": no_issue, "check_1": no_issue}},
+        {"answers": {"check_2": no_issue, "check_3": no_issue}},
+        {"answers": {"check_4": no_issue}},
+    ]
+
+    with patch.object(reviewer, "_submit_checksheet", side_effect=responses) as submit:
+        result = reviewer.review_single_document(document, backend="nimble")
+
+    assert result.status == "PASS"
+    assert len(result.evaluations) == 5
+    submitted_questions = [list(call.args[0].questions) for call in submit.call_args_list]
+    assert [len(batch) for batch in submitted_questions] == [2, 2, 1]
+    assert [check_id for batch in submitted_questions for check_id in batch] == [
+        f"check_{index}" for index in range(5)
+    ]
