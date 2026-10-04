@@ -18,6 +18,7 @@ __all__ = ["ProseReadabilityCheck"]
 class ProseBlock:
     text: str
     line: int
+    section_index: int
 
 
 class _Token(Protocol):
@@ -52,9 +53,7 @@ _LINK_RE = re.compile(r"!?\[([^\]]+)\]\([^)]*\)")
 _HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
 _FORMULA_RE = re.compile(r"\$[^$]+\$")
 _JAPANESE_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
-_CLAUSE_DEPENDENCIES = frozenset(
-    {"advcl", "acl", "ccomp", "xcomp", "conj", "parataxis"}
-)
+_CLAUSE_DEPENDENCIES = frozenset({"advcl", "acl", "ccomp", "xcomp", "conj", "parataxis"})
 _SENTENCE_TERMINATORS = ("。", "！", "？", "!", "?", ".")
 
 
@@ -69,13 +68,13 @@ def _clean_inline_markdown(text: str) -> str:
     return text
 
 
-def _extract_table_cells(line: str, line_number: int) -> list[ProseBlock]:
+def _extract_table_cells(line: str, line_number: int, section_index: int) -> list[ProseBlock]:
     cells = line.strip().strip("|").split("|")
     blocks: list[ProseBlock] = []
     for cell in cells:
         cleaned = _clean_inline_markdown(cell).strip()
         if cleaned and not _TABLE_RULE_RE.fullmatch(cleaned):
-            blocks.append(ProseBlock(cleaned, line_number))
+            blocks.append(ProseBlock(cleaned, line_number, section_index))
     return blocks
 
 
@@ -90,13 +89,14 @@ def _extract_prose_blocks(content: str) -> list[ProseBlock]:
     in_comment = False
     in_front_matter = bool(lines and lines[0].strip() == "---")
     front_matter_ended = not in_front_matter
+    section_index = 0
 
     def flush() -> None:
         nonlocal current_lines
         if current_lines:
             text = "\n".join(current_lines).strip()
             if text:
-                blocks.append(ProseBlock(text, current_line))
+                blocks.append(ProseBlock(text, current_line, section_index))
         current_lines = []
 
     for index, source_line in enumerate(lines):
@@ -136,10 +136,11 @@ def _extract_prose_blocks(content: str) -> list[ProseBlock]:
 
         if _HEADING_RE.match(line):
             flush()
+            section_index += 1
             continue
         if _TABLE_RE.match(line):
             flush()
-            blocks.extend(_extract_table_cells(line, line_number))
+            blocks.extend(_extract_table_cells(line, line_number, section_index))
             continue
         if not line.strip() or re.fullmatch(r"\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*", line):
             flush()
@@ -186,8 +187,7 @@ class ProseReadabilityCheck(AntiSabotageCheck):
 
     def check(self, ctx: AntiSabotageContext) -> list[VerificationIssue]:
         document_blocks = [
-            (document, _extract_prose_blocks(document.content))
-            for document in ctx.documents
+            (document, _extract_prose_blocks(document.content)) for document in ctx.documents
         ]
         document_blocks = [(doc, blocks) for doc, blocks in document_blocks if blocks]
         if not document_blocks:
@@ -225,6 +225,24 @@ class ProseReadabilityCheck(AntiSabotageCheck):
         pipeline: _JapaneseNLP,
         thresholds: ProseReadabilityConfig,
     ) -> list[VerificationIssue]:
+        sections: list[list[ProseBlock]] = []
+        for block in blocks:
+            if not sections or sections[-1][0].section_index != block.section_index:
+                sections.append([])
+            sections[-1].append(block)
+
+        issues: list[VerificationIssue] = []
+        for section_blocks in sections:
+            issues.extend(self._check_section(document, section_blocks, pipeline, thresholds))
+        return issues
+
+    def _check_section(
+        self,
+        document: ParsedDocument,
+        blocks: list[ProseBlock],
+        pipeline: _JapaneseNLP,
+        thresholds: ProseReadabilityConfig,
+    ) -> list[VerificationIssue]:
         parts: list[str] = []
         ranges: list[tuple[int, int, ProseBlock]] = []
         starts: list[int] = []
@@ -253,14 +271,12 @@ class ProseReadabilityCheck(AntiSabotageCheck):
             text = combined_text[sentence.start_char : min(sentence.end_char, end)].strip()
             character_count = sum(not character.isspace() for character in text)
             clause_links = sum(
-                token.dep_.split(":", 1)[0] in _CLAUSE_DEPENDENCIES
-                for token in sentence
+                token.dep_.split(":", 1)[0] in _CLAUSE_DEPENDENCIES for token in sentence
             )
             guidance: list[str] = []
             if character_count > thresholds.max_sentence_characters:
                 guidance.append(
-                    "一文一義を基本とし、文長は60〜80文字を目安に、"
-                    "最大100文字以内で句点を打つ。"
+                    "一文一義を基本とし、文長は60〜80文字を目安に、最大100文字以内で句点を打つ。"
                 )
             if (
                 character_count >= thresholds.complex_sentence_min_characters

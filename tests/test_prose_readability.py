@@ -45,9 +45,18 @@ class FakePipeline:
         return FakeDoc(self.sentences)
 
 
+class RecordingPipeline:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def __call__(self, text: str) -> FakeDoc:
+        self.calls.append(text)
+        return FakeDoc((FakeSentence(text, 0, ()),))
+
+
 def _context(content: str) -> AntiSabotageContext:
     document = ParsedDocument(
-        file_path="components/tier3_executer/interpreter.md",
+        file_path="components/tier2_runtime/interpreter.md",
         full_path=Path("interpreter.md"),
         tier=2,
         component="interpreter",
@@ -76,8 +85,26 @@ title: test
 
     blocks = _extract_prose_blocks(content)
 
-    assert [block.text for block in blocks] == ["通常の説明文である。", "項目", "表の説明文である。"]
+    assert [block.text for block in blocks] == [
+        "通常の説明文である。",
+        "項目",
+        "表の説明文である。",
+    ]
     assert [block.line for block in blocks] == [5, 11, 11]
+
+
+def test_ginza_receives_one_heading_section_at_a_time_and_preserves_source_lines():
+    first = "短い説明である。"
+    second = "あ" * 101 + "。"
+    content = f"# 最初\n{first}\n\n## 次\n{second}"
+    pipeline = RecordingPipeline()
+
+    issues = ProseReadabilityCheck(pipeline).check(_context(content))
+
+    assert pipeline.calls == [first, second]
+    assert len(issues) == 1
+    assert issues[0].line == 5
+    assert issues[0].rule_code == "PROSE-REVIEW-CANDIDATE"
 
 
 def test_long_sentence_is_reported_as_warning_with_source_line():
