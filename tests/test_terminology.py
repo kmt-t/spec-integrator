@@ -249,11 +249,11 @@ def test_term_variance_judge_and_issues():
 
 def test_term_variance_issues_use_the_configured_backend_metric():
     config = Config()
-    config.llm_judge.default_backend = "nimble"
+    config.llm_judge.default_backend = "clef-flash"
     db = DocAuditDB(":memory:")
     for backend, term_a, term_b in (
         ("jev", "scheduler", "dispatcher"),
-        ("nimble", "memory manager", "allocator"),
+        ("clef-flash", "memory manager", "allocator"),
     ):
         db.insert_term_variance_judgment(
             term_a=term_a,
@@ -273,6 +273,6 @@ def test_term_variance_issues_use_the_configured_backend_metric():
 
     assert len(issues) == 1
     assert "memory manager" in issues[0].message
-    assert "Nimble 確率集中度: 86%" in issues[0].message
+    assert "Clef Flash 確率集中度: 86%" in issues[0].message
     assert "scheduler" not in issues[0].message
     db.close()

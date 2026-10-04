@@ -100,7 +100,7 @@ co-change の依存関係は `{Keyword}` の既存トレーサビリティから
 - **用語表記揺れ検査 (`llm-word` コマンド)**:
   - TF-IDF による抽出キーワードとエンベディング類似度・LLM による文脈判定を組み合わせ、用語表記揺れやタイポを高精度に検出。
 - **System One チェックシート監査 (`llm-single-review`, `llm-keyword-review` コマンド)**:
-  - セクションまたはキーワード定義・参照ペアを証拠単位とし、選択したSystem Oneバックエンドの型付き設問で判定する。Jevは確信度、Nimbleは選択確率の集中度を返す。いずれも説明文・引用箇所は生成しない。
+  - セクションまたはキーワード定義・参照ペアを証拠単位とし、選択したSystem Oneバックエンドの型付き設問で判定する。Jevは確信度、Clef Flashは選択確率の集中度を返す。いずれも説明文・引用箇所は生成しない。
 - **SQLite データベース・監査キャッシュ (`DocAuditDB`)**:
   - ドキュメント構造の高速クエリ、ハッシュ値による差分検証キャッシュに加え、`risk`/`llm-single-review`/`llm-keyword-review` の基準ごとの分類・バックエンド固有スコアを記録するローカル生成データ。
 - **CI / GitHub Actions ファースト**:
@@ -138,7 +138,7 @@ spec-integrator check-doc --config spec-integrator.yaml --report report.md --cle
 標準実行では GiNZA による日本語文章チェックも行い、長文・複雑な節接続を警告として報告します。文章チェックの警告だけでは終了コードに影響しません。
 全 8 ゲートがパスすれば終了コード `0`、エラーがあれば `1` となり、`report.md` に詳細レポートが出力されます。
 
-GiNZAの警告は文章を自動修正する指示ではなく、内容を保った分割が可能か人が確認する候補です。コードブロックと見出しは解析せず、表の文章セルは解析します。
+GiNZAの警告は文章を自動修正する指示ではなく、内容を保った分割が可能か人が確認する候補です。見出しで区切ったセクションごとに解析し、コードブロックと見出し自体は解析せず、表の文章セルは解析します。
 しきい値はプロジェクトルートの `spec-integrator.yaml` にある `prose_readability` の3項目で調整します。警告専用であり、しきい値を変えてもエラーゲートにはなりません。
 
 ### 5. ソースコード自動フォーマット & 静的規約・サボり検査 (`format-src`, `check-src`)
@@ -164,10 +164,18 @@ spec-integrator graph -f json -o graph.json
 # --backend を省略すると spec-integrator.yaml の llm_judge.default_backend が使われる
 # 結果はキャッシュ DB に記録され、check-doc レポートの Risk Assessment Detail 節に反映される
 spec-integrator risk --config spec-integrator.yaml
-# Same risk assessment through local Nimble
-spec-integrator risk --backend nimble
+# Run through Jev only when explicitly requested
+spec-integrator risk --backend jev
 ```
-既定の判定には OpenRouter 経由の Jev (`typesafe/jev-1.13`) の System One API を使う。`--backend nimble` を指定すると、ローカル Ollama の `nimble` モデルへ送信する。Nimble には Ollama 0.35 以降が必要であり、初回は `ollama pull nimble` で取得する。既定の `nimble` モデルは `num_ctx: 8194` であり、System One の各プロンプトは8,192 token、リクエスト本文は64 KiBまでである。モデルのコンテキスト長を増やす場合は、Ollama の Modelfile で `PARAMETER num_ctx` を設定したモデルを作り、`llm_judge.backends.nimble.model` と `context_window_tokens` を合わせる。リスク評価は定義・参照をそれぞれ最大4セクションまで標本化し、各セクションを最大500文字または `llm_judge.section_char_budget` の小さい方に制限する。本文上限に達する場合はさらに短縮し、省略・短縮した範囲を評価要約に記録する。埋め込み生成には引き続きローカル Ollama の `qwen3-embedding` を使う。OpenRouter には Jev を使う場合だけ `OPENROUTER_API_KEY` を設定する。Ollama の接続先は `llm_judge.backends.nimble.endpoint` および `embeddings.endpoint` で指定する。
+既定の判定にはローカル Ollama の Clef Flash (`clef-flash`) を使う。`--backend jev` を指定すると OpenRouter 経由の Jev (`typesafe/jev-1.13`) を使う。
+
+Clef Flash には Ollama 0.35.1 以降が必要である。初回は `ollama pull clef-flash` を実行する。モデルは64Kコンテキストに対応し、`context_window_tokens` は65,536 tokenに設定する。System Oneのリクエスト本文は64 KiBまでである。
+
+モデルのコンテキスト長を変更する場合は、Ollama の Modelfile で `PARAMETER num_ctx` を設定したモデルを作る。バックエンド設定の `model` と `context_window_tokens` を新しいモデルに合わせる。
+
+リスク評価は定義・参照をそれぞれ最大4セクションまで標本化する。各セクションは `500文字 × (context_window_tokens / 8,192)` または `llm_judge.section_char_budget` の小さい方に制限する。標準設定では各最大4,000文字となる。本文上限に達する場合はさらに短縮する。省略・短縮した範囲は評価要約に記録する。
+
+埋め込み生成には引き続きローカル Ollama の `qwen3-embedding` を使う。OpenRouter には Jev を使う場合だけ `OPENROUTER_API_KEY` を設定する。Ollama の接続先は `llm_judge.backends.clef-flash.endpoint` および `embeddings.endpoint` で指定する。LLM監査はバックエンドに関係なく、ユーザーから明示的な指示があった場合に限り実行する。
 
 ### 8. 用語表記揺れチェック (`llm-word`)
 ```bash
@@ -182,18 +190,18 @@ spec-integrator llm-word
 ```bash
 # 単一ドキュメント／セクション監査
 spec-integrator llm-single-review --file docs/components/tier1_core/os_scheduler.md
-# Same single-document review through local Nimble
-spec-integrator llm-single-review --file docs/components/tier1_core/os_scheduler.md --backend nimble
+# Same single-document review through local Clef Flash
+spec-integrator llm-single-review --file docs/components/tier1_core/os_scheduler.md --backend clef-flash
 
 # 高リスクキーワードの定義・参照ペア監査
 spec-integrator llm-keyword-review --keyword SCHED_DISPATCH_TIMEOUT
 
 # 確信度70%以上の違反候補をDBから検索（API呼び出しなし）
 spec-integrator llm-findings --min-confidence 0.70
-# Nimble の保存済み判定だけを検索
-spec-integrator llm-findings --backend nimble --min-confidence 0.70
+# Clef Flash の保存済み判定だけを検索
+spec-integrator llm-findings --backend clef-flash --min-confidence 0.70
 ```
-文書レビューのチェックシートは各基準を個別に分類し、バックエンド固有のスコアを記録する。Jev はAPIの確信度を返す。Nimble は選択確率の集中度を返し、正答確率を表さない。`llm-findings` は既定で現在の判定バックエンドの記録だけを検索する。別のバックエンドを検索する場合は `--backend` を指定する。結果は「明確な違反」「違反の可能性」「既知の未解決事項」「文脈不足」「改善提案」「問題なし」に分かれる。明確な違反は設定済み重大度で FAIL/WARN とし、可能性や文脈不足は WARN、未解決事項と改善提案は INFO として残す。
+文書レビューのチェックシートは各基準を個別に分類し、バックエンド固有のスコアを記録する。Jev はAPIの確信度を返す。Clef Flash は選択確率の集中度を返し、正答確率を表さない。`llm-findings` は既定で現在の判定バックエンドの記録だけを検索する。別のバックエンドを検索する場合は `--backend` を指定する。結果は「明確な違反」「違反の可能性」「既知の未解決事項」「文脈不足」「改善提案」「問題なし」に分かれる。明確な違反は設定済み重大度で FAIL/WARN とし、可能性や文脈不足は WARN、未解決事項と改善提案は INFO として残す。
 
 キーワード監査では、文書内の `definition` 宣言を持つセクションと `traceability` 参照セクションを1組ずつ `DEFINITION` / `REFERENCE` と明示して選択中の判定バックエンドに渡す。WARN/INFO の根拠確認には結果に記録されたセクションを読み直す。
 
@@ -264,17 +272,17 @@ wit_verification:
 
 llm_judge:
   tag: "{VERIFY_LLM}"
-  default_backend: "jev"
+  default_backend: "clef-flash"
   backends:
     jev:
       api_key_env: "OPENROUTER_API_KEY"
       endpoint: "https://openrouter.ai/api/alpha/decisions"
       model: "typesafe/jev-1.13"
-    nimble:
+    clef-flash:
       endpoint: "http://localhost:11434/v1/systemone"
-      model: "nimble"
+      model: "clef-flash"
       requires_api_key: false
-      context_window_tokens: 8192
+      context_window_tokens: 65536
 
 embeddings:
   endpoint: "http://localhost:11434"

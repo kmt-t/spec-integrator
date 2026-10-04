@@ -24,7 +24,7 @@ from spec_integrator.terminology import (
     TermVarianceJudge,
 )
 
-CHECKSHEET_BACKENDS = ("jev", "nimble", "mock")
+CHECKSHEET_BACKENDS = ("jev", "clef-flash", "mock")
 
 
 def _configure_utf8_stdio() -> None:
@@ -123,17 +123,17 @@ formal_verification:
 
 llm_judge:
   tag: "{VERIFY_LLM}"
-  default_backend: "jev"
+  default_backend: "clef-flash"
   backends:
     jev:
       api_key_env: "OPENROUTER_API_KEY"
       endpoint: "https://openrouter.ai/api/alpha/decisions"
       model: "typesafe/jev-1.13"
-    nimble:
+    clef-flash:
       endpoint: "http://localhost:11434/v1/systemone"
-      model: "nimble"
+      model: "clef-flash"
       requires_api_key: false
-      context_window_tokens: 8192
+      context_window_tokens: 65536
 
 embeddings:
   endpoint: "http://localhost:11434"
@@ -612,7 +612,7 @@ def cmd_llm_findings(args):
     db.close()
 
     backend_label = BACKEND_LABELS.get(backend, backend)
-    confidence_metric = "probability concentration" if backend == "nimble" else "confidence"
+    confidence_metric = "probability concentration" if backend == "clef-flash" else "confidence"
     score_percent = f"{args.min_confidence:.0%}"
     print(
         f"LLM review evaluations for {backend_label} with {confidence_metric} >= "
@@ -626,9 +626,9 @@ def cmd_llm_findings(args):
     print(
         "Typed decision backends do not store rationale or citations; review each listed section manually."
     )
-    if backend == "nimble":
+    if backend == "clef-flash":
         print(
-            "Nimble probability concentration describes how concentrated its choice probabilities "
+            "Clef Flash probability concentration describes how concentrated its choice probabilities "
             "are; it is not the probability that the selected answer is correct."
         )
     headers = [
@@ -722,7 +722,7 @@ def cmd_llm_word(args):
     )
     conf_thresh = int(config.terminology.confidence_threshold * 100)
     backend_label = BACKEND_LABELS.get(used_backend, used_backend)
-    metric_label = "probability concentration" if used_backend == "nimble" else "confidence"
+    metric_label = "probability concentration" if used_backend == "clef-flash" else "confidence"
     print(
         f"\n### 2. LLM Contextual Term Variances ({backend_label} {metric_label} >= "
         f"{conf_thresh}%: {len(variances)} detected)"

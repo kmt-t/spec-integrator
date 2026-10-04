@@ -69,7 +69,7 @@ class TermVarianceJudge:
                 if used_backend in SYSTEM_ONE_BACKENDS:
                     backend_label = BACKEND_LABELS[used_backend]
                     metric_label = (
-                        "probability concentration" if used_backend == "nimble" else "confidence"
+                        "probability concentration" if used_backend == "clef-flash" else "confidence"
                     )
                     sheet = Checksheet(
                         name="term_variance",
@@ -177,7 +177,7 @@ class TermVarianceJudge:
         for r in rows:
             conf_pct = int(r["confidence"] * 100)
             backend_label = BACKEND_LABELS.get(selected_backend, selected_backend)
-            metric_label = "確率集中度" if selected_backend == "nimble" else "確度"
+            metric_label = "確率集中度" if selected_backend == "clef-flash" else "確度"
             msg = (
                 f"用語表記揺れの可能性 ({backend_label} {metric_label}: {conf_pct}%): "
                 f"'{r['term_a']}' vs '{r['term_b']}' "

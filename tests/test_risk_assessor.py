@@ -71,15 +71,15 @@ def test_risk_assessment_report_sorts_by_risk_only():
 @pytest.mark.parametrize(
     ("context_window_tokens", "max_section_chars"), [(8192, 500), (16384, 1000)]
 )
-def test_nimble_risk_context_fits_request_limit_and_reports_sampling(
+def test_clef_flash_risk_context_fits_request_limit_and_reports_sampling(
     monkeypatch, context_window_tokens, max_section_chars
 ):
     from spec_integrator.judge.risk_assessor import RiskAssessor
 
     config = Config()
-    config.llm_judge.backends["nimble"] = LLMBackendConfig(
+    config.llm_judge.backends["clef-flash"] = LLMBackendConfig(
         endpoint="http://localhost:11434/v1/systemone",
-        model="nimble",
+        model="clef-flash",
         requires_api_key=False,
         context_window_tokens=context_window_tokens,
     )
@@ -135,17 +135,17 @@ def test_nimble_risk_context_fits_request_limit_and_reports_sampling(
             "referenced_in": reference_ids,
         },
         documents,
-        backend="nimble",
+        backend="clef-flash",
     )
 
     sheet = captured["sheet"]
     payload = {
-        "model": "nimble",
+        "model": "clef-flash",
         "state": sheet.state,
         "questions": sheet.questions,
     }
     body_size = len(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
-    assert captured["backend"] == "nimble"
+    assert captured["backend"] == "clef-flash"
     assert len(sheet.state["definition_sections"]) == 4
     assert len(sheet.state["referencing_sections"]) == 4
     assert body_size <= 56 * 1024

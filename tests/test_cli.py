@@ -295,12 +295,12 @@ def test_cli_subparsers_args():
     assert args_risk.exhaustive is True
 
     args_word = parser.parse_args(
-        ["llm-word", "--quick", "--threshold", "0.85", "--backend", "nimble"]
+        ["llm-word", "--quick", "--threshold", "0.85", "--backend", "clef-flash"]
     )
     assert args_word.subcommand == "llm-word"
     assert args_word.quick is True
     assert args_word.threshold == 0.85
-    assert args_word.backend == "nimble"
+    assert args_word.backend == "clef-flash"
 
     args_single = parser.parse_args(["llm-single-review", "--all", "--dry-run"])
     assert args_single.subcommand == "llm-single-review"
@@ -328,7 +328,7 @@ def test_llm_word_report_uses_backend_override_for_stored_variances(monkeypatch,
     db = DocAuditDB(":memory:")
     for backend, term_a, term_b in (
         ("jev", "scheduler", "dispatcher"),
-        ("nimble", "memory manager", "allocator"),
+        ("clef-flash", "memory manager", "allocator"),
     ):
         db.insert_term_variance_judgment(
             term_a=term_a,
@@ -359,7 +359,7 @@ def test_llm_word_report_uses_backend_override_for_stored_variances(monkeypatch,
     monkeypatch.setattr(commands.LevenshteinTypoCheck, "check", lambda *_args: [])
     args = SimpleNamespace(
         config="spec-integrator.yaml",
-        backend="nimble",
+        backend="clef-flash",
         quick=True,
         embedding_model="qwen3-embedding",
         threshold=0.8,
@@ -372,6 +372,6 @@ def test_llm_word_report_uses_backend_override_for_stored_variances(monkeypatch,
 
     assert exc_info.value.code == 0
     output = capsys.readouterr().out
-    assert "Nimble probability concentration" in output
+    assert "Clef Flash probability concentration" in output
     assert "memory manager" in output
     assert "scheduler" not in output

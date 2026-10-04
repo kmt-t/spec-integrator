@@ -184,7 +184,7 @@ class LLMCheckRule:
 @dataclass
 class LLMJudgeConfig:
     tag: str = "{VERIFY_LLM}"
-    default_backend: str = "jev"
+    default_backend: str = "clef-flash"
     backends: dict[str, LLMBackendConfig] = field(default_factory=dict)
     section_char_budget: int = 8000
     checks: list[LLMCheckRule] = field(default_factory=list)
