@@ -273,6 +273,7 @@ wit_verification:
 llm_judge:
   tag: "{VERIFY_LLM}"
   default_backend: "clef-flash"
+  error_score_threshold: 0.70
   backends:
     jev:
       api_key_env: "OPENROUTER_API_KEY"
@@ -290,6 +291,8 @@ embeddings:
 terminology:
   embedding_model: "qwen3-embedding"
 ```
+
+`llm_judge.error_score_threshold` は、基準の重大度が`ERROR`の判定を失敗として扱う最低スコアである。判定結果が`confirmed_violation`でもバックエンド固有スコアが閾値未満なら`WARNING`に下げ、確信度または確率集中度の低いLLM判定だけで品質ゲートを失敗させない。値は`0.0`から`1.0`の範囲で指定する。
 
 ---
 

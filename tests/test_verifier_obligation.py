@@ -47,7 +47,8 @@ Round-robin scheduling with interrupt wakeup.
 def test_missing_assessment_is_an_error(tmp_path):
     cfg, doc, db = _setup(tmp_path, DOC_BODY)
     issues, summary = ObligationVerifier(cfg).verify([doc], db=db)
-    assert any(i.rule_code == "OBLIG-ASSESSMENT-MISSING" for i in issues)
+    missing = next(i for i in issues if i.rule_code == "OBLIG-ASSESSMENT-MISSING")
+    assert "spec-integrator risk --exhaustive" in missing.message
 
 
 def test_high_risk_keyword_without_the_demanded_tag_is_an_error(tmp_path):
@@ -140,7 +141,8 @@ def test_stale_assessment_is_an_error(tmp_path):
         doc_hashes={doc.file_path: "0000deadbeef"},
     )
     issues, summary = ObligationVerifier(cfg).verify([doc], db=db)
-    assert any(i.rule_code == "OBLIG-ASSESSMENT-STALE" for i in issues)
+    stale = next(i for i in issues if i.rule_code == "OBLIG-ASSESSMENT-STALE")
+    assert "spec-integrator risk --exhaustive" in stale.message
     assert summary.stale_documents == [doc.file_path]
 
 
@@ -451,7 +453,8 @@ def test_mock_generated_assessment_is_rejected(tmp_path):
     cfg, doc, db = _setup(tmp_path, DOC_BODY)
     _write_risk_assessment(db, [], doc_hashes={doc.file_path: doc.content_hash}, backend="mock")
     issues, _ = ObligationVerifier(cfg).verify([doc], db=db)
-    assert any(i.rule_code == "OBLIG-ASSESSMENT-NOT-INDEPENDENT" for i in issues)
+    non_independent = next(i for i in issues if i.rule_code == "OBLIG-ASSESSMENT-NOT-INDEPENDENT")
+    assert "spec-integrator risk --backend jev --exhaustive" in non_independent.message
 
 
 def test_real_backend_assessment_is_accepted(tmp_path):

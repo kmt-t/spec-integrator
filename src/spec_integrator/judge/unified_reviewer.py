@@ -565,6 +565,11 @@ class UnifiedReviewEngine(BaseJudge):
                     severity = check.severity.upper()
                     if severity not in ("ERROR", "WARNING"):
                         severity = "WARNING"
+                    elif (
+                        severity == "ERROR"
+                        and confidence < self.config.llm_judge.error_score_threshold
+                    ):
+                        severity = "WARNING"
                 elif outcome in ("documented_open_issue", "improvement_suggestion"):
                     severity = "INFO"
                 elif outcome == "no_issue":

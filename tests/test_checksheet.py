@@ -145,6 +145,53 @@ def test_review_maps_checksheet_decision_to_failure():
     assert "visible_defect" in call.call_args.args[2]
 
 
+def test_review_low_confidence_confirmation_is_warning_not_failure():
+    config = Config()
+    config.llm_judge.checks = [
+        LLMCheckRule(
+            id="uncertain_defect",
+            name="Uncertain defect",
+            mode=["single"],
+            severity="ERROR",
+            prompt="Check it.",
+        )
+    ]
+    section = ParsedSection(
+        section_id="sec:sample.md#Meaning",
+        file_path="sample.md",
+        heading="Meaning",
+        level=2,
+        line_start=2,
+        line_end=3,
+        body_text="A possible defect.",
+    )
+    doc = ParsedDocument(
+        file_path="sample.md",
+        full_path=None,
+        tier=1,
+        component="sample",
+        content="## Meaning\nA possible defect.",
+        content_hash="sample-hash",
+        sections=[section],
+    )
+    answer = {
+        "answers": {
+            "uncertain_defect": {
+                "type": "choice",
+                "choice": "confirmed_violation",
+                "confidence": 0.64,
+            }
+        }
+    }
+
+    with patch("spec_integrator.judge.checksheet.call_system_one", return_value=answer):
+        result = UnifiedReviewEngine(config).review_single_document(doc, backend="jev")
+
+    assert result.status == "WARN"
+    assert result.evaluations[0].classification == "confirmed_violation"
+    assert result.evaluations[0].severity == "WARNING"
+
+
 def test_clef_flash_review_labels_its_native_confidence_metric():
     config = Config()
     config.llm_judge.backends["clef-flash"] = LLMBackendConfig(
@@ -220,6 +267,12 @@ def test_clef_flash_review_evidence_budget_fits_configured_context_window():
 
 def test_clef_flash_review_splits_checks_into_context_bounded_requests():
     config = Config()
+    config.llm_judge.backends["clef-flash"] = LLMBackendConfig(
+        endpoint="http://localhost:11434/v1/systemone",
+        model="clef-flash",
+        requires_api_key=False,
+        context_window_tokens=8192,
+    )
     config.llm_judge.checks = [
         LLMCheckRule(id=f"check_{index}", name=f"Check {index}", mode=["single"])
         for index in range(5)

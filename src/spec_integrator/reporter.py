@@ -158,7 +158,7 @@ class Reporter:
                 lines.append("")
 
         # 5b.1 Risk Assessment / LLM Judge / Test Chain detail, sourced from the
-        # cache DB -- the last `llm-assess` / `llm-judge` verdicts, whenever
+        # cache DB -- the last `risk` / `llm-judge` verdicts, whenever
         # they were produced, not just the ones from this particular `check` run.
         if db is not None:
             risk_rows = db.get_risk_assessments()

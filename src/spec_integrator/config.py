@@ -187,7 +187,12 @@ class LLMJudgeConfig:
     default_backend: str = "clef-flash"
     backends: dict[str, LLMBackendConfig] = field(default_factory=dict)
     section_char_budget: int = 8000
+    error_score_threshold: float = 0.70
     checks: list[LLMCheckRule] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.error_score_threshold <= 1.0:
+            raise ValueError("llm_judge.error_score_threshold must be between 0 and 1")
 
 
 @dataclass

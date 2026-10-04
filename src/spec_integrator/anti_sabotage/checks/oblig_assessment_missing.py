@@ -5,7 +5,7 @@ from spec_integrator.models import VerificationIssue
 
 
 class AssessmentMissingCheck(AntiSabotageCheck):
-    """リスク評価の未実施・記録欠落: llm-assess が未実施、またはバックエンドが記録されていない問題を検出する。"""
+    """リスク評価の未実施・記録欠落を検出する。"""
 
     rule_code = "OBLIG-ASSESSMENT-MISSING"
     name = "リスク評価の未実施・記録欠落"
@@ -36,8 +36,8 @@ class AssessmentMissingCheck(AntiSabotageCheck):
                         message=(
                             "No cache DB available, so no risk assessment can be read. The "
                             "pipeline cannot claim the specification is verified without first "
-                            "deciding what needs verifying. Run 'spec-integrator llm-assess' "
-                            "before 'check'."
+                            "deciding what needs verifying. Run 'spec-integrator risk "
+                            "--exhaustive' before 'check'."
                         ),
                     )
                 )
@@ -58,7 +58,7 @@ class AssessmentMissingCheck(AntiSabotageCheck):
                         message=(
                             "No risk assessment found in the cache DB. The pipeline cannot "
                             "claim the specification is verified without first deciding what "
-                            "needs verifying. Run 'spec-integrator llm-assess' before 'check'."
+                            "needs verifying. Run 'spec-integrator risk --exhaustive' before 'check'."
                         ),
                     )
                 )
@@ -76,7 +76,8 @@ class AssessmentMissingCheck(AntiSabotageCheck):
                     rule_code="OBLIG-ASSESSMENT-PROVENANCE-UNKNOWN",
                     message=(
                         "The risk assessment records no backend, so its independence from the "
-                        "documents it judges cannot be established. Re-run 'llm-assess' with a "
+                        "documents it judges cannot be established. Re-run 'spec-integrator risk "
+                        "--exhaustive' with a "
                         "tool version that stamps the engine."
                     ),
                 )
@@ -107,7 +108,7 @@ class AssessmentMissingCheck(AntiSabotageCheck):
                                 message=(
                                     "Document changed since it was risk-assessed. The recorded "
                                     "verification obligations no longer describe this content — "
-                                    "re-run 'spec-integrator llm-assess'."
+                                    "re-run 'spec-integrator risk --exhaustive'."
                                 ),
                             )
                         )

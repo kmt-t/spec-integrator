@@ -43,7 +43,7 @@ class AssessmentIndependenceCheck(AntiSabotageCheck):
                         f"The risk assessment was produced by the '{backend}' backend, which "
                         "derives each obligation from the tags the document already carries. "
                         "The discharge rate is then true by construction and says nothing about "
-                        "the specification. Re-run 'llm-assess' against a real backend."
+                        "the specification. Re-run 'spec-integrator risk --backend jev --exhaustive'."
                     ),
                 )
             )
@@ -73,7 +73,7 @@ class AssessmentIndependenceCheck(AntiSabotageCheck):
                                 "keyword(s) were risk-assessed, so the verification obligations of "
                                 "the remainder are unknown. A discharge rate computed over a partial "
                                 "assessment does not mean the specification is covered. Re-run "
-                                "'llm-assess --exhaustive'."
+                                "'spec-integrator risk --exhaustive'."
                             ),
                         )
                     )

@@ -646,7 +646,7 @@ class DocAuditDB:
         ]
 
     # ------------------------------------------------------------------ #
-    # Risk Assessments (`llm-assess`)
+    # Risk Assessments (`risk`)
     # ------------------------------------------------------------------ #
     def _set_run_metadata(self, run_type: str, backend: str, now: str) -> None:
         self.conn.execute(
