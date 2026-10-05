@@ -15,7 +15,6 @@ from spec_integrator.source.discovery import SourceDiscovery
 from spec_integrator.source.execution import SourceExecution
 from spec_integrator.source.models import SourceIssue, SourceVerificationResult
 
-
 _WORK_MARKER_RE = re.compile(r"\b(TODO|FIXME|XXX|HACK)\b\s*[:：]?")
 _TYPING_MODULES = frozenset(("typing", "typing_extensions"))
 
@@ -88,6 +87,23 @@ class SourceAnalyzer:
                 result.issues.extend(self._run_pysim_tests(group_name))
             elif cid == "pysim_imports":
                 result.issues.extend(self._check_pysim_imports(group_name))
+            elif cid == "pysim_assert_side_effects":
+                root = self.root_dir / self.config.pysim_imports.root
+                product_files = {
+                    path.resolve()
+                    for tier in self.config.pysim_imports.tiers
+                    for pattern in tier.paths
+                    for path in root.glob(pattern)
+                    if path.is_file()
+                }
+                for file_path in files:
+                    if file_path.resolve() not in product_files:
+                        continue
+                    result.issues.extend(
+                        self._check_anti_sabotage(
+                            file_path, ["forbid_assert_side_effects"], group_name
+                        )
+                    )
 
         return result
 
@@ -339,6 +355,8 @@ class SourceAnalyzer:
             issues.extend(self._check_python_typing_any(tree, rel_path, group_name))
         if "forbid_object_type" in rules:
             issues.extend(self._check_python_object_type(tree, rel_path, group_name))
+        if "forbid_assert_side_effects" in rules:
+            issues.extend(self._check_assert_side_effects(tree, rel_path, group_name))
         if "forbid_non_none_union" in rules:
             normalized_path = rel_path.replace("\\", "/").lstrip("./")
             excluded = any(
@@ -401,7 +419,9 @@ class SourceAnalyzer:
                 for path in (builtin_container_exclude_paths or [])
             }
             normalized_path = rel_path.replace("\\", "/").lstrip("./")
-            if not any(fnmatch.fnmatch(normalized_path, pattern) for pattern in normalized_excludes):
+            if not any(
+                fnmatch.fnmatch(normalized_path, pattern) for pattern in normalized_excludes
+            ):
                 issues.extend(self._check_python_builtin_containers(tree, rel_path, group_name))
         if not rules or "dummy_pass" in rules or "empty_function" in rules:
             issues.extend(self._check_python_empty_functions(tree, rel_path, group_name))
@@ -416,6 +436,66 @@ class SourceAnalyzer:
                     group=group_name,
                 )
             )
+        return issues
+
+    @staticmethod
+    def _check_assert_side_effects(
+        tree: ast.Module, rel_path: str, group_name: str
+    ) -> list[SourceIssue]:
+        """Detect known state-changing calls even in multiline assert expressions."""
+        mutators = frozenset(
+            (
+                "append",
+                "extend",
+                "insert",
+                "pop",
+                "pop_back",
+                "pop_front",
+                "pop_label",
+                "set_size",
+                "truncate",
+                "reverse_in_place",
+                "put",
+                "enqueue",
+                "enqueue_front",
+                "dequeue",
+                "clear",
+                "remove",
+                "erase",
+                "grant_shared",
+                "revoke_shared",
+                "update_owner",
+                "map_for_io",
+                "_write_guest",
+                "_PYOBJECT_GET_BUFFER",
+            )
+        )
+        issues: list[SourceIssue] = []
+        for assertion in ast.walk(tree):
+            if not isinstance(assertion, ast.Assert):
+                continue
+            for node in ast.walk(assertion.test):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = (
+                    node.func.attr
+                    if isinstance(node.func, ast.Attribute)
+                    else node.func.id
+                    if isinstance(node.func, ast.Name)
+                    else ""
+                )
+                if name not in mutators and not name.startswith(("push_", "pop_")):
+                    continue
+                issues.append(
+                    SourceIssue(
+                        file_path=rel_path,
+                        line=node.lineno,
+                        rule="PY-ASSERT-SIDE-EFFECT",
+                        severity="ERROR",
+                        message=f"State-changing {name}() must execute before assert; assert is removed by -O.",
+                        group=group_name,
+                    )
+                )
         return issues
 
     def _check_python_raise(
@@ -562,9 +642,9 @@ class SourceAnalyzer:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             arguments = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
-            positional_defaults = [
-                None
-            ] * (len(node.args.posonlyargs) + len(node.args.args) - len(node.args.defaults))
+            positional_defaults = [None] * (
+                len(node.args.posonlyargs) + len(node.args.args) - len(node.args.defaults)
+            )
             positional_defaults.extend(node.args.defaults)
             defaults = positional_defaults + list(node.args.kw_defaults)
             nullable_arguments: set[str] = set()
@@ -577,9 +657,7 @@ class SourceAnalyzer:
                         isinstance(part, ast.Constant) and part.value is None
                         for part in ast.walk(argument.annotation)
                     )
-                ) or (
-                    isinstance(default, ast.Constant) and default.value is None
-                )
+                ) or (isinstance(default, ast.Constant) and default.value is None)
                 if nullable:
                     nullable_arguments.add(argument.arg)
 
@@ -664,7 +742,9 @@ class SourceAnalyzer:
                     and statement.target.value.id in ("self", "cls")
                 )
             for statement in class_constants:
-                if isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, str):
+                if isinstance(statement.value, ast.Constant) and isinstance(
+                    statement.value.value, str
+                ):
                     continue
                 if (
                     isinstance(statement.annotation, ast.Subscript)
@@ -732,7 +812,9 @@ class SourceAnalyzer:
                         annotations.append(node.value)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 arguments = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
-                annotations.extend(arg.annotation for arg in arguments if arg.annotation is not None)
+                annotations.extend(
+                    arg.annotation for arg in arguments if arg.annotation is not None
+                )
                 if node.args.vararg is not None and node.args.vararg.annotation is not None:
                     annotations.append(node.args.vararg.annotation)
                 if node.args.kwarg is not None and node.args.kwarg.annotation is not None:
@@ -747,16 +829,29 @@ class SourceAnalyzer:
                 if isinstance(node, ast.Subscript) and (
                     isinstance(node.value, ast.Name) or isinstance(node.value, ast.Attribute)
                 ):
-                    value_name = node.value.id if isinstance(node.value, ast.Name) else node.value.attr
+                    value_name = (
+                        node.value.id if isinstance(node.value, ast.Name) else node.value.attr
+                    )
                     if value_name == "Union":
-                        union_parts = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+                        union_parts = (
+                            list(node.slice.elts)
+                            if isinstance(node.slice, ast.Tuple)
+                            else [node.slice]
+                        )
                     elif value_name == "Optional":
-                        optional_parts = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+                        optional_parts = (
+                            list(node.slice.elts)
+                            if isinstance(node.slice, ast.Tuple)
+                            else [node.slice]
+                        )
                         if len(optional_parts) != 1:
                             union_parts = optional_parts
                 if union_parts is None:
                     continue
-                if len(union_parts) != 2 or sum(self._is_none_type(part) for part in union_parts) != 1:
+                if (
+                    len(union_parts) != 2
+                    or sum(self._is_none_type(part) for part in union_parts) != 1
+                ):
                     issues.append(
                         SourceIssue(
                             file_path=rel_path,
@@ -870,12 +965,20 @@ class SourceAnalyzer:
                 message = "Built-in list syntax is forbidden in pysim; use a fixed-capacity system container."
             elif isinstance(node, (ast.Dict, ast.DictComp)):
                 rule = "PY-FORBIDDEN-BUILTIN-DICT"
-                message = "Built-in dict syntax is forbidden in pysim; use a FlatMap storage or view."
+                message = (
+                    "Built-in dict syntax is forbidden in pysim; use a FlatMap storage or view."
+                )
             elif isinstance(node, (ast.Set, ast.SetComp)):
                 rule = "PY-FORBIDDEN-BUILTIN-SET"
-                message = "Built-in set syntax is forbidden in pysim; use a FlatSet storage or view."
+                message = (
+                    "Built-in set syntax is forbidden in pysim; use a FlatSet storage or view."
+                )
             elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                if node.func.id == "tuple" and node.args and not isinstance(node.args[0], ast.Tuple):
+                if (
+                    node.func.id == "tuple"
+                    and node.args
+                    and not isinstance(node.args[0], ast.Tuple)
+                ):
                     rule = "PY-FORBIDDEN-TUPLE-REBUILD"
                     message = "Reason: tuple(iterable) materializes the entire iterable and duplicates peak memory. Resource requirement: create no intermediate sequence; consume incrementally, retaining data only in caller-owned bounded storage when required."
                 elif node.func.id == "list":
@@ -983,16 +1086,85 @@ class SourceAnalyzer:
         self, tree: ast.Module, rel_path: str, group_name: str
     ) -> list[SourceIssue]:
         issues: list[SourceIssue] = []
-        protocol_ranges = [
-            (node.lineno, node.end_lineno or node.lineno)
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ClassDef)
-            and any(isinstance(base, ast.Name) and base.id == "Protocol" for base in node.bases)
-        ]
+        typing_modules = {"typing", "typing_extensions"}
+        protocol_names: set[str] = set()
+        overload_names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                typing_modules.update(
+                    alias.asname or alias.name
+                    for alias in node.names
+                    if alias.name in {"typing", "typing_extensions"}
+                )
+            elif isinstance(node, ast.ImportFrom) and node.module in {
+                "typing",
+                "typing_extensions",
+            }:
+                for alias in node.names:
+                    if alias.name == "Protocol":
+                        protocol_names.add(alias.asname or alias.name)
+                    elif alias.name == "overload":
+                        overload_names.add(alias.asname or alias.name)
+
+        def typing_symbol(node: ast.expr, names: set[str], attribute: str) -> bool:
+            return (isinstance(node, ast.Name) and node.id in names) or (
+                isinstance(node, ast.Attribute)
+                and node.attr == attribute
+                and isinstance(node.value, ast.Name)
+                and node.value.id in typing_modules
+            )
+
+        def is_overload(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+            return any(
+                typing_symbol(item, overload_names, "overload") for item in node.decorator_list
+            )
+
+        def is_placeholder(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+            body = node.body
+            return len(body) == 1 and (
+                isinstance(body[0], ast.Pass)
+                or (
+                    isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and body[0].value.value is Ellipsis
+                )
+            )
+
+        contract_methods: set[int] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and any(
+                typing_symbol(
+                    base.value if isinstance(base, ast.Subscript) else base,
+                    protocol_names,
+                    "Protocol",
+                )
+                for base in node.bases
+            ):
+                contract_methods.update(
+                    id(item)
+                    for item in node.body
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                )
+            # Overload signatures are contracts only when a concrete implementation
+            # exists in the same lexical body. An orphan overload remains an error.
+            for body in (value for _, value in ast.iter_fields(node) if isinstance(value, list)):
+                functions = [
+                    item
+                    for item in body
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                ]
+                implemented = {
+                    item.name
+                    for item in functions
+                    if not is_overload(item) and not is_placeholder(item)
+                }
+                contract_methods.update(
+                    id(item) for item in functions if is_overload(item) and item.name in implemented
+                )
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or len(node.body) != 1:
                 continue
-            if any(start <= node.lineno <= end for start, end in protocol_ranges):
+            if id(node) in contract_methods:
                 # Ellipsis is the standard body for a structural Protocol
                 # contract, not an executable placeholder. Keep the empty
                 # implementation rule focused on concrete functions.

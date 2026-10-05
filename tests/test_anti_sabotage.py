@@ -123,7 +123,11 @@ def test_evidence_and_consistency_checks(tmp_path):
     doc_consist = docs_dir / "consist.md"
     doc_consist.write_text(
         """# Consist Doc
+## First
+<!-- definition: {REQ_DUPLICATE} -->
 | {REQ_DUPLICATE} | First definition. |
+## Second
+<!-- definition: {REQ_DUPLICATE} -->
 | {REQ_DUPLICATE} | Second definition. |
 """,
         encoding="utf-8",

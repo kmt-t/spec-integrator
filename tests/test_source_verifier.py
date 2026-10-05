@@ -4,6 +4,7 @@ from spec_integrator.config import (
     Config,
     PysimImportConfig,
     PysimImportTierConfig,
+    SourceCheckRule,
     SourceGroupConfig,
 )
 from spec_integrator.source import SourceIssue
@@ -17,6 +18,70 @@ def _check_python(tmp_path: Path, source: str, rules: list[str]) -> list[SourceI
     config.config_dir = tmp_path
     analyzer = SourceAnalyzer(config)
     return analyzer._check_anti_sabotage(source_file, rules, "python")
+
+
+def test_assert_side_effects_cover_multiline_and_non_push_calls(tmp_path: Path) -> None:
+    issues = _check_python(
+        tmp_path,
+        """assert queue.enqueue_front(task)
+assert table.insert(
+    key, value,
+)
+assert types.extend(params)
+assert frame.values.push_i64(value)
+assert state.pop_label(depth) == expected
+assert _PYOBJECT_GET_BUFFER(owner, view, flags) == 0
+assert stack.pop_i32() == 3
+assert stack.pop_f64() == 1.5
+assert vector.reverse_in_place() is None
+assert storage.put(1, 2)
+assert stack.set_size(0) is None
+assert stack.truncate(0) is None
+""",
+        ["forbid_assert_side_effects"],
+    )
+    assert [(issue.rule, issue.line) for issue in issues] == [
+        ("PY-ASSERT-SIDE-EFFECT", line) for line in (1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14)
+    ]
+
+
+def test_assert_side_effect_check_preserves_pure_observations(tmp_path: Path) -> None:
+    issues = _check_python(
+        tmp_path,
+        """inserted = table.insert(key, value)
+assert inserted
+assert len(table) == expected
+assert table.view().find(key) == value
+text = "assert queue.enqueue(task)"
+# assert queue.enqueue(task)
+""",
+        ["forbid_assert_side_effects"],
+    )
+    assert issues == []
+
+
+def test_pysim_assert_check_uses_product_tier_scope(tmp_path: Path) -> None:
+    product = tmp_path / "sim" / "core" / "kernel.py"
+    qa = tmp_path / "sim" / "qa" / "test_kernel.py"
+    for file_path in (product, qa):
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text("assert queue.enqueue(task)\n", encoding="utf-8")
+    config = Config()
+    config.config_dir = tmp_path
+    config.pysim_imports = PysimImportConfig(
+        root="sim", tiers=[PysimImportTierConfig(tier=1, paths=["core/**/*.py"])]
+    )
+    config.source_verification.groups["python_pysim"] = SourceGroupConfig(
+        include_dirs=["sim"],
+        extensions=[".py"],
+        checks=[SourceCheckRule(id="pysim_assert_side_effects", enabled=True)],
+    )
+    analyzer = SourceAnalyzer(config)
+    result = analyzer.verify_group("python_pysim", [product, qa])
+    assert [(issue.file_path, issue.rule) for issue in result.issues] == [
+        ("sim/core/kernel.py", "PY-ASSERT-SIDE-EFFECT")
+    ]
+    assert analyzer.verify_group("python_pysim", [qa]).issues == []
 
 
 def test_python_static_checks_ignore_strings_and_docstrings(tmp_path: Path) -> None:
@@ -99,6 +164,56 @@ def placeholder() -> None:
     assert [(issue.rule, issue.line) for issue in issues] == [
         ("SABOTAGE-EMPTY-FUNCTION", 6),
     ]
+
+
+def test_generic_protocol_aliases_only_exempt_direct_contract_methods(tmp_path: Path) -> None:
+    issues = _check_python(
+        tmp_path,
+        """import typing as t
+from typing import Protocol as P, TypeVar
+T = TypeVar('T')
+class First(P[T]):
+    def read(self) -> T: ...
+    def implemented(self):
+        def omitted(): ...
+        return omitted
+class Second(t.Protocol[T]):
+    def read(self) -> T: ...
+class Concrete:
+    def read(self) -> T: ...
+""",
+        ["empty_function"],
+    )
+    assert [(issue.rule, issue.line) for issue in issues] == [
+        ("SABOTAGE-EMPTY-FUNCTION", 12),
+        ("SABOTAGE-EMPTY-FUNCTION", 7),
+    ]
+
+
+def test_overload_signatures_require_concrete_implementation_in_same_scope(tmp_path: Path) -> None:
+    issues = _check_python(
+        tmp_path,
+        """import typing as t
+from typing import overload as signature
+class Contract:
+    @classmethod
+    @signature
+    def of(cls, value: int) -> int: ...
+    @classmethod
+    @t.overload
+    def of(cls, value: str) -> str: ...
+    @classmethod
+    def of(cls, value): return value
+class Orphan:
+    @signature
+    def of(self, value: int) -> int: ...
+@signature
+def missing(value: int) -> int: ...
+def missing(value): pass
+""",
+        ["empty_function"],
+    )
+    assert sorted(issue.line for issue in issues) == [14, 16, 17]
 
 
 def test_python_static_checks_report_ast_syntax_errors(tmp_path: Path) -> None:
