@@ -132,6 +132,69 @@ def test_term_variance_lookups_are_scoped_to_backend():
     db.close()
 
 
+def test_clear_all_removes_previous_assessments_and_indexes():
+    db = DocAuditDB(":memory:")
+    db.replace_risk_assessments(
+        [
+            {
+                "item_id": "risk-1",
+                "keyword": "Keyword",
+                "file_path": "doc.md",
+                "risk_score": 1,
+            }
+        ],
+        backend="test",
+    )
+    judge_result = JudgeResult(
+        item_id="doc.md#section",
+        item_label="doc.md#section",
+        status="WARN",
+        summary="Previous assessment",
+        evaluations=[
+            JudgeEvaluation(
+                check_id="clarity",
+                classification="possible_violation",
+                confidence=0.8,
+                location="doc.md#section",
+                severity="WARNING",
+            )
+        ],
+        covered_files=["doc.md"],
+    )
+    db.replace_judge_results([judge_result], backend="test")
+    db.replace_document_judge_results([judge_result], backend="test")
+    db.save_judge_evaluations("llm-single-review", [judge_result], backend="test")
+    db.insert_term_variance_judgment(
+        term_a="scheduler",
+        term_b="dispatcher",
+        file_a="a.md",
+        file_b="b.md",
+        line_a=1,
+        line_b=2,
+        is_variance=True,
+        confidence=0.8,
+        preferred_term="scheduler",
+        reason="Previous assessment",
+        backend="test",
+    )
+
+    db.clear_all()
+
+    assessment_tables = (
+        "risk_assessments",
+        "judge_results",
+        "document_judge_results",
+        "judge_evaluations",
+        "term_variance_judgments",
+        "run_metadata",
+        "assessed_doc_hashes",
+    )
+    for table in assessment_tables:
+        count = db.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        assert count == 0, f"{table} still contains a previous result"
+    db.close()
+
+
 def test_legacy_term_variance_rows_migrate_without_losing_backend_history(tmp_path):
     db_path = tmp_path / "legacy.sqlite"
     legacy = sqlite3.connect(db_path)

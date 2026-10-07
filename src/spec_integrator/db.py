@@ -367,44 +367,17 @@ class DocAuditDB:
         return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     def clear_all(self):
-        """Clears structural document models and caches while preserving costly LLM assessments."""
+        """Clears every application table, including cached assessments and indexes."""
+        tables = [
+            str(row["name"])
+            for row in self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        ]
         with self.conn:
-            tables = [
-                "documents",
-                "sections",
-                "keywords",
-                "keyword_references",
-                "document_links",
-                "formal_models",
-                "wit_files",
-                "verification_issues",
-                "audit_cache",
-            ]
-            for t in tables:
-                self.conn.execute(f"DELETE FROM {t}")
-
-    def reset_all(self):
-        """Completely resets all tables including LLM judgments."""
-        with self.conn:
-            tables = [
-                "documents",
-                "sections",
-                "keywords",
-                "keyword_references",
-                "document_links",
-                "formal_models",
-                "wit_files",
-                "verification_issues",
-                "audit_cache",
-                "risk_assessments",
-                "judge_results",
-                "document_judge_results",
-                "judge_evaluations",
-                "run_metadata",
-                "assessed_doc_hashes",
-            ]
-            for t in tables:
-                self.conn.execute(f"DELETE FROM {t}")
+            for table in tables:
+                quoted_table = table.replace('"', '""')
+                self.conn.execute(f'DELETE FROM "{quoted_table}"')
 
     def commit(self):
         self.conn.commit()
