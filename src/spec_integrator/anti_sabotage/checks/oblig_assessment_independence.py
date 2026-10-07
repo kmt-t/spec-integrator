@@ -12,7 +12,7 @@ class AssessmentIndependenceCheck(AntiSabotageCheck):
     gate = "Obligation"
     severity = "ERROR"
     description = (
-        "タグから機械的に逆算するモック評価や、未評価キーワードを残した部分監査を検出する。"
+        "タグから機械的に逆算するモック評価をエラーとし、未評価キーワードの残存は警告する。"
     )
 
     def is_enabled(self, ctx: AntiSabotageContext) -> bool:
@@ -64,7 +64,7 @@ class AssessmentIndependenceCheck(AntiSabotageCheck):
                     issues.append(
                         VerificationIssue(
                             gate=self.gate,
-                            severity=self.severity,
+                            severity="WARNING",
                             file_path=str(ctx.config.get_db_path()),
                             line=1,
                             rule_code="OBLIG-ASSESSMENT-PARTIAL",

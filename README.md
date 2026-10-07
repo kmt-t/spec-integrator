@@ -56,26 +56,28 @@
 | Evidence | ベンチマーク証跡の不一致 | `EVID-BENCHMARK-UNDECLARED` | `{VERIFY_BENCHMARK}` を宣言しているのに `evidence:` ブロックに `benchmark:` エントリが無い。 |
 | Evidence | ベンチマーク実装の欠落 | `EVID-BENCHMARK-MISSING` | `{VERIFY_BENCHMARK}` を宣言しているのに、対応する `benchmarks/*.py` が 1 本も存在しない（実測を主張するなら実行可能な計測コードが要る）。 |
 | Evidence | 参照アーティファクトの欠落 | `EVID-DANGLING-ARTIFACT-REF` | 本文中で言及されているファイルパス（モデル・レポート・設計書）が実在するかを確認する。 |
-| Obligation | リスク評価の未実施 | `OBLIG-ASSESSMENT-MISSING` | `risk` を一度も実行しておらず、キャッシュ DB の `risk_assessments` テーブルが空である。 |
+| Obligation | リスク評価の未実施 | `OBLIG-ASSESSMENT-MISSING` | `risk` を一度も実行しておらず、キャッシュ DB の `risk_assessments` テーブルが空である。WARNING。 |
 | Obligation | 評価エンジン記録の欠落 | `OBLIG-ASSESSMENT-PROVENANCE-UNKNOWN` | `run_metadata` テーブルに `backend` が記録されておらず、評価が文書から独立した判断かを確認できない。 |
 | Obligation | 評価エンジンの自己参照 | `OBLIG-ASSESSMENT-NOT-INDEPENDENT` | 評価が「文書自身のタグから義務を機械的に逆算するだけの backend（禁止リスト登録済み）」で行われており、達成率が定義上 100% になる自己証明状態を検出する。 |
-| Obligation | 評価カバレッジの不足 | `OBLIG-ASSESSMENT-PARTIAL` | 評価済みキーワード数が現在の全キーワード数（LLM 監査が対象とするのと同じ母集団）より少ない（未評価のキーワードが残っている）。 |
-| Obligation | リスク評価の陳腐化 | `OBLIG-ASSESSMENT-STALE` | 評価後に文書が変更され、記録されたハッシュと現在の内容が一致しない。 |
+| Obligation | 評価カバレッジの不足 | `OBLIG-ASSESSMENT-PARTIAL` | 評価済みキーワード数が現在の全キーワード数（LLM 監査が対象とするのと同じ母集団）より少ない（未評価のキーワードが残っている）。WARNING。 |
+| Obligation | リスク評価の陳腐化 | `OBLIG-ASSESSMENT-STALE` | 評価後に文書が変更され、記録されたハッシュと現在の内容が一致しない。WARNING。 |
 | Obligation | 検証タグの欠落 | `OBLIG-VERIFICATION-SKIPPED` | risk_score が閾値以上なのに、対応する `{VERIFY_LLM}` タグが文書に付いていない。 |
-| Obligation | 意味監査結果の欠落 | `OBLIG-JUDGE-MISSING` | `{VERIFY_LLM}` を宣言しているのに、キャッシュ DB の `judge_results` テーブルに LLM 監査（`llm-keyword-review`）の判定結果が存在しない。 |
-| Obligation | 意味監査結果の未固定 | `OBLIG-JUDGE-UNANCHORED` | `judge_results` に文書ハッシュが記録されておらず、どの版を監査した結果かを特定できない。 |
-| Obligation | 意味監査結果の陳腐化 | `OBLIG-JUDGE-STALE` | LLM 監査実行後に文書が変更され、記録されたハッシュと現在の内容が一致しない。 |
-| Obligation | 意味監査対象の漏れ | `OBLIG-JUDGE-SKIPPED` | `{VERIFY_LLM}` を宣言しているのに、判定結果の監査対象一覧（covered_files）に含まれていない。 |
+| Obligation | 意味監査結果の欠落 | `OBLIG-JUDGE-MISSING` | `{VERIFY_LLM}` を宣言しているのに、キャッシュ DB の `judge_results` テーブルに LLM 監査（`llm-keyword-review`）の判定結果が存在しない。WARNING。 |
+| Obligation | 意味監査結果の未固定 | `OBLIG-JUDGE-UNANCHORED` | `judge_results` に文書ハッシュが記録されておらず、どの版を監査した結果かを特定できない。WARNING。 |
+| Obligation | 意味監査結果の陳腐化 | `OBLIG-JUDGE-STALE` | LLM 監査実行後に文書が変更され、記録されたハッシュと現在の内容が一致しない。WARNING。 |
+| Obligation | 意味監査対象の漏れ | `OBLIG-JUDGE-SKIPPED` | `{VERIFY_LLM}` を宣言しているのに、判定結果の監査対象一覧（covered_files）に含まれていない。WARNING。 |
 | Obligation | 意味監査の不合格 | `OBLIG-JUDGE-FAILED` | この文書が引用するキーワードについて、記録済みの判定結果が FAIL を報告している。 |
-| Obligation | 文書単位監査結果の欠落 | `OBLIG-DOC-JUDGE-MISSING` | `{VERIFY_LLM}` を宣言している文書があるのに、キャッシュ DB の `document_judge_results` テーブルが空である。サブグラフ監査でのカバレッジとは独立に判定する。 |
-| Obligation | 文書単位監査結果の未固定 | `OBLIG-DOC-JUDGE-UNANCHORED` | `document_judge_results` に文書ハッシュが記録されておらず、どの版を監査した結果かを特定できない。 |
-| Obligation | 文書単位監査結果の陳腐化 | `OBLIG-DOC-JUDGE-STALE` | `llm-single-review` の文書単位監査後に文書が変更され、記録されたハッシュと現在の内容が一致しない。 |
-| Obligation | 文書単位監査対象の漏れ | `OBLIG-DOC-JUDGE-SKIPPED` | `{VERIFY_LLM}` を宣言しているのに、その文書自体が `document_judge_results` に一度も現れていない（サブグラフ経由のカバレッジでは代替できない）。 |
+| Obligation | 文書単位監査結果の欠落 | `OBLIG-DOC-JUDGE-MISSING` | `{VERIFY_LLM}` を宣言している文書があるのに、キャッシュ DB の `document_judge_results` テーブルが空である。サブグラフ監査でのカバレッジとは独立に判定する。WARNING。 |
+| Obligation | 文書単位監査結果の未固定 | `OBLIG-DOC-JUDGE-UNANCHORED` | `document_judge_results` に文書ハッシュが記録されておらず、どの版を監査した結果かを特定できない。WARNING。 |
+| Obligation | 文書単位監査結果の陳腐化 | `OBLIG-DOC-JUDGE-STALE` | `llm-single-review` の文書単位監査後に文書が変更され、記録されたハッシュと現在の内容が一致しない。WARNING。 |
+| Obligation | 文書単位監査対象の漏れ | `OBLIG-DOC-JUDGE-SKIPPED` | `{VERIFY_LLM}` を宣言しているのに、その文書自体が `document_judge_results` に一度も現れていない（サブグラフ経由のカバレッジでは代替できない）。WARNING。 |
 | Obligation | 文書単位監査の不合格 | `OBLIG-DOC-JUDGE-FAILED` | この文書自体について、記録済みの文書単位判定結果が FAIL を報告している。 |
 | Consistency | キーワード定義の重複 | `CONSIST-DUPLICATE-DEFINITION` | 同じ `{Keyword}` が要求仕様テーブルの複数行で定義されている。 |
 | Consistency | シンボル値の不一致 | `CONSIST-SYMBOL-DRIFT` | 同一シンボル（例: `FB_CONF_*`）がリポジトリ内の複数箇所で異なる値を持つ（設定不要。表記ゆれは正規化して比較）。 |
 | Consistency | 連動修正の未伝播 | `CONSIST-COCHANGE-STALE` | キーワード定義側は変更されたが、参照側の記述が一貫性ベースライン（キャッシュ DB 記録値）から更新されていない。 |
 | Consistency | 旧値の残存 | `CONSIST-STALE-VALUE` | 設定済みの禁止パターン（移行済みの旧値）が文書中に引き続き残っている。 |
+
+LLM によるリスク評価・意味監査の未実施、未固定、陳腐化、対象漏れは WARNING とし、LLM 判定を実行していないだけで `check-doc` を失敗させない。記録済みの `FAIL` は ERROR のまま扱う。高リスク判定に対する `{VERIFY_LLM}` タグ欠落など、LLM 判定の有無とは別の構造違反も ERROR とする。
 
 `EVID-UNBACKED-CLAIM` / `EVID-UNSOURCED-MEASUREMENT` は本表から削除した。実装が
 存在せず README にのみ記載されていた名称であり、コード上の後継である「検証済み」

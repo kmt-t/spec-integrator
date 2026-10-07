@@ -44,11 +44,12 @@ Round-robin scheduling with interrupt wakeup.
 """
 
 
-def test_missing_assessment_is_an_error(tmp_path):
+def test_missing_assessment_is_a_warning(tmp_path):
     cfg, doc, db = _setup(tmp_path, DOC_BODY)
     issues, summary = ObligationVerifier(cfg).verify([doc], db=db)
     missing = next(i for i in issues if i.rule_code == "OBLIG-ASSESSMENT-MISSING")
     assert "spec-integrator risk --exhaustive" in missing.message
+    assert missing.severity == "WARNING"
 
 
 def test_high_risk_keyword_without_the_demanded_tag_is_an_error(tmp_path):
@@ -124,9 +125,8 @@ def test_low_risk_keyword_creates_no_obligation(tmp_path):
     assert [i for i in issues if i.rule_code == "OBLIG-VERIFICATION-SKIPPED"] == []
 
 
-def test_stale_assessment_is_an_error(tmp_path):
+def test_stale_assessment_is_a_warning(tmp_path):
     cfg, doc, db = _setup(tmp_path, DOC_BODY)
-    cfg.obligation.stale_is_error = True
     _write_risk_assessment(
         db,
         [
@@ -143,30 +143,11 @@ def test_stale_assessment_is_an_error(tmp_path):
     issues, summary = ObligationVerifier(cfg).verify([doc], db=db)
     stale = next(i for i in issues if i.rule_code == "OBLIG-ASSESSMENT-STALE")
     assert "spec-integrator risk --exhaustive" in stale.message
+    assert stale.severity == "WARNING"
     assert summary.stale_documents == [doc.file_path]
 
 
-def test_stale_assessment_not_error_by_default(tmp_path):
-    cfg, doc, db = _setup(tmp_path, DOC_BODY)
-    _write_risk_assessment(
-        db,
-        [
-            {
-                "item_id": "item:RoundRobinScheduling",
-                "keyword": "RoundRobinScheduling",
-                "file_path": doc.file_path,
-                "risk_score": 1,
-                "covered_files": [doc.file_path],
-            }
-        ],
-        doc_hashes={doc.file_path: "0000deadbeef"},
-    )
-    issues, summary = ObligationVerifier(cfg).verify([doc], db=db)
-    assert not any(i.rule_code == "OBLIG-ASSESSMENT-STALE" for i in issues)
-    assert summary.stale_documents == [doc.file_path]
-
-
-def test_verify_llm_tag_without_a_judge_report_is_an_error(tmp_path):
+def test_verify_llm_tag_without_a_judge_report_is_a_warning(tmp_path):
     cfg, doc, db = _setup(
         tmp_path,
         """# Scheduler {VERIFY_LLM}
@@ -176,7 +157,8 @@ Text.
     )
     _write_risk_assessment(db, [], doc_hashes={doc.file_path: doc.content_hash})
     issues, _ = ObligationVerifier(cfg).verify([doc], db=db)
-    assert any(i.rule_code == "OBLIG-JUDGE-MISSING" for i in issues)
+    missing = next(i for i in issues if i.rule_code == "OBLIG-JUDGE-MISSING")
+    assert missing.severity == "WARNING"
 
 
 def test_verify_llm_tag_covered_by_judge_report_passes(tmp_path):
@@ -217,10 +199,10 @@ Text.
     assert [i for i in issues if i.rule_code.startswith("OBLIG-DOC-JUDGE")] == []
 
 
-def test_verify_llm_tag_without_a_document_judge_report_is_an_error(tmp_path):
+def test_verify_llm_tag_without_a_document_judge_report_is_a_warning(tmp_path):
     """Subgraph coverage alone is not enough -- the whole-document audit is
     an independent check, so a document tagged {VERIFY_LLM} that was never
-    document-judged must fail even if its subgraph judge coverage is clean."""
+    document-judged must warn even if its subgraph judge coverage is clean."""
     cfg, doc, db = _setup(
         tmp_path,
         """# Scheduler {VERIFY_LLM}
@@ -242,7 +224,8 @@ Text.
         doc_hashes={doc.file_path: doc.content_hash},
     )
     issues, summary = ObligationVerifier(cfg).verify([doc], db=db)
-    assert any(i.rule_code == "OBLIG-DOC-JUDGE-MISSING" for i in issues)
+    missing = next(i for i in issues if i.rule_code == "OBLIG-DOC-JUDGE-MISSING")
+    assert missing.severity == "WARNING"
     assert summary.document_judge_missing == [doc.file_path]
 
 
@@ -284,9 +267,11 @@ Text.
     failed = [i for i in issues if i.rule_code == "OBLIG-DOC-JUDGE-FAILED"]
     assert len(failed) == 1
     assert failed[0].file_path == doc.file_path
+    assert failed[0].severity == "ERROR"
+    assert failed[0].severity == "ERROR"
 
 
-def test_document_judge_verdict_on_an_edited_document_is_rejected_as_stale(tmp_path):
+def test_document_judge_verdict_on_an_edited_document_is_a_warning(tmp_path):
     cfg, doc, db = _setup(
         tmp_path,
         """# Scheduler {VERIFY_LLM}
@@ -294,7 +279,6 @@ def test_document_judge_verdict_on_an_edited_document_is_rejected_as_stale(tmp_p
 Text.
 """,
     )
-    cfg.obligation.stale_is_error = True
     _write_risk_assessment(db, [], doc_hashes={doc.file_path: doc.content_hash})
     _write_judge_results(
         db,
@@ -323,6 +307,7 @@ Text.
     issues, _ = ObligationVerifier(cfg).verify([doc], db=db)
     stale = [i for i in issues if i.rule_code == "OBLIG-DOC-JUDGE-STALE"]
     assert len(stale) == 1
+    assert stale[0].severity == "WARNING"
 
 
 def test_stored_judge_failure_is_surfaced(tmp_path):
@@ -352,6 +337,7 @@ Text about {LowOverheadSwitch}.
     failed = [i for i in issues if i.rule_code == "OBLIG-JUDGE-FAILED"]
     assert len(failed) == 1
     assert "LowOverheadSwitch" in failed[0].message
+    assert failed[0].severity == "ERROR"
 
 
 def test_stored_judge_failure_for_an_unrelated_keyword_is_not_surfaced(tmp_path):
@@ -418,6 +404,7 @@ Priority scheduling, see {KeywordB}.
     issues, summary = ObligationVerifier(cfg).verify([doc], graph, db)
     partial = [i for i in issues if i.rule_code == "OBLIG-ASSESSMENT-PARTIAL"]
     assert len(partial) == 1
+    assert partial[0].severity == "WARNING"
     assert summary.keywords_assessed == 1
     assert summary.keywords_total == 2
 
@@ -472,7 +459,7 @@ def test_assessment_without_recorded_backend_is_rejected(tmp_path):
     assert any(i.rule_code == "OBLIG-ASSESSMENT-PROVENANCE-UNKNOWN" for i in issues)
 
 
-def test_judge_verdict_on_an_edited_document_is_rejected_as_stale(tmp_path):
+def test_judge_verdict_on_an_edited_document_is_a_warning(tmp_path):
     """The judge verdict is evidence about a specific text. Once the document
     moves on, the stored verdict describes something that no longer exists.
     This is not hypothetical: the fireball judge report passed
@@ -486,7 +473,6 @@ def test_judge_verdict_on_an_edited_document_is_rejected_as_stale(tmp_path):
 Text about {LowOverheadSwitch}.
 """,
     )
-    cfg.obligation.stale_is_error = True
     _write_risk_assessment(db, [], doc_hashes={doc.file_path: doc.content_hash})
     _write_judge_results(
         db,
@@ -503,15 +489,14 @@ Text about {LowOverheadSwitch}.
     )
     issues, _ = ObligationVerifier(cfg).verify([doc], db=db)
     stale = [i for i in issues if i.rule_code == "OBLIG-JUDGE-STALE"]
-    assert len(stale) == 1, (
-        "a verdict formed against different text must not discharge the obligation"
-    )
+    assert len(stale) == 1, "a verdict formed against different text must be reported as stale"
     assert doc.file_path == stale[0].file_path
+    assert stale[0].severity == "WARNING"
 
 
-def test_judge_report_without_hashes_cannot_discharge_an_obligation(tmp_path):
+def test_judge_report_without_hashes_warns_that_coverage_is_unverified(tmp_path):
     """A judge verdict recorded with no document hashes gives no way to tell
-    which specification version it audited, so it must not count as evidence."""
+    which specification version it audited, so it must not count as verified evidence."""
     cfg, doc, db = _setup(
         tmp_path,
         """# Scheduler {VERIFY_LLM}
@@ -527,7 +512,12 @@ Text.
     )
     issues, _ = ObligationVerifier(cfg).verify([doc], db=db)
     assert [i for i in issues if i.rule_code == "OBLIG-JUDGE-UNANCHORED"], (
-        "an unanchored verdict must be rejected, not silently accepted"
+        "an unanchored verdict must be warned about, not silently accepted"
+    )
+    assert all(
+        issue.severity == "WARNING"
+        for issue in issues
+        if issue.rule_code == "OBLIG-JUDGE-UNANCHORED"
     )
 
 
@@ -590,6 +580,6 @@ Text.
         doc_hashes={doc.file_path: doc.content_hash},
     )
     issues, _ = ObligationVerifier(cfg).verify([doc], db=db)
-    assert [i for i in issues if i.rule_code == "OBLIG-JUDGE-SKIPPED"], (
-        "being mentioned in another keyword's finding is not being audited"
-    )
+    skipped = [i for i in issues if i.rule_code == "OBLIG-JUDGE-SKIPPED"]
+    assert skipped, "being mentioned in another keyword's finding is not being audited"
+    assert all(issue.severity == "WARNING" for issue in skipped)

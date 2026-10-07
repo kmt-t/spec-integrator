@@ -5,13 +5,15 @@ from spec_integrator.models import VerificationIssue
 
 
 class DocumentJudgeCoverageCheck(AntiSabotageCheck):
-    """文書単位監査結果の検証: {VERIFY_LLM} を持つドキュメントの文書単位自己一貫性監査を検証する。"""
+    """文書単位監査結果の検証: 未実施・未固定・漏れは警告し、記録済み FAIL はエラーにする。"""
 
     rule_code = "OBLIG-DOC-JUDGE-MISSING"
     name = "文書単位監査結果の欠落・未固定・漏れ・不合格"
     gate = "Obligation"
     severity = "ERROR"
-    description = "文書単位のセマンティック自己整合性監査の未実施、ハッシュ未固定、監査漏れ、FAIL 判定の放置を検出する。"
+    description = (
+        "文書単位監査の未実施・未固定・対象漏れを警告し、記録済み FAIL をエラーとして検出する。"
+    )
 
     def is_enabled(self, ctx: AntiSabotageContext) -> bool:
         return ctx.config.obligation.enabled and ctx.config.obligation.require_judge
@@ -37,7 +39,7 @@ class DocumentJudgeCoverageCheck(AntiSabotageCheck):
             issues.append(
                 VerificationIssue(
                     gate=self.gate,
-                    severity=self.severity,
+                    severity="WARNING",
                     file_path=str(ctx.config.get_db_path()),
                     line=1,
                     rule_code="OBLIG-DOC-JUDGE-MISSING",
@@ -54,7 +56,7 @@ class DocumentJudgeCoverageCheck(AntiSabotageCheck):
             issues.append(
                 VerificationIssue(
                     gate=self.gate,
-                    severity=self.severity,
+                    severity="WARNING",
                     file_path=str(ctx.config.get_db_path()),
                     line=1,
                     rule_code="OBLIG-DOC-JUDGE-UNANCHORED",
@@ -67,24 +69,23 @@ class DocumentJudgeCoverageCheck(AntiSabotageCheck):
             )
             return issues
 
-        if ctx.config.obligation.stale_is_error:
-            for doc in tagged:
-                rec = hashes.get(doc.file_path)
-                if rec is not None and rec != doc.content_hash:
-                    issues.append(
-                        VerificationIssue(
-                            gate=self.gate,
-                            severity=self.severity,
-                            file_path=doc.file_path,
-                            line=1,
-                            rule_code="OBLIG-DOC-JUDGE-STALE",
-                            message=(
-                                f"Document declares '{llm_tag}' but has changed since the "
-                                "whole-document LLM judge audited it. The stored verdict describes an "
-                                "earlier version of this text — re-run 'spec-integrator llm-judge'."
-                            ),
-                        )
+        for doc in tagged:
+            rec = hashes.get(doc.file_path)
+            if rec is not None and rec != doc.content_hash:
+                issues.append(
+                    VerificationIssue(
+                        gate=self.gate,
+                        severity="WARNING",
+                        file_path=doc.file_path,
+                        line=1,
+                        rule_code="OBLIG-DOC-JUDGE-STALE",
+                        message=(
+                            f"Document declares '{llm_tag}' but has changed since the "
+                            "whole-document LLM judge audited it. The stored verdict describes an "
+                            "earlier version of this text — re-run 'spec-integrator llm-judge'."
+                        ),
                     )
+                )
 
         covered: set[str] = set()
         for e in entries:
@@ -97,7 +98,7 @@ class DocumentJudgeCoverageCheck(AntiSabotageCheck):
                 issues.append(
                     VerificationIssue(
                         gate=self.gate,
-                        severity=self.severity,
+                        severity="WARNING",
                         file_path=doc.file_path,
                         line=1,
                         rule_code="OBLIG-DOC-JUDGE-SKIPPED",

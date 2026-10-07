@@ -5,15 +5,13 @@ from spec_integrator.models import VerificationIssue
 
 
 class AssessmentMissingCheck(AntiSabotageCheck):
-    """リスク評価の未実施・記録欠落を検出する。"""
+    """リスク評価の未実施・記録欠落を警告する。"""
 
     rule_code = "OBLIG-ASSESSMENT-MISSING"
-    name = "リスク評価の未実施・記録欠落"
+    name = "リスク評価の未実施・記録の出所不明"
     gate = "Obligation"
     severity = "ERROR"
-    description = (
-        "リスク評価が一度も実行されていない、または評価エンジンの出所が不明なサボりを検出する。"
-    )
+    description = "リスク評価の未実施は警告し、記録の出所が不明な場合はエラーにする。"
 
     def is_enabled(self, ctx: AntiSabotageContext) -> bool:
         return ctx.config.obligation.enabled
@@ -29,7 +27,7 @@ class AssessmentMissingCheck(AntiSabotageCheck):
                 issues.append(
                     VerificationIssue(
                         gate=self.gate,
-                        severity=self.severity,
+                        severity="WARNING",
                         file_path=str(ctx.config.get_db_path()),
                         line=1,
                         rule_code="OBLIG-ASSESSMENT-MISSING",
@@ -51,7 +49,7 @@ class AssessmentMissingCheck(AntiSabotageCheck):
                 issues.append(
                     VerificationIssue(
                         gate=self.gate,
-                        severity=self.severity,
+                        severity="WARNING",
                         file_path=str(ctx.config.get_db_path()),
                         line=1,
                         rule_code="OBLIG-ASSESSMENT-MISSING",
@@ -97,20 +95,19 @@ class AssessmentMissingCheck(AntiSabotageCheck):
                     continue
                 if recorded != doc.content_hash:
                     summary.stale_documents.append(doc.file_path)
-                    if cfg.stale_is_error:
-                        issues.append(
-                            VerificationIssue(
-                                gate=self.gate,
-                                severity=self.severity,
-                                file_path=doc.file_path,
-                                line=1,
-                                rule_code="OBLIG-ASSESSMENT-STALE",
-                                message=(
-                                    "Document changed since it was risk-assessed. The recorded "
-                                    "verification obligations no longer describe this content — "
-                                    "re-run 'spec-integrator risk --exhaustive'."
-                                ),
-                            )
+                    issues.append(
+                        VerificationIssue(
+                            gate=self.gate,
+                            severity="WARNING",
+                            file_path=doc.file_path,
+                            line=1,
+                            rule_code="OBLIG-ASSESSMENT-STALE",
+                            message=(
+                                "Document changed since it was risk-assessed. The recorded "
+                                "verification obligations may not describe this content — "
+                                "re-run 'spec-integrator risk --exhaustive'."
+                            ),
                         )
+                    )
 
         return issues

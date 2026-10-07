@@ -180,7 +180,7 @@ Jev と Clef Flash はSystem One形式のチェックシートを処理する。
 | **Formal Gate** | `{VERIFY_FORMAL}` 対象の形式モデル検査（pyModelChecking / 変異検査） | モデルファイルが存在しない、構文エラー、CTL 不変条件の検証失敗、空虚な命題の検出 |
 | **WIT Gate** | `{VERIFY_WIT}` 対象の WebAssembly Interface Types 定義の構文・整合性検証 | WIT ファイルの構文エラーや型不整合 |
 | **Evidence Gate** | 主張と成果物（証跡ファイル、ベンチマーク）の裏付け検証 | 宣言された形式モデルやベンチマークコードが存在しない |
-| **Obligation Gate** | リスク評価（`risk`）によって課された `{VERIFY_LLM}` 検証義務の履行状況検証 | リスクスコア閾値以上のキーワードに検証タグが付与されていない、または監査未実施 |
+| **Obligation Gate** | リスク評価（`risk`）によって課された `{VERIFY_LLM}` 検証義務の履行状況検証 | 高リスクキーワードへの検証タグ欠落、または記録済み LLM 判定の FAIL。LLM 評価の未実施・未固定・陳腐化・対象漏れは警告 |
 | **Consistency Gate** | 連動修正の未伝播、シンボル値の不一致、旧値の残存検証 | 同一シンボルの不一致や禁止パターンの残存 |
 
 ---

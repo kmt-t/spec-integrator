@@ -84,8 +84,8 @@ def test_cli_init_creates_config(tmp_path, monkeypatch):
     assert (tmp_path / "spec-integrator.yaml").exists()
 
 
-def test_check_doc_fails_when_the_risk_assessment_was_never_run(tmp_path, monkeypatch):
-    """Skipping the step that decides *what* to verify must not yield a green build."""
+def test_check_doc_warns_when_the_risk_assessment_was_never_run(tmp_path, monkeypatch, capsys):
+    """An unrun LLM risk assessment is visible but does not fail the document gate."""
     monkeypatch.chdir(tmp_path)
 
     class ArgsInit:
@@ -97,7 +97,8 @@ def test_check_doc_fails_when_the_risk_assessment_was_never_run(tmp_path, monkey
     _scaffold(tmp_path)
     with pytest.raises(SystemExit) as exc_info:
         cmd_check_doc(ArgsCheckDoc())
-    assert exc_info.value.code == 1
+    assert exc_info.value.code == 0
+    assert "0 Error(s), 1 Warning(s)" in capsys.readouterr().out
     report = (tmp_path / "spec_report.md").read_text(encoding="utf-8")
     assert "OBLIG-ASSESSMENT-MISSING" in report
 

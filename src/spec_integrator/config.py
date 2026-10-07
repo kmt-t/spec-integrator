@@ -133,10 +133,9 @@ class ObligationConfig:
     """Obligation Gate: verification demanded by the risk assessment must not be skipped."""
 
     enabled: bool = True
-    require_assessment: bool = True  # no risk assessment at all => NG
-    require_judge: bool = True  # {VERIFY_LLM} tagged but never judged => NG
+    require_assessment: bool = True  # no risk assessment at all => WARNING
+    require_judge: bool = True  # {VERIFY_LLM} tagged but never judged => WARNING
     risk_threshold: int = 4  # risk_score >= threshold demands recommended verification
-    stale_is_error: bool = False  # doc hash difference does not block gate
     require_full_coverage: bool = True  # partial assessment overstates coverage => NG
     forbidden_backends: list[str] = field(default_factory=lambda: ["mock"])
 

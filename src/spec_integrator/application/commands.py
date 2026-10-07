@@ -151,7 +151,6 @@ obligation:
   require_assessment: true
   require_judge: true
   risk_threshold: 4
-  stale_is_error: true
 """
     target.write_text(template, encoding="utf-8")
     print(f"✔ Created '{target}'.")
