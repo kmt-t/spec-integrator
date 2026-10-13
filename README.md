@@ -1,219 +1,199 @@
 # spec-integrator
 
-`spec-integrator` は、仕様駆動開発（Specification-Driven Development）を採用するソフトウェア・システム開発プロジェクトにおいて、ドキュメントの構造、要求トレーサビリティ、Tier 階層依存、形式検証モデル（pyModelChecking / 変異検査）、Mermaid ダイアグラム（組み込み JS エンジン `mermaidx`）、WIT インターフェイス、およびセマンティック整合性（LLM as a Judge / リスク評価）を CI 上で厳格に自動検証・可視化するための汎用 Python CLI ツールです。
-
-### エラー報告時の要求確認
-
-検査エラーを報告するときは、ASTや正規表現の一致結果だけを返してはならない。`docs/requires/requirement_list.md` と対象設計書を確認し、エラー詳細に「違反箇所」「禁止理由」「対象の実装言語」「要求される処理速度／計算量」「許容RAM容量」「許容ROM容量」「要求への影響」「修正方向」を含める。要求正本を確認できない場合は、未確認の性能・メモリ条件を推測せず、要求未確認として報告する。
+`spec-integrator` is a general-purpose Python CLI for specification-driven software projects. It checks and visualizes document structure, requirement traceability, tier dependencies, formal models (pyModelChecking and mutation checks), Mermaid diagrams (`mermaidx`), WIT interfaces, and semantic consistency through risk assessment and LLM-as-a-Judge workflows.
 
 ---
 
-## 主な機能
+## Main Features
 
-- **設定駆動型（Configuration-Driven）**: `spec-integrator.yaml` により、プロジェクト固有のドキュメント階層（Tier 0〜3）やキーワード定義元を明示的に宣言。
-- **トポロジカル・ドキュメント空間（DocGraph）**: ファイル・見出しセクション・要求キーワードを有向グラフ（DAG）としてモデル化し、トレーサビリティや局所サブグラフ（$G_r$）を抽出。
-- **8段階の厳格な品質ゲート (`check-doc` コマンド)**:
-  1. **Format Gate**: Markdown 相対リンクおよび見出しアンカーの存在検証、ファイルリンク形式（ベースネーム表記・プロジェクトルート相対パス強制）、レーベンシュタイン距離による静的タイポ、および `mermaidx`（QuickJS 組み込み JS エンジン）による Mermaid ダイアグラム構文・レンダリング検証
-  2. **Traceability Gate**: 未定義キーワード参照・未参照要件の検証
-  3. **Hierarchy Gate**: 上位 Tier から下位 Tier への逆流依存（カプセル化違反）の防止
-  4. **Formal Gate**: `{VERIFY_FORMAL}` に連動して pyModelChecking モデルを実行し、空虚な命題の排除、および**変異検査（Mutation Testing: `guards=False` で違反状態到達可能の実証による省略偽証明の排除）**
-  5. **WIT Gate**: `{VERIFY_WIT}` に連動した WIT (WebAssembly Interface Types) インターフェイス定義の構文・整合性検証
-  6. **Evidence Gate**: 「検証済み」「証明完了」「実測値」等の主張が実際の成果物に裏付けられているかの検証
-  7. **Obligation Gate**: リスク評価（`risk`）が要求した検証義務が実施されずに放置されていないかの検証
-  8. **Consistency Gate**: 修正漏れ（値のドリフト・定義変更が参照側へ未伝播）の検知（一貫性ベースライン連動）
+- **Configuration-driven:** `spec-integrator.yaml` declares project-specific document tiers (Tier 0–3) and keyword sources.
+- **Topological document graph (DocGraph):** Models files, heading sections, and requirement keywords as a directed graph and extracts traceability views and local subgraphs (`G_r`).
+- **Eight strict quality gates (`check-doc`):**
+  1. **Format:** Checks Markdown links and heading anchors, root-relative file link style, static typos, and Mermaid syntax and rendering with the embedded QuickJS-based `mermaidx` engine.
+  2. **Traceability:** Finds undefined keyword references and unreferenced requirements.
+  3. **Hierarchy:** Prevents dependencies that flow from a higher tier back into a lower tier.
+  4. **Formal:** Runs pyModelChecking models tagged with `{VERIFY_FORMAL}`, rejects vacuous properties, and requires `guards=False` mutation checks to demonstrate that violations are reachable when protections are removed.
+  5. **WIT:** Checks syntax and consistency of WIT definitions tagged with `{VERIFY_WIT}`.
+  6. **Evidence:** Checks claims such as “verified,” “proved,” and “measured” against declared artifacts.
+  7. **Obligation:** Finds verification work required by risk assessment that has not been completed.
+  8. **Consistency:** Finds stale values and edits that were not propagated to dependent documents using the consistency baseline.
 
-### 検証のサボりを検出する (Anti-Sabotage)
+### Detect Skipped Verification (Anti-Sabotage)
 
-品質ゲートは「実施した検証が失敗したこと」だけでなく、
-**「実施すべき検証を実施しなかったこと」**を ERROR として扱う。
+Quality gates report both failed checks and required checks that were never performed. The anti-sabotage checks cover facts that can be determined mechanically, including file presence, hash matches, tags, and model structure. They do not claim to decide semantic LLM audit outcomes.
 
-以下は全て、ファイルの存在・ハッシュ一致・タグの有無・状態空間の構造など、
-**実行結果だけで機械的に真偽が決まる**確認項目である。LLM の意味判断
-（LLM 監査の PASS/FAIL 自体）に依存する項目はここに含めない —— その正否は
-アルゴリズムで形式的に確認できないため、Anti-Sabotage の対象から意図的に外している。
-
-確認項目名は全行「〔対象〕の〔問題種別〕」の形に正規化し、問題種別は
-`欠落 / 陳腐化 / 不一致 / 破綻 / 空虚化 / 不備 / 曖昧化 / エラー / 未実施 /
-自己参照 / 不足 / 重複 / 残存 / 未伝播 / 未固定 / 漏れ` という共通語彙に統一する。
-
-| ゲート | 確認項目（正規化名） | ルールコード | 判定基準（何を機械的に確認するか） |
+| Gate | Check | Rule code | Mechanical criterion |
 | :--- | :--- | :--- | :--- |
-| Format | リンク先の欠落 | `FMT-BROKEN-LINK` | Markdown の相対リンクが指すファイルが実際に存在するかをファイルシステムで確認する。 |
-| Format | 見出しアンカーの欠落 | `FMT-BROKEN-ANCHOR` | リンク先の見出しアンカーが対象ドキュメント内に実在するかを確認する。 |
-| Format | ファイルリンク形式の不備 | `FMT-FILE-LINK-FORMAT` | ファイルリンクの表示テキストがファイル名（basename）であり、リンク先がプロジェクトルート相対パス形式（`../` や絶対パス禁止）であるか、未リンクの生ファイルパスが残存していないかを確認する。 |
-| Format | 静的タイポ・表記揺れの残存 | `FMT-LEVENSHTEIN-TYPO` | 定義済みキーワードや見出しに対するレーベンシュタイン距離に基づく類似度チェックにより、静的な打ち間違いや誤字・脱字を検出する。 |
-| Format | Mermaid 構文のエラー | `FMT-INVALID-MERMAID` | `mermaidx`（組み込み QuickJS）で実際にダイアグラムをパース・レンダリングし、失敗したら ERROR とする（目視ではなく実行結果で判定）。 |
-| Format | Mermaid 検証エンジンの欠落 | `FMT-MERMAID-VALIDATOR-UNAVAILABLE` | `mermaidx` が import できない場合、検証を素通りさせず ERROR にする（ツール不備による無検査状態の禁止）。 |
-| Formal | 形式モデルの欠落 | `FORMAL-MODEL-NOT-FOUND` | `{VERIFY_FORMAL}` を宣言しているのに、対応する `formal/*.py` モデルが存在せず `BACKS` でも紐付いていない。 |
-| Formal | 監査契約の欠落 | `FORMAL-MODEL-NO-CONTRACT` | モデルが `build_model()` / `properties()` を公開しておらず、状態空間を機械的に検査できない。 |
-| Formal | モデル構造の破綻 | `FORMAL-MODEL-UNSOUND` | 初期状態から到達不能な状態が残っている、または全状態の分岐数が 1 以下（単一経路でインターリーブを表現できない）などの構造欠陥を検出する。 |
-| Formal | 検証命題の空虚化 | `FORMAL-PROPERTY-VACUOUS` | 「違反状態」を満たす状態がモデル中に 1 つも無く、命題が構造上必ず真になっているだけで、設計が守っているとは言えない。 |
-| Formal | 性質記述の不備 | `FORMAL-PROPERTY-INVALID` | 原子命題が状態ラベルに一度も出現しない、または `guards=False`（変異検査）でも違反状態に到達できず保護機構の実効性を確認できないなど、記述自体が検査として成立していない。 |
-| Formal | 裏付けモデルの曖昧化 | `FORMAL-BACKING-AMBIGUOUS` | 同じ `formal/` ディレクトリを複数の設計書が根拠にしているのに、どのモデルがどの文書を裏付けるかを `BACKS` で明示していない。 |
-| Evidence | 証跡ファイルの欠落 | `EVID-DECLARED-FILE-MISSING` | `<!-- evidence: ... -->` に書かれたパスがファイルシステム上に実在するかを確認する。 |
-| Evidence | 形式検証証跡の不一致 | `EVID-FORMAL-UNDECLARED` | `{VERIFY_FORMAL}` を宣言しているのに `evidence:` ブロックに `formal:` エントリが無い。 |
-| Evidence | WIT 証跡の不一致 | `EVID-WIT-UNDECLARED` | `{VERIFY_WIT}` を宣言しているのに `evidence:` ブロックに `wit:` エントリが無い。 |
-| Evidence | ベンチマーク証跡の不一致 | `EVID-BENCHMARK-UNDECLARED` | `{VERIFY_BENCHMARK}` を宣言しているのに `evidence:` ブロックに `benchmark:` エントリが無い。 |
-| Evidence | ベンチマーク実装の欠落 | `EVID-BENCHMARK-MISSING` | `{VERIFY_BENCHMARK}` を宣言しているのに、対応する `benchmarks/*.py` が 1 本も存在しない（実測を主張するなら実行可能な計測コードが要る）。 |
-| Evidence | 参照アーティファクトの欠落 | `EVID-DANGLING-ARTIFACT-REF` | 本文中で言及されているファイルパス（モデル・レポート・設計書）が実在するかを確認する。 |
-| Obligation | リスク評価の未実施 | `OBLIG-ASSESSMENT-MISSING` | `risk` を一度も実行しておらず、キャッシュ DB の `risk_assessments` テーブルが空である。WARNING。 |
-| Obligation | 評価エンジン記録の欠落 | `OBLIG-ASSESSMENT-PROVENANCE-UNKNOWN` | `run_metadata` テーブルに `backend` が記録されておらず、評価が文書から独立した判断かを確認できない。 |
-| Obligation | 評価エンジンの自己参照 | `OBLIG-ASSESSMENT-NOT-INDEPENDENT` | 評価が「文書自身のタグから義務を機械的に逆算するだけの backend（禁止リスト登録済み）」で行われており、達成率が定義上 100% になる自己証明状態を検出する。 |
-| Obligation | 評価カバレッジの不足 | `OBLIG-ASSESSMENT-PARTIAL` | 評価済みキーワード数が現在の全キーワード数（LLM 監査が対象とするのと同じ母集団）より少ない（未評価のキーワードが残っている）。WARNING。 |
-| Obligation | リスク評価の陳腐化 | `OBLIG-ASSESSMENT-STALE` | 評価後に文書が変更され、記録されたハッシュと現在の内容が一致しない。WARNING。 |
-| Obligation | 検証タグの欠落 | `OBLIG-VERIFICATION-SKIPPED` | risk_score が閾値以上なのに、対応する `{VERIFY_LLM}` タグが文書に付いていない。 |
-| Obligation | 意味監査結果の欠落 | `OBLIG-JUDGE-MISSING` | `{VERIFY_LLM}` を宣言しているのに、キャッシュ DB の `judge_results` テーブルに LLM 監査（`llm-keyword-review`）の判定結果が存在しない。WARNING。 |
-| Obligation | 意味監査結果の未固定 | `OBLIG-JUDGE-UNANCHORED` | `judge_results` に文書ハッシュが記録されておらず、どの版を監査した結果かを特定できない。WARNING。 |
-| Obligation | 意味監査結果の陳腐化 | `OBLIG-JUDGE-STALE` | LLM 監査実行後に文書が変更され、記録されたハッシュと現在の内容が一致しない。WARNING。 |
-| Obligation | 意味監査対象の漏れ | `OBLIG-JUDGE-SKIPPED` | `{VERIFY_LLM}` を宣言しているのに、判定結果の監査対象一覧（covered_files）に含まれていない。WARNING。 |
-| Obligation | 意味監査の不合格 | `OBLIG-JUDGE-FAILED` | この文書が引用するキーワードについて、記録済みの判定結果が FAIL を報告している。 |
-| Obligation | 文書単位監査結果の欠落 | `OBLIG-DOC-JUDGE-MISSING` | `{VERIFY_LLM}` を宣言している文書があるのに、キャッシュ DB の `document_judge_results` テーブルが空である。サブグラフ監査でのカバレッジとは独立に判定する。WARNING。 |
-| Obligation | 文書単位監査結果の未固定 | `OBLIG-DOC-JUDGE-UNANCHORED` | `document_judge_results` に文書ハッシュが記録されておらず、どの版を監査した結果かを特定できない。WARNING。 |
-| Obligation | 文書単位監査結果の陳腐化 | `OBLIG-DOC-JUDGE-STALE` | `llm-single-review` の文書単位監査後に文書が変更され、記録されたハッシュと現在の内容が一致しない。WARNING。 |
-| Obligation | 文書単位監査対象の漏れ | `OBLIG-DOC-JUDGE-SKIPPED` | `{VERIFY_LLM}` を宣言しているのに、その文書自体が `document_judge_results` に一度も現れていない（サブグラフ経由のカバレッジでは代替できない）。WARNING。 |
-| Obligation | 文書単位監査の不合格 | `OBLIG-DOC-JUDGE-FAILED` | この文書自体について、記録済みの文書単位判定結果が FAIL を報告している。 |
-| Consistency | キーワード定義の重複 | `CONSIST-DUPLICATE-DEFINITION` | 同じ `{Keyword}` が要求仕様テーブルの複数行で定義されている。 |
-| Consistency | シンボル値の不一致 | `CONSIST-SYMBOL-DRIFT` | 同一シンボル（例: `FB_CONF_*`）がリポジトリ内の複数箇所で異なる値を持つ（設定不要。表記ゆれは正規化して比較）。 |
-| Consistency | 連動修正の未伝播 | `CONSIST-COCHANGE-STALE` | キーワード定義側は変更されたが、参照側の記述が一貫性ベースライン（キャッシュ DB 記録値）から更新されていない。 |
-| Consistency | 旧値の残存 | `CONSIST-STALE-VALUE` | 設定済みの禁止パターン（移行済みの旧値）が文書中に引き続き残っている。 |
+| Format | Missing link target | `FMT-BROKEN-LINK` | The linked file exists. |
+| Format | Missing heading anchor | `FMT-BROKEN-ANCHOR` | The target heading exists in the linked document. |
+| Format | Invalid file-link style | `FMT-FILE-LINK-FORMAT` | The label is a basename; targets are project-root-relative; raw paths, absolute paths, and `../` links are absent. |
+| Format | Static typo | `FMT-LEVENSHTEIN-TYPO` | Similarity checks find no likely typo in defined keywords or headings. |
+| Format | Invalid Mermaid diagram | `FMT-INVALID-MERMAID` | `mermaidx` parses and renders the diagram. |
+| Format | Missing Mermaid validator | `FMT-MERMAID-VALIDATOR-UNAVAILABLE` | The check fails if the validator cannot be imported. |
+| Formal | Missing model | `FORMAL-MODEL-NOT-FOUND` | A `{VERIFY_FORMAL}` document has a linked model under `formal/`. |
+| Formal | Missing model contract | `FORMAL-MODEL-NO-CONTRACT` | The model exposes `build_model()` and `properties()`. |
+| Formal | Unsound model structure | `FORMAL-MODEL-UNSOUND` | All modeled states are reachable and the graph can represent branching. |
+| Formal | Vacuous property | `FORMAL-PROPERTY-VACUOUS` | Each property has a modeled violation state. |
+| Formal | Invalid property | `FORMAL-PROPERTY-INVALID` | Propositions occur in labels and mutation paths can reach violations. |
+| Formal | Ambiguous backing model | `FORMAL-BACKING-AMBIGUOUS` | Shared models identify the documents they support with `BACKS`. |
+| Evidence | Missing declared artifact | `EVID-DECLARED-FILE-MISSING` | Every path in an `evidence:` block exists. |
+| Evidence | Missing formal evidence | `EVID-FORMAL-UNDECLARED` | `{VERIFY_FORMAL}` documents declare a `formal:` artifact. |
+| Evidence | Missing WIT evidence | `EVID-WIT-UNDECLARED` | `{VERIFY_WIT}` documents declare a `wit:` artifact. |
+| Evidence | Missing benchmark evidence | `EVID-BENCHMARK-UNDECLARED` | `{VERIFY_BENCHMARK}` documents declare a `benchmark:` artifact. |
+| Evidence | Missing benchmark implementation | `EVID-BENCHMARK-MISSING` | A `{VERIFY_BENCHMARK}` document has a matching `benchmarks/*.py` file. |
+| Evidence | Dangling artifact reference | `EVID-DANGLING-ARTIFACT-REF` | Referenced models, reports, and specifications exist. |
+| Obligation | Missing risk assessment | `OBLIG-ASSESSMENT-MISSING` | Risk assessment data exists in the cache database. This is a warning. |
+| Obligation | Missing assessment provenance | `OBLIG-ASSESSMENT-PROVENANCE-UNKNOWN` | `run_metadata` records the assessment backend. |
+| Obligation | Non-independent assessment | `OBLIG-ASSESSMENT-NOT-INDEPENDENT` | The assessment backend is not a prohibited self-referential checker. |
+| Obligation | Partial assessment | `OBLIG-ASSESSMENT-PARTIAL` | All current keywords have risk-assessment results. This is a warning. |
+| Obligation | Stale risk assessment | `OBLIG-ASSESSMENT-STALE` | The assessed document hashes match current files. This is a warning. |
+| Obligation | Missing verification tag | `OBLIG-VERIFICATION-SKIPPED` | High-risk keywords have their required `{VERIFY_LLM}` tag. |
+| Obligation | Missing or stale keyword audit | `OBLIG-JUDGE-MISSING`, `OBLIG-JUDGE-UNANCHORED`, `OBLIG-JUDGE-STALE`, `OBLIG-JUDGE-SKIPPED` | Stored audit results cover current document hashes and required targets. These are warnings. |
+| Obligation | Failed keyword audit | `OBLIG-JUDGE-FAILED` | Stored results contain no failing verdict for referenced keywords. |
+| Obligation | Missing or stale document audit | `OBLIG-DOC-JUDGE-MISSING`, `OBLIG-DOC-JUDGE-UNANCHORED`, `OBLIG-DOC-JUDGE-STALE`, `OBLIG-DOC-JUDGE-SKIPPED` | Document audits cover current hashes and required documents. These are warnings. |
+| Obligation | Failed document audit | `OBLIG-DOC-JUDGE-FAILED` | The document's stored audit has no failing verdict. |
+| Consistency | Duplicate keyword definition | `CONSIST-DUPLICATE-DEFINITION` | Each keyword has a single definition row. |
+| Consistency | Symbol value drift | `CONSIST-SYMBOL-DRIFT` | Repeated symbols have the same normalized value. |
+| Consistency | Stale dependent document | `CONSIST-COCHANGE-STALE` | Changes to definitions are propagated to references. |
+| Consistency | Stale configured value | `CONSIST-STALE-VALUE` | Configured obsolete values are absent from documents. |
 
-LLM によるリスク評価・意味監査の未実施、未固定、陳腐化、対象漏れは WARNING とし、LLM 判定を実行していないだけで `check-doc` を失敗させない。記録済みの `FAIL` は ERROR のまま扱う。高リスク判定に対する `{VERIFY_LLM}` タグ欠落など、LLM 判定の有無とは別の構造違反も ERROR とする。
+Missing, unanchored, stale, or skipped LLM work is reported as a warning. A recorded `FAIL` remains an error. Structural violations, such as a missing `{VERIFY_LLM}` tag for a high-risk keyword, remain errors regardless of whether an LLM audit ran.
 
-`EVID-UNBACKED-CLAIM` / `EVID-UNSOURCED-MEASUREMENT` は本表から削除した。実装が
-存在せず README にのみ記載されていた名称であり、コード上の後継である「検証済み」
-等の主張チェックは LLM 監査（`llm-single-review` / `llm-keyword-review`）のプロンプト内だけで行われる —— アルゴリズムでは
-正否を確認できないため、Anti-Sabotage の確認項目としては扱わない。
+`EVID-UNBACKED-CLAIM` and `EVID-UNSOURCED-MEASUREMENT` were removed because they had no implementation. Semantic checks for claims such as “verified” are part of the `llm-single-review` and `llm-keyword-review` prompts; they are not mechanical anti-sabotage checks.
 
-形式検証モデルが満たすべき契約は **[docs/formal_model_contract.md](docs/formal_model_contract.md)** を参照。
+See the [formal model contract](docs/formal_model_contract.md) for requirements that formal models must satisfy.
 
-### 修正漏れの検知
+### Detect Stale Propagation
 
-`check-doc` は一貫性ベースライン（キャッシュ DB 記録値）を基準に「伝播しなかった編集」を検出します。
+`check-doc` compares documents with the consistency baseline in the cache database and reports edits that were not propagated.
 
 ```bash
-spec-integrator check-doc   # 検査実行 → 伝播漏れが列挙される
-spec-integrator build       # 全て伝播・修正したらドキュメントDBとインデックスを更新
+spec-integrator check-doc   # Run checks and list stale dependent documents
+spec-integrator build       # After resolving findings, refresh the document database and index
 ```
 
-co-change の依存関係は `{Keyword}` の既存トレーサビリティから自動導出されるため、宣言の手書きは不要です。
+Dependencies are derived from existing `{Keyword}` traceability; no separate co-change declarations are needed.
 
-- **リスク評価・検証義務導出 (`risk` コマンド)**:
-  - 各要求／設計キーワードの複雑度・設計リスクをスコアリングし、リスクが閾値以上のキーワードに `{VERIFY_LLM}` 義務を課す（Obligation Gate が読む）。結果はすべて SQLite DB に永続化。
-- **用語表記揺れ検査 (`llm-word` コマンド)**:
-  - TF-IDF による抽出キーワードとエンベディング類似度・LLM による文脈判定を組み合わせ、用語表記揺れやタイポを高精度に検出。
-- **System One チェックシート監査 (`llm-single-review`, `llm-keyword-review` コマンド)**:
-  - セクションまたはキーワード定義・参照ペアを証拠単位とし、選択したSystem Oneバックエンドの型付き設問で判定する。Jevは確信度、Clef Flashは選択確率の集中度を返す。いずれも説明文・引用箇所は生成しない。
-- **SQLite データベース・監査キャッシュ (`DocAuditDB`)**:
-  - ドキュメント構造の高速クエリ、ハッシュ値による差分検証キャッシュに加え、`risk`/`llm-single-review`/`llm-keyword-review` の基準ごとの分類・バックエンド固有スコアを記録するローカル生成データ。
-- **CI / GitHub Actions ファースト**:
-  - 検査器リビジョン刻印（Rule R9 準拠）、サマリー表、違反詳細、トレーサビリティマトリクス、リスク評価・LLM 判定結果を集約した単一 Markdown レポートを出力。
+- **Risk assessment and verification obligations (`risk`):** Scores design risk for requirement and design keywords. Keywords above the configured threshold require `{VERIFY_LLM}`. Results are stored in SQLite.
+- **Terminology consistency (`llm-word`):** Combines TF-IDF terms, embedding similarity, and contextual judgments to find terminology drift and likely typos.
+- **System One checklist audits (`llm-single-review`, `llm-keyword-review`):** Review document sections or keyword definition/reference pairs with typed questions and evidence. Jev returns confidence; Clef Flash returns probability concentration. Neither produces explanatory text or citations.
+- **SQLite audit cache (`DocAuditDB`):** Stores document structure, hash-based incremental checks, risk results, classifications, and backend-specific scores.
+- **CI and GitHub Actions:** Produces a single Markdown report with rule revisions, summary tables, findings, traceability, risk assessments, and recorded LLM results.
 
 ---
 
-## クイックスタート
+## Quick Start
 
-### 1. インストール (uv)
+### 1. Install with uv
+
 ```bash
-cd tools/spec-integrator  # またはプロジェクトルート
+cd tools/spec-integrator  # Or the project root
 uv sync --system-certs
 ```
 
-### 2. 設定ファイルの初期化
+### 2. Initialize a configuration file
+
 ```bash
 spec-integrator init
 ```
-カレントディレクトリに `spec-integrator.yaml` の雛形が生成されます。
+This creates a `spec-integrator.yaml` template in the current directory.
 
-### 3. ドキュメントDB構築・用語インデックス作成 (`build`)
+### 3. Build the document database and terminology index (`build`)
+
 ```bash
 spec-integrator build --config spec-integrator.yaml
 ```
 
-### 4. ドキュメント自動フォーマット & 静的品質ゲート検証 (`format-doc`, `check-doc`)
+### 4. Format documents and run static quality gates (`format-doc`, `check-doc`)
+
 ```bash
-# Markdown ドキュメントのフォーマット整形
+# Format Markdown documents
 spec-integrator format-doc --config spec-integrator.yaml
 
-# 全 8 ゲートの静的クリーン検証 (CI 標準)
+# Run all eight static gates with a clean state (CI-style)
 spec-integrator check-doc --config spec-integrator.yaml --report report.md --clean
 ```
-標準実行では GiNZA による日本語文章チェックも行い、長文・複雑な節接続を警告として報告します。文章チェックの警告だけでは終了コードに影響しません。
-全 8 ゲートがパスすれば終了コード `0`、エラーがあれば `1` となり、`report.md` に詳細レポートが出力されます。
+The standard run also checks Japanese prose with GiNZA and warns about long sentences or complex clause chains. Readability warnings are non-failing review candidates; they do not change the exit code. On success, `check-doc` exits with `0`; errors produce exit code `1` and details in `report.md`.
 
-GiNZAの警告は文章を自動修正する指示ではなく、内容を保った分割が可能か人が確認する候補です。見出しで区切ったセクションごとに解析し、コードブロックと見出し自体は解析せず、表の文章セルは解析します。
-しきい値はプロジェクトルートの `spec-integrator.yaml` にある `prose_readability` の3項目で調整します。警告専用であり、しきい値を変えてもエラーゲートにはなりません。
+GiNZA does not rewrite prose. It analyzes sections split by headings, skips code blocks and headings, and checks prose in table cells. Adjust the three `prose_readability` settings in the project-root `spec-integrator.yaml` to change warning thresholds. These settings only affect warnings.
 
-### 5. ソースコード自動フォーマット & 静的規約・サボり検査 (`format-src`, `check-src`)
+### 5. Format and check source code (`format-src`, `check-src`)
+
 ```bash
-# ソースコード自動整形 (Python: Ruff / C++: clang-format)
+# Format Python with Ruff and C++ with clang-format
 spec-integrator format-src --group all
 
-# ソースコード規約・サボり検証 (TODO放置、空関数、typing.Any完全禁止、変異検査等)
+# Check conventions and skipped work, including TODOs, empty functions, Any, and mutations
 spec-integrator check-src --group all
 ```
 
-### 6. DocGraph の可視化 (`graph`)
+### 6. Visualize the DocGraph (`graph`)
+
 ```bash
-# Mermaid 形式で標準出力
+# Print Mermaid to stdout
 spec-integrator graph
 
-# JSON 形式でファイル出力
+# Write JSON output
 spec-integrator graph -f json -o graph.json
 ```
 
-### 7. リスク評価と検証義務の導出 (`risk`)
+### 7. Assess risk and derive verification obligations (`risk`)
+
 ```bash
-# --backend を省略すると spec-integrator.yaml の llm_judge.default_backend が使われる
-# 結果はキャッシュ DB に記録され、check-doc レポートの Risk Assessment Detail 節に反映される
+# Without --backend, use llm_judge.default_backend from spec-integrator.yaml
+# Results are cached and included in the Risk Assessment Detail section of check-doc reports
 spec-integrator risk --config spec-integrator.yaml
-# Run through Jev only when explicitly requested
+
+# Use Jev only when explicitly requested
 spec-integrator risk --backend jev
 ```
-既定の判定にはローカル Ollama の Clef Flash (`clef-flash`) を使う。`--backend jev` を指定すると OpenRouter 経由の Jev (`typesafe/jev-1.13`) を使う。
+The default backend is local Ollama with Clef Flash (`clef-flash`). `--backend jev` uses Jev (`typesafe/jev-1.13`) through OpenRouter.
 
-Clef Flash には Ollama 0.35.1 以降が必要である。初回は `ollama pull clef-flash` を実行する。モデルは64Kコンテキストに対応し、`context_window_tokens` は65,536 tokenに設定する。System Oneのリクエスト本文は64 KiBまでである。
+Clef Flash requires Ollama 0.35.1 or later. Pull it with `ollama pull clef-flash`. Set `context_window_tokens` to 65,536. System One request bodies are limited to 64 KiB.
 
-モデルのコンテキスト長を変更する場合は、Ollama の Modelfile で `PARAMETER num_ctx` を設定したモデルを作る。バックエンド設定の `model` と `context_window_tokens` を新しいモデルに合わせる。
+To change the model context length, create an Ollama model with `PARAMETER num_ctx` in a Modelfile, then set `model` and `context_window_tokens` to match it.
 
-リスク評価は定義・参照をそれぞれ最大4セクションまで標本化する。各セクションは `500文字 × (context_window_tokens / 8,192)` または `llm_judge.section_char_budget` の小さい方に制限する。標準設定では各最大4,000文字となる。本文上限に達する場合はさらに短縮する。省略・短縮した範囲は評価要約に記録する。
+Risk assessment samples up to four definition and four reference sections. Each section is limited to the smaller of `500 characters × (context_window_tokens / 8,192)` and `llm_judge.section_char_budget`. The default maximum is 4,000 characters per section. Content may be shortened further to fit the request; omitted ranges are recorded in the assessment summary.
 
-埋め込み生成には引き続きローカル Ollama の `qwen3-embedding` を使う。OpenRouter には Jev を使う場合だけ `OPENROUTER_API_KEY` を設定する。Ollama の接続先は `llm_judge.backends.clef-flash.endpoint` および `embeddings.endpoint` で指定する。LLM監査はバックエンドに関係なく、ユーザーから明示的な指示があった場合に限り実行する。
+Embeddings use local Ollama with `qwen3-embedding`. Set `OPENROUTER_API_KEY` only when using Jev. Configure Ollama endpoints with `llm_judge.backends.clef-flash.endpoint` and `embeddings.endpoint`. Run an LLM audit only when explicitly requested by the user.
 
-### 8. 用語表記揺れチェック (`llm-word`)
+### 8. Check terminology consistency (`llm-word`)
+
 ```bash
-# 用語の LLM 文脈判定をスキップ (未作成の埋め込みがあればローカル Ollama を呼び出す)
+# Skip LLM contextual judgments; missing embeddings may still invoke local Ollama
 spec-integrator llm-word --quick
 
-# エンベディング + LLM 文脈判定込み
+# Include embeddings and LLM contextual judgments
 spec-integrator llm-word
 ```
 
-### 9. LLM as a Judge セマンティック監査 (`llm-single-review`, `llm-keyword-review`)
+### 9. Run semantic audits (`llm-single-review`, `llm-keyword-review`)
+
 ```bash
-# 単一ドキュメント／セクション監査
+# Audit one document or section
 spec-integrator llm-single-review --file docs/components/tier1_core/os_scheduler.md
-# Same single-document review through local Clef Flash
+
+# Use local Clef Flash for one document
 spec-integrator llm-single-review --file docs/components/tier1_core/os_scheduler.md --backend clef-flash
 
-# 高リスクキーワードの定義・参照ペア監査
+# Audit a high-risk keyword's definition/reference pair
 spec-integrator llm-keyword-review --keyword SCHED_DISPATCH_TIMEOUT
 
-# 確信度70%以上の違反候補をDBから検索（API呼び出しなし）
+# Search stored findings without an API call
 spec-integrator llm-findings --min-confidence 0.70
-# Clef Flash の保存済み判定だけを検索
 spec-integrator llm-findings --backend clef-flash --min-confidence 0.70
 ```
-文書レビューのチェックシートは各基準を個別に分類し、バックエンド固有のスコアを記録する。Jev はAPIの確信度を返す。Clef Flash は選択確率の集中度を返し、正答確率を表さない。`llm-findings` は既定で現在の判定バックエンドの記録だけを検索する。別のバックエンドを検索する場合は `--backend` を指定する。結果は「明確な違反」「違反の可能性」「既知の未解決事項」「文脈不足」「改善提案」「問題なし」に分かれる。明確な違反は設定済み重大度で FAIL/WARN とし、可能性や文脈不足は WARN、未解決事項と改善提案は INFO として残す。
+Document-review checklists classify each criterion and store backend-specific scores. Jev returns API confidence. Clef Flash returns probability concentration, which is not the probability that a verdict is correct. By default, `llm-findings` searches the current backend; use `--backend` to query another backend. Findings are classified as clear violations, possible violations, known unresolved issues, insufficient context, recommendations, or no issue. Clear violations produce `FAIL` or `WARN` according to configured severity. Possible violations and insufficient context produce `WARN`; unresolved issues and recommendations produce `INFO`.
 
-キーワード監査では、文書内の `definition` 宣言を持つセクションと `traceability` 参照セクションを1組ずつ `DEFINITION` / `REFERENCE` と明示して選択中の判定バックエンドに渡す。WARN/INFO の根拠確認には結果に記録されたセクションを読み直す。
+Keyword audits send each definition section and each traceability reference section as a separate `DEFINITION` or `REFERENCE` item to the selected backend. Re-read the cited sections when evaluating `WARN` or `INFO` findings.
 
-監査基準の ID・対象モード・重大度はルートの `spec-integrator.yaml` を正本とし、個別の判定指示は `prompts/checks/` に置く。リスク評価・用語判定・文書レビューはいずれも証拠と型付き設問を持つチェックシートとして送信する。`--dry-run` は送信するチェックシートを表示する。
+The root `spec-integrator.yaml` is authoritative for audit IDs, target modes, and severity. Individual audit instructions live in `prompts/checks/`. Risk, terminology, and document reviews are sent as checklists with evidence and typed questions. `--dry-run` prints the checklist that would be sent.
 
-判定単位の分類とスコアは SQLite の `judge_evaluations` テーブルへ保存する。`llm-findings --min-confidence 0.70` は既定バックエンドの `confirmed_violation` と `possible_violation` を検索する。`--backend` でスコアの種類を揃え、`--all-outcomes` で文脈不足・既知の未解決事項・問題なしも含められる。`--run-type` で監査コマンドを絞り込める。
+Per-criterion classifications and scores are stored in the SQLite `judge_evaluations` table. `llm-findings --min-confidence 0.70` searches `confirmed_violation` and `possible_violation` findings for the default backend. Use `--backend` to select a score type, `--all-outcomes` to include other outcomes, and `--run-type` to filter by audit command.
 
 ---
 
-## 設定ファイル例 (`spec-integrator.yaml`)
+## Configuration Example (`spec-integrator.yaml`)
 
 ```yaml
 version: "1.0"
@@ -229,39 +209,39 @@ project:
 tiers:
   - tier: 0
     name: "Requirements"
-    path_pattern: 'requires/.*\.md'
-    description: "システム最上位要求仕様書（Why）"
+    path_pattern: 'requires/.*\\.md'
+    description: "Top-level system requirements (Why)"
 
   - tier: 1
     name: "Primary Components"
-    path_pattern: 'components/tier1_.*\.md'
-    description: "粗粒度主要システムコンポーネント（What）"
+    path_pattern: 'components/tier1_.*\\.md'
+    description: "Coarse-grained primary system components (What)"
 
   - tier: 2
     name: "Decomposed Subcomponents"
-    path_pattern: 'components/tier2_.*\.md'
-    description: "分解されたサブコンポーネント群（How - Subsystem）"
+    path_pattern: 'components/tier2_.*\\.md'
+    description: "Decomposed subsystems (How - Subsystem)"
 
   - tier: 3
     name: "Leaf & Platform Components"
-    path_pattern: 'components/tier3_.*\.md'
-    description: "詳細リーフおよびプラットフォームコンポーネント（How - Leaf）"
+    path_pattern: 'components/tier3_.*\\.md'
+    description: "Detailed leaf and platform components (How - Leaf)"
 
   - tier: "meta"
     name: "Architecture & Plans"
-    path_pattern: '(architecture|plans)/.*\.md'
-    description: "全Tier横断メタ設計・開発計画"
+    path_pattern: '(architecture|plans)/.*\\.md'
+    description: "Cross-tier architecture and development plans"
 
 keywords:
   meta:
     pattern: "^META_[A-Za-z0-9_]+$"
-    defined_in: 'architecture/document_structure\.md'
+    defined_in: 'architecture/document_structure\\.md'
   global:
     pattern: "^GLOBAL_[A-Za-z0-9_]+$"
-    defined_in: 'architecture/document_structure\.md'
+    defined_in: 'architecture/document_structure\\.md'
   local:
     pattern: "^[A-Za-z0-9_]+$"
-    defined_in: 'requires/.*\.md'
+    defined_in: 'requires/.*\\.md'
 
 formal_verification:
   model_dir_name: "formal"
@@ -294,14 +274,16 @@ terminology:
   embedding_model: "qwen3-embedding"
 ```
 
-`llm_judge.error_score_threshold` は、基準の重大度が`ERROR`の判定を失敗として扱う最低スコアである。判定結果が`confirmed_violation`でもバックエンド固有スコアが閾値未満なら`WARNING`に下げ、確信度または確率集中度の低いLLM判定だけで品質ゲートを失敗させない。値は`0.0`から`1.0`の範囲で指定する。
+`llm_judge.error_score_threshold` is the minimum backend score for a criterion configured with `ERROR` severity to fail the gate. A `confirmed_violation` below this threshold is downgraded to `WARNING`, so a low-confidence or low-concentration judgment alone does not fail the quality gate. The value must be between `0.0` and `1.0`.
 
 ---
 
-## 詳細仕様書
-詳細なアーキテクチャ設計、DocGraph 空間モデル、データベーススキーマ、API・CLI リファレンスは [docs/specification.md](docs/specification.md) を参照してください。
+## Detailed Specification
+
+See [docs/specification.md](docs/specification.md) for the architecture, DocGraph model, database schema, and API/CLI reference.
 
 ---
 
-## ライセンス
-Simplified BSD License - 詳細は [LICENSE](LICENSE) を参照してください。
+## License
+
+Simplified BSD License — see [LICENSE](LICENSE).
