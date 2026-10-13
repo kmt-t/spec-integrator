@@ -335,6 +335,7 @@ class SourceCheckRule:
     builtin_container_exclude_paths: list[str] = field(default_factory=list)
     rtti_exclude_paths: list[str] = field(default_factory=list)
     in_operator_exclude_paths: list[str] = field(default_factory=list)
+    object_type_exclude_paths: list[str] = field(default_factory=list)
     raise_exclude_paths: list[str] = field(default_factory=list)
     test_backdoor_exclude_paths: list[str] = field(default_factory=list)
     forbidden_product_symbols: list[str] = field(default_factory=list)

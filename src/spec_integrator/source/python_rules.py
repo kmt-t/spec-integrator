@@ -38,6 +38,7 @@ class PythonRuleAnalyzer:
         forbidden_product_symbols: list[str] | None = None,
         non_none_union_exclude_paths: list[str] | None = None,
         string_member_exclude_paths: list[str] | None = None,
+        object_type_exclude_paths: list[str] | None = None,
     ) -> list[SourceIssue]:
         """Checks Python source from one parsed AST, with comments read by tokenize."""
         try:
@@ -60,7 +61,13 @@ class PythonRuleAnalyzer:
         if not rules or "forbid_typing_any" in rules:
             issues.extend(self._check_python_typing_any(tree, rel_path, group_name))
         if "forbid_object_type" in rules:
-            issues.extend(self._check_python_object_type(tree, rel_path, group_name))
+            normalized_path = rel_path.replace("\\", "/").lstrip("./")
+            excluded = any(
+                fnmatch.fnmatch(normalized_path, pattern.replace("\\", "/").lstrip("./"))
+                for pattern in (object_type_exclude_paths or [])
+            )
+            if not excluded:
+                issues.extend(self._check_python_object_type(tree, rel_path, group_name))
         if "forbid_assert_side_effects" in rules:
             issues.extend(self._check_assert_side_effects(tree, rel_path, group_name))
         if "forbid_non_none_union" in rules:
