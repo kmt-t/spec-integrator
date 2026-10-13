@@ -4,20 +4,15 @@ from __future__ import annotations
 
 import sys
 
+from spec_integrator.application.utils import _log, log_banner
 from spec_integrator.config import Config
 from spec_integrator.source import SourceFacade
-
-
-def _log(message: str) -> None:
-    print(message, flush=True)
 
 
 def cmd_format_src(args) -> None:
     """Format source files with the configured source formatters."""
     config = Config.load(args.config)
-    _log("=" * 80)
-    _log(" Spec-Integrator: Source Formatter")
-    _log("=" * 80)
+    log_banner("Spec-Integrator: Source Formatter")
 
     total_formatted = SourceFacade(config).format(
         group=getattr(args, "group", None),
@@ -30,9 +25,7 @@ def cmd_format_src(args) -> None:
 def cmd_check_src(args) -> None:
     """Verify source files against language and automated gate rules."""
     config = Config.load(args.config)
-    _log("=" * 80)
-    _log(" Spec-Integrator: Source Verification (Automated Gate & Language Rules)")
-    _log("=" * 80)
+    log_banner("Spec-Integrator: Source Verification (Automated Gate & Language Rules)")
 
     has_errors = False
     total_issues = 0

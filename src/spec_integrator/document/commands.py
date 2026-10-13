@@ -5,20 +5,15 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from spec_integrator.application.utils import _log, log_banner
 from spec_integrator.config import Config
 from spec_integrator.document import DocumentFacade
-
-
-def _log(message: str) -> None:
-    print(message, flush=True)
 
 
 def cmd_build(args) -> None:
     """Build the document database and terminology index."""
     config = Config.load(args.config)
-    _log("=" * 80)
-    _log(f" Spec-Integrator: Building Document Database [{config.project.name}]")
-    _log("=" * 80)
+    log_banner(f"Spec-Integrator: Building Document Database [{config.project.name}]")
     document = DocumentFacade(config)
     workspace = document.load_workspace(
         clean=getattr(args, "clean", False),
@@ -39,9 +34,7 @@ def cmd_build(args) -> None:
 def cmd_format_doc(args) -> None:
     """Format Markdown documents."""
     config = Config.load(args.config)
-    _log("=" * 80)
-    _log(" Spec-Integrator: Document Formatter (Markdown)")
-    _log("=" * 80)
+    log_banner("Spec-Integrator: Document Formatter (Markdown)")
     formatted_count, examined_count = DocumentFacade(config).format(
         file_paths=getattr(args, "files", None)
     )
@@ -52,9 +45,7 @@ def cmd_format_doc(args) -> None:
 def cmd_check_doc(args) -> None:
     """Run all document quality gates, including prose readability."""
     config = Config.load(args.config)
-    _log("=" * 80)
-    _log(f" Spec-Integrator: Document Verification Pipeline [{config.project.name}]")
-    _log("=" * 80)
+    log_banner(f"Spec-Integrator: Document Verification Pipeline [{config.project.name}]")
     document = DocumentFacade(config)
     workspace = document.load_workspace(
         clean=args.clean,

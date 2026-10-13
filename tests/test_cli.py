@@ -2,16 +2,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from spec_integrator.application import commands
-from spec_integrator.cli import (
-    cmd_check_doc,
-    cmd_check_src,
-    cmd_format_doc,
-    cmd_format_src,
-    cmd_init,
-    cmd_llm_word,
-)
+from spec_integrator.application.commands.core import cmd_init
+from spec_integrator.application.commands.llm import word as word_command
 from spec_integrator.db import DocAuditDB
+from spec_integrator.document.commands import cmd_build, cmd_check_doc, cmd_format_doc
+from spec_integrator.source.commands import cmd_check_src, cmd_format_src
+
+cmd_llm_word = word_command.cmd_llm_word
 
 
 class ArgsCheckDoc:
@@ -145,8 +142,6 @@ def test_check_doc_can_run_without_the_obligation_gate(tmp_path, monkeypatch):
 
 
 def test_cli_build(tmp_path, monkeypatch):
-    from spec_integrator.cli import cmd_build
-
     monkeypatch.chdir(tmp_path)
 
     class ArgsInit:
@@ -235,7 +230,8 @@ def test_cli_check_src(monkeypatch, tmp_path):
 
 
 def test_cli_list_checks(tmp_path, monkeypatch):
-    from spec_integrator.cli import cmd_llm_keyword_review, cmd_llm_single_review
+    from spec_integrator.application.commands.llm.keyword_review import cmd_llm_keyword_review
+    from spec_integrator.application.commands.llm.single_review import cmd_llm_single_review
 
     monkeypatch.chdir(tmp_path)
 
@@ -259,14 +255,10 @@ def test_cli_list_checks(tmp_path, monkeypatch):
 
 
 def test_cli_subparsers_args():
-    import argparse
+    import spec_integrator.cli as cli
 
-    from spec_integrator.cli import _SUBPARSER_BUILDERS
-
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(dest="subcommand")
-    for builder in _SUBPARSER_BUILDERS:
-        builder(subparsers)
+    parser = cli.build_parser()
+    assert not hasattr(cli, "_SUBPARSER_BUILDERS")
 
     # Test that each subcommand parses without error
     args_build = parser.parse_args(["build", "--clean", "doc1.md", "doc2.md"])
@@ -347,19 +339,19 @@ def test_llm_word_report_uses_backend_override_for_stored_variances(monkeypatch,
             backend=backend,
         )
 
-    monkeypatch.setattr(commands.Config, "load", lambda _path: config)
+    monkeypatch.setattr(word_command.Config, "load", lambda _path: config)
     monkeypatch.setattr(
-        commands,
+        word_command,
         "_load_and_parse_all",
         lambda _config: ([], None, db, Path.cwd()),
     )
-    monkeypatch.setattr(commands.TermIndexer, "index_embeddings", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(word_command.TermIndexer, "index_embeddings", lambda *_args, **_kwargs: 0)
     monkeypatch.setattr(
-        commands.TermIndexer,
+        word_command.TermIndexer,
         "compute_and_save_similarities",
         lambda *_args, **_kwargs: 0,
     )
-    monkeypatch.setattr(commands.LevenshteinTypoCheck, "check", lambda *_args: [])
+    monkeypatch.setattr(word_command.LevenshteinTypoCheck, "check", lambda *_args: [])
     args = SimpleNamespace(
         config="spec-integrator.yaml",
         backend="clef-flash",
