@@ -60,7 +60,7 @@ text = "assert queue.enqueue(task)"
     assert issues == []
 
 
-def test_pysim_assert_check_uses_product_tier_scope(tmp_path: Path) -> None:
+def test_pysim_assert_check_covers_product_and_qa(tmp_path: Path) -> None:
     product = tmp_path / "sim" / "core" / "kernel.py"
     qa = tmp_path / "sim" / "qa" / "test_kernel.py"
     for file_path in (product, qa):
@@ -79,9 +79,10 @@ def test_pysim_assert_check_uses_product_tier_scope(tmp_path: Path) -> None:
     analyzer = SourceAnalyzer(config)
     result = analyzer.verify_group("python_pysim", [product, qa])
     assert [(issue.file_path, issue.rule) for issue in result.issues] == [
-        ("sim/core/kernel.py", "PY-ASSERT-SIDE-EFFECT")
+        ("sim/core/kernel.py", "PY-ASSERT-SIDE-EFFECT"),
+        ("sim/qa/test_kernel.py", "PY-ASSERT-SIDE-EFFECT"),
     ]
-    assert analyzer.verify_group("python_pysim", [qa]).issues == []
+    assert len(analyzer.verify_group("python_pysim", [qa]).issues) == 1
 
 
 def test_python_static_checks_ignore_strings_and_docstrings(tmp_path: Path) -> None:
@@ -406,3 +407,12 @@ def test_pysim_import_check_uses_configured_file_tiers(tmp_path: Path) -> None:
     issues = SourceAnalyzer(config)._check_pysim_imports("python_pysim")
 
     assert [(issue.rule, issue.line) for issue in issues] == [("PYSIM-IMPORT-DIRECTION", 1)]
+
+
+def test_static_checks_distinguish_callable_annotations_and_type_subscripts(tmp_path: Path) -> None:
+    issues = _check_python(
+        tmp_path,
+        "from collections.abc import Callable\ncallback: Callable[[int, str], None]\nkind: type[int] = int\n",
+        ["forbid_builtin_containers", "forbid_rtti"],
+    )
+    assert issues == []

@@ -83,21 +83,14 @@ class SourceAnalyzer:
                         result.issues.extend(self._execute_python_file(f, group_name))
             elif cid == "run_tests":
                 # Pysim source verification runs the unit-test suite only.
-                # Scenarios and benchmarks are review fixtures, not source-gate inputs.
+                # Scenarios and benchmarks are checked statically but use separate runners.
                 result.issues.extend(self._run_pysim_tests(group_name))
             elif cid == "pysim_imports":
                 result.issues.extend(self._check_pysim_imports(group_name))
             elif cid == "pysim_assert_side_effects":
                 root = self.root_dir / self.config.pysim_imports.root
-                product_files = {
-                    path.resolve()
-                    for tier in self.config.pysim_imports.tiers
-                    for pattern in tier.paths
-                    for path in root.glob(pattern)
-                    if path.is_file()
-                }
                 for file_path in files:
-                    if file_path.resolve() not in product_files:
+                    if not file_path.is_relative_to(root) or file_path.suffix != ".py":
                         continue
                     result.issues.extend(
                         self._check_anti_sabotage(
