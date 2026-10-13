@@ -60,6 +60,25 @@ text = "assert queue.enqueue(task)"
     assert issues == []
 
 
+def test_assert_side_effects_cover_executed_python_strings(tmp_path: Path) -> None:
+    issues = _check_python(
+        tmp_path,
+        '''import subprocess, sys
+script = """
+assert cache.insert(trace)
+assert cache.insert(JITTrace(head_pc=0x100))
+"""
+example = "assert cache.insert(documentation)"
+subprocess.run([sys.executable, "-c", script])
+''',
+        ["forbid_assert_side_effects"],
+    )
+    assert [(issue.rule, issue.line) for issue in issues] == [
+        ("PY-ASSERT-SIDE-EFFECT", 3),
+        ("PY-ASSERT-SIDE-EFFECT", 4),
+    ]
+
+
 def test_pysim_assert_check_covers_product_and_qa(tmp_path: Path) -> None:
     product = tmp_path / "sim" / "core" / "kernel.py"
     qa = tmp_path / "sim" / "qa" / "test_kernel.py"

@@ -463,8 +463,55 @@ class SourceAnalyzer:
                 "_PYOBJECT_GET_BUFFER",
             )
         )
+        # Only parse strings passed as executable Python (-c), not documentation.
+        scripts: dict[int, ast.Constant] = {}
+        assignments: dict[str, list[ast.Constant]] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+                if isinstance(node.value.value, str):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            assignments.setdefault(target.id, []).append(node.value)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            if not isinstance(node.func, ast.Attribute) or node.func.attr not in (
+                "run",
+                "Popen",
+                "call",
+                "check_call",
+                "check_output",
+            ):
+                continue
+            command = node.args[0]
+            if not isinstance(command, (ast.List, ast.Tuple)):
+                continue
+            for index, arg in enumerate(command.elts[:-1]):
+                if not isinstance(arg, ast.Constant) or arg.value != "-c":
+                    continue
+                script = command.elts[index + 1]
+                constants = (
+                    assignments.get(script.id, [])
+                    if isinstance(script, ast.Name)
+                    else (
+                        [script]
+                        if isinstance(script, ast.Constant) and isinstance(script.value, str)
+                        else []
+                    )
+                )
+                for constant in constants:
+                    scripts[id(constant)] = constant
+        trees = [tree]
+        for script in scripts.values():
+            assert isinstance(script.value, str)
+            try:
+                embedded = ast.parse(script.value)
+            except SyntaxError:
+                continue
+            ast.increment_lineno(embedded, script.lineno - 1)
+            trees.append(embedded)
         issues: list[SourceIssue] = []
-        for assertion in ast.walk(tree):
+        for assertion in (node for source in trees for node in ast.walk(source)):
             if not isinstance(assertion, ast.Assert):
                 continue
             for node in ast.walk(assertion.test):
