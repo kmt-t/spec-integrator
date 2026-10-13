@@ -66,6 +66,7 @@ class SourceAnalyzer:
                             check_rule.forbidden_product_symbols,
                             check_rule.non_none_union_exclude_paths,
                             check_rule.string_member_exclude_paths,
+                            object_type_exclude_paths=check_rule.object_type_exclude_paths,
                         )
                     )
             elif cid == "cpp_rules":
@@ -113,6 +114,7 @@ class SourceAnalyzer:
         forbidden_product_symbols: list[str] | None = None,
         non_none_union_exclude_paths: list[str] | None = None,
         string_member_exclude_paths: list[str] | None = None,
+        object_type_exclude_paths: list[str] | None = None,
     ) -> list[SourceIssue]:
         issues: list[SourceIssue] = []
         try:
@@ -150,6 +152,7 @@ class SourceAnalyzer:
                     forbidden_product_symbols or [],
                     non_none_union_exclude_paths or [],
                     string_member_exclude_paths or [],
+                    object_type_exclude_paths=object_type_exclude_paths,
                 )
             )
         else:
