@@ -98,7 +98,9 @@ def test_check_doc_warns_when_the_risk_assessment_was_never_run(tmp_path, monkey
     with pytest.raises(SystemExit) as exc_info:
         cmd_check_doc(ArgsCheckDoc())
     assert exc_info.value.code == 0
-    assert "0 Error(s), 1 Warning(s)" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "0 Error(s), 1 Warning(s)" in output
+    assert "OBLIG-ASSESSMENT-MISSING" in output
     report = (tmp_path / "spec_report.md").read_text(encoding="utf-8")
     assert "OBLIG-ASSESSMENT-MISSING" in report
 

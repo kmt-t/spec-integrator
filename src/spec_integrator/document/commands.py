@@ -74,6 +74,13 @@ def cmd_check_doc(args) -> None:
     print("-" * 80)
     print(f" Verification Summary: {len(errors)} Error(s), {len(warnings)} Warning(s)")
     print("-" * 80)
+    if warnings:
+        print("⚠️ QUALITY GATE WARNINGS:")
+        for warning in warnings:
+            print(
+                f"  [{warning.gate}] {warning.file_path}:{warning.line} - "
+                f"{warning.message} ({warning.rule_code})"
+            )
     if errors:
         print("❌ QUALITY GATES FAILED:")
         for error in errors:
