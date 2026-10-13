@@ -13,7 +13,7 @@ from spec_integrator.models import (
     VerificationIssue,
 )
 
-__all__ = ["FormalModelResult", "FormalVerifier", "ModelContractError", "PropertyResult"]
+__all__ = ["FormalGate", "FormalModelResult", "ModelContractError", "PropertyResult"]
 
 PATH_QUANTIFIERS = ("A", "E")
 EVENTUALITY_OPERATORS = ("F", "U")
@@ -100,7 +100,7 @@ def _eventuality_quantifier(formula) -> str | None:
     return None
 
 
-class FormalVerifier:
+class FormalGate:
     def __init__(self, config: Config):
         self.config = config
 

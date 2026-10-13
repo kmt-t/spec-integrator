@@ -4,12 +4,12 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from spec_integrator.anti_sabotage.base import AntiSabotageContext
-from spec_integrator.anti_sabotage.checks.prose_readability import (
+from spec_integrator.checks.readability.prose_readability import (
     ProseReadabilityCheck,
     _extract_prose_blocks,
 )
 from spec_integrator.config import Config, ProseReadabilityConfig
+from spec_integrator.gates.base import GateContext
 from spec_integrator.models import ParsedDocument
 
 
@@ -54,7 +54,7 @@ class RecordingPipeline:
         return FakeDoc((FakeSentence(text, 0, ()),))
 
 
-def _context(content: str) -> AntiSabotageContext:
+def _context(content: str) -> GateContext:
     document = ParsedDocument(
         file_path="components/tier2_runtime/interpreter.md",
         full_path=Path("interpreter.md"),
@@ -63,9 +63,7 @@ def _context(content: str) -> AntiSabotageContext:
         content=content,
         content_hash="test-hash",
     )
-    return AntiSabotageContext(
-        documents=[document], graph=None, docs_root=Path("docs"), config=Config()
-    )
+    return GateContext(documents=[document], graph=None, docs_root=Path("docs"), config=Config())
 
 
 def test_extract_prose_skips_code_comments_and_headings_but_keeps_table_cells():

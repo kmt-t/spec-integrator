@@ -8,10 +8,10 @@ from pathlib import Path
 from spec_integrator.config import Config
 from spec_integrator.models import ParsedDocument, VerificationIssue, WITFileResult
 
-__all__ = ["WITFileResult", "WITVerifier"]
+__all__ = ["WITFileResult", "WITGate"]
 
 
-class WITVerifier:
+class WITGate:
     def __init__(self, config: Config):
         self.config = config
 

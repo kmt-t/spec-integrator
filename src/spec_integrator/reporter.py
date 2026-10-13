@@ -47,10 +47,10 @@ class Reporter:
         lines.append(f"# Spec Verification Report: {self.config.project.name}\n")
         status_badge = "✅ **ALL GATES PASSED**" if is_passed else "❌ **VERIFICATION FAILED**"
         lines.append(f"**Overall Status**: {status_badge}\n")
-        # A verdict is only meaningful if the verifier that produced it is identified.
+        # A verdict is only meaningful if the gate that produced it is identified.
         # Without this, "0 Errors" means "0 Errors under some unspecified checker".
-        verifier = self._verifier_revision()
-        lines.append(f"**Verifier**: `{verifier}`\n")
+        gate = self._gate_revision()
+        lines.append(f"**Gate runner**: `{gate}`\n")
         # 2. Executive Summary Table
         lines.append("## 1. Executive Summary\n")
         lines.append("| Metric | Value |")
@@ -256,7 +256,7 @@ class Reporter:
         return report_content
 
     @staticmethod
-    def _verifier_revision() -> str:
+    def _gate_revision() -> str:
         """Identifies the checker that produced this report, dirty state included."""
         import subprocess
 

@@ -289,7 +289,9 @@ class RiskAssessor(BaseJudge):
                 return state, context_note
             section_char_limit = max(1, section_char_limit - 100)
 
-        raise ValueError("Risk-assessment checksheet cannot be reduced below Clef Flash's request limit.")
+        raise ValueError(
+            "Risk-assessment checksheet cannot be reduced below Clef Flash's request limit."
+        )
 
 
 __all__ = ["KeywordRiskAssessment", "RiskAssessmentReport", "RiskAssessor"]

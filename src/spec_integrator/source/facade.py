@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from spec_integrator.config import Config
-from spec_integrator.source.coordinator import SourceVerifier
+from spec_integrator.source.gate import SourceGate
 from spec_integrator.source.models import SourceIssue, SourceVerificationResult
 from spec_integrator.source.pipeline import SourcePipeline
 
@@ -29,4 +29,4 @@ class SourceFacade:
         return self.pipeline.format(group=group, file_paths=file_paths)
 
 
-__all__ = ["SourceFacade", "SourceIssue", "SourceVerificationResult", "SourceVerifier"]
+__all__ = ["SourceFacade", "SourceGate", "SourceIssue", "SourceVerificationResult"]

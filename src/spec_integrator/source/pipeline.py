@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 from spec_integrator.config import Config
-from spec_integrator.source.coordinator import SourceVerifier
+from spec_integrator.source.gate import SourceGate
 from spec_integrator.source.models import SourceVerificationResult
 
 
@@ -14,7 +14,7 @@ class SourcePipeline:
 
     def __init__(self, config: Config):
         self.config = config
-        self.verifier = SourceVerifier(config)
+        self.gate = SourceGate(config)
 
     def check(
         self,
@@ -22,9 +22,9 @@ class SourcePipeline:
         file_paths: list[str | Path] | None = None,
     ) -> list[SourceVerificationResult]:
         results: list[SourceVerificationResult] = []
-        for group_name in self.verifier.resolve_group_names(group):
-            files = self.verifier.collect_files_for_group(group_name, file_paths)
-            results.append(self.verifier.verify_group(group_name, files))
+        for group_name in self.gate.resolve_group_names(group):
+            files = self.gate.collect_files_for_group(group_name, file_paths)
+            results.append(self.gate.verify_group(group_name, files))
         return results
 
     def format(
@@ -33,8 +33,8 @@ class SourcePipeline:
         file_paths: list[str | Path] | None = None,
     ) -> int:
         formatted = 0
-        for group_name in self.verifier.resolve_group_names(group):
-            files = self.verifier.collect_files_for_group(group_name, file_paths)
+        for group_name in self.gate.resolve_group_names(group):
+            files = self.gate.collect_files_for_group(group_name, file_paths)
             group_config = self.config.source_verification.groups.get(group_name)
             formatters = group_config.formatters if group_config else ["ruff"]
             for formatter in formatters:
@@ -43,7 +43,11 @@ class SourcePipeline:
                     if not python_files:
                         continue
                     ruff_bin = shutil.which("ruff")
-                    command = [ruff_bin] if ruff_bin else ["uv", "run", "--system-certs", "--with", "ruff", "ruff"]
+                    command = (
+                        [ruff_bin]
+                        if ruff_bin
+                        else ["uv", "run", "--system-certs", "--with", "ruff", "ruff"]
+                    )
                     subprocess.run([*command, "check", "--fix", *python_files], check=False)
                     subprocess.run([*command, "format", *python_files], check=False)
                     formatted += len(python_files)

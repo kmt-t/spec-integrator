@@ -5,13 +5,13 @@ from pathlib import Path
 
 from spec_integrator.config import Config
 from spec_integrator.document.gates import (
-    ConsistencyVerifier,
-    EvidenceVerifier,
-    FormalVerifier,
-    ObligationVerifier,
-    SectionTopicVerifier,
-    StaticVerifier,
-    WITVerifier,
+    ConsistencyGate,
+    EvidenceGate,
+    FormalGate,
+    ObligationGate,
+    SectionTopicGate,
+    StaticGate,
+    WITGate,
 )
 from spec_integrator.document.workspace import DocumentWorkspace, load_workspace
 from spec_integrator.models import (
@@ -56,10 +56,10 @@ class DocumentPipeline:
         workspace: DocumentWorkspace,
         report_path: Path,
     ) -> DocumentCheckResult:
-        issues = StaticVerifier(self.config).verify(
+        issues = StaticGate(self.config).verify(
             workspace.documents, workspace.graph, workspace.docs_root
         )
-        formal_issues, formal_results = FormalVerifier(self.config).verify_documents(
+        formal_issues, formal_results = FormalGate(self.config).verify_documents(
             workspace.documents, workspace.docs_root
         )
         issues.extend(formal_issues)
@@ -71,7 +71,7 @@ class DocumentPipeline:
                 result.status,
                 result.details,
             )
-        wit_issues, wit_results = WITVerifier(self.config).verify_documents(
+        wit_issues, wit_results = WITGate(self.config).verify_documents(
             workspace.documents, workspace.docs_root
         )
         issues.extend(wit_issues)
@@ -85,18 +85,18 @@ class DocumentPipeline:
                 result.defined_worlds,
             )
         issues.extend(
-            EvidenceVerifier(self.config).verify(
+            EvidenceGate(self.config).verify(
                 workspace.documents,
                 workspace.docs_root,
                 formal_results,
                 wit_results,
             )
         )
-        obligation_issues, obligation_summary = ObligationVerifier(self.config).verify(
+        obligation_issues, obligation_summary = ObligationGate(self.config).verify(
             workspace.documents, workspace.graph, workspace.db
         )
         issues.extend(obligation_issues)
-        consistency_issues, consistency_summary = ConsistencyVerifier(self.config).verify(
+        consistency_issues, consistency_summary = ConsistencyGate(self.config).verify(
             workspace.documents, workspace.docs_root, db=workspace.db
         )
         issues.extend(consistency_issues)
@@ -110,7 +110,7 @@ class DocumentPipeline:
                 )
             )
         if getattr(self.config.semantic_topic, "enabled", True):
-            issues.extend(SectionTopicVerifier(self.config).verify(workspace.db))
+            issues.extend(SectionTopicGate(self.config).verify(workspace.db))
 
         workspace.db.replace_verification_issues(issues)
         workspace.db.commit()

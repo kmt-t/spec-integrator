@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from spec_integrator.config import Config, SemanticTopicConfig
 from spec_integrator.db import DocAuditDB
-from spec_integrator.document.gates.section_verifier import SectionTopicVerifier
+from spec_integrator.document.gates.section_topic import SectionTopicGate
 from spec_integrator.terminology.section_indexer import SectionTopicIndexer, cosine_similarity
 
 
@@ -72,8 +72,8 @@ def test_section_topic_indexing_and_verification(tmp_path):
     assert sim_count == 1
 
     # Verify that unlinked warning is generated (no shared keyword)
-    verifier = SectionTopicVerifier(config)
-    issues = verifier.verify(db)
+    gate = SectionTopicGate(config)
+    issues = gate.verify(db)
     assert len(issues) >= 1
     assert any(i.rule_code in ("SEM-TOPIC-UNLINKED", "SEM-TOPIC-DUPLICATE") for i in issues)
 
@@ -88,7 +88,7 @@ def test_section_topic_indexing_and_verification(tmp_path):
 
     # Now that they share a keyword, UNLINKED issue should disappear (if not duplicate)
     config.semantic_topic.duplicate_warning_threshold = 0.999
-    issues_linked = verifier.verify(db)
+    issues_linked = gate.verify(db)
     assert not any(i.rule_code == "SEM-TOPIC-UNLINKED" for i in issues_linked)
 
     db.close()

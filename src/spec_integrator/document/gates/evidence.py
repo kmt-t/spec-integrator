@@ -2,32 +2,32 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from spec_integrator.anti_sabotage.base import AntiSabotageContext
-from spec_integrator.anti_sabotage.checks.evid_benchmark_missing import (
+from spec_integrator.checks.evidence.benchmark_missing import (
     BenchmarkScriptMissingCheck,
 )
-from spec_integrator.anti_sabotage.checks.evid_dangling_artifact_ref import (
+from spec_integrator.checks.evidence.dangling_artifact_ref import (
     DanglingArtifactRefCheck,
 )
-from spec_integrator.anti_sabotage.checks.evid_declared_file_missing import (
+from spec_integrator.checks.evidence.declared_file_missing import (
     DeclaredEvidenceFileMissingCheck,
 )
-from spec_integrator.anti_sabotage.checks.evid_tag_undeclared import (
+from spec_integrator.checks.evidence.tag_undeclared import (
     TagToEvidenceMismatchCheck,
 )
-from spec_integrator.anti_sabotage.runner import AntiSabotageRunner
 from spec_integrator.config import Config
+from spec_integrator.gates.base import GateContext
+from spec_integrator.gates.runner import GateRunner
 from spec_integrator.models import FormalModelResult, ParsedDocument, VerificationIssue
 
-__all__ = ["EvidenceVerifier"]
+__all__ = ["EvidenceGate"]
 
 
-class EvidenceVerifier:
-    """Evidence Gate: プラグイン化された Anti-Sabotage Evidence チェック群を実行する。"""
+class EvidenceGate:
+    """Evidence Gate: プラグイン化された Automated Gate Evidence チェック群を実行する。"""
 
     def __init__(self, config: Config):
         self.config = config
-        self.runner = AntiSabotageRunner(
+        self.runner = GateRunner(
             checks=[
                 DeclaredEvidenceFileMissingCheck(),
                 TagToEvidenceMismatchCheck(),
@@ -45,7 +45,7 @@ class EvidenceVerifier:
     ) -> list[VerificationIssue]:
         if not self.config.evidence.enabled:
             return []
-        ctx = AntiSabotageContext(
+        ctx = GateContext(
             documents=documents,
             graph=None,
             docs_root=docs_root,

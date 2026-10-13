@@ -53,10 +53,10 @@ class SourceAnalyzer:
                 continue
 
             cid = check_rule.id
-            if cid == "anti_sabotage":
+            if cid == "gate_checks":
                 for f in files:
                     result.issues.extend(
-                        self._check_anti_sabotage(
+                        self._check_gate_rules(
                             f,
                             check_rule.rules,
                             group_name,
@@ -93,14 +93,14 @@ class SourceAnalyzer:
                     if not file_path.is_relative_to(root) or file_path.suffix != ".py":
                         continue
                     result.issues.extend(
-                        self._check_anti_sabotage(
+                        self._check_gate_rules(
                             file_path, ["forbid_assert_side_effects"], group_name
                         )
                     )
 
         return result
 
-    def _check_anti_sabotage(
+    def _check_gate_rules(
         self,
         file_path: Path,
         rules: list[str],

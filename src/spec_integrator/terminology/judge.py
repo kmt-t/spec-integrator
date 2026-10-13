@@ -69,7 +69,9 @@ class TermVarianceJudge:
                 if used_backend in SYSTEM_ONE_BACKENDS:
                     backend_label = BACKEND_LABELS[used_backend]
                     metric_label = (
-                        "probability concentration" if used_backend == "clef-flash" else "confidence"
+                        "probability concentration"
+                        if used_backend == "clef-flash"
+                        else "confidence"
                     )
                     sheet = Checksheet(
                         name="term_variance",

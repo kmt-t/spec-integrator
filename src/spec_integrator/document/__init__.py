@@ -2,23 +2,23 @@
 
 from spec_integrator.document.facade import DocumentCheckResult, DocumentFacade
 from spec_integrator.document.gates import (
-    ConsistencyVerifier,
-    EvidenceVerifier,
-    FormalVerifier,
-    ObligationVerifier,
-    SectionTopicVerifier,
-    StaticVerifier,
-    WITVerifier,
+    ConsistencyGate,
+    EvidenceGate,
+    FormalGate,
+    ObligationGate,
+    SectionTopicGate,
+    StaticGate,
+    WITGate,
 )
 
 __all__ = [
-    "ConsistencyVerifier",
+    "ConsistencyGate",
     "DocumentCheckResult",
     "DocumentFacade",
-    "EvidenceVerifier",
-    "FormalVerifier",
-    "ObligationVerifier",
-    "SectionTopicVerifier",
-    "StaticVerifier",
-    "WITVerifier",
+    "EvidenceGate",
+    "FormalGate",
+    "ObligationGate",
+    "SectionTopicGate",
+    "StaticGate",
+    "WITGate",
 ]

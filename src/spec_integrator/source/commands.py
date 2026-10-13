@@ -28,10 +28,10 @@ def cmd_format_src(args) -> None:
 
 
 def cmd_check_src(args) -> None:
-    """Verify source files against language and anti-sabotage rules."""
+    """Verify source files against language and automated gate rules."""
     config = Config.load(args.config)
     _log("=" * 80)
-    _log(" Spec-Integrator: Source Verification (Anti-Sabotage & Language Rules)")
+    _log(" Spec-Integrator: Source Verification (Automated Gate & Language Rules)")
     _log("=" * 80)
 
     has_errors = False

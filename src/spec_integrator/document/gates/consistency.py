@@ -3,16 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from spec_integrator.anti_sabotage.base import AntiSabotageContext
-from spec_integrator.anti_sabotage.checks.consist_duplicate_definition import (
+from spec_integrator.checks.consistency.duplicate_definition import (
     DuplicateDefinitionCheck,
 )
-from spec_integrator.anti_sabotage.checks.consist_stale_value import StaleValueCheck
-from spec_integrator.anti_sabotage.checks.consist_symbol_drift import (
+from spec_integrator.checks.consistency.stale_value import StaleValueCheck
+from spec_integrator.checks.consistency.symbol_drift import (
     SymbolDriftCheck,
 )
-from spec_integrator.anti_sabotage.runner import AntiSabotageRunner
 from spec_integrator.config import Config
+from spec_integrator.gates.base import GateContext
+from spec_integrator.gates.runner import GateRunner
 from spec_integrator.models import (
     ConsistencySummary,
     ParsedDocument,
@@ -20,15 +20,15 @@ from spec_integrator.models import (
     VerificationIssue,
 )
 
-__all__ = ["ConsistencySummary", "ConsistencyVerifier", "SymbolDrift"]
+__all__ = ["ConsistencyGate", "ConsistencySummary", "SymbolDrift"]
 
 
-class ConsistencyVerifier:
-    """Consistency Gate: プラグイン化された Anti-Sabotage 一貫性チェック群を実行する。"""
+class ConsistencyGate:
+    """Consistency Gate: プラグイン化された Automated Gate 一貫性チェック群を実行する。"""
 
     def __init__(self, config: Config):
         self.config = config
-        self.runner = AntiSabotageRunner(
+        self.runner = GateRunner(
             checks=[
                 DuplicateDefinitionCheck(),
                 SymbolDriftCheck(),
@@ -46,7 +46,7 @@ class ConsistencyVerifier:
         if not self.config.consistency.enabled:
             return [], summary
 
-        ctx = AntiSabotageContext(
+        ctx = GateContext(
             documents=documents,
             graph=None,
             docs_root=docs_root,

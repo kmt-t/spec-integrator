@@ -24,10 +24,7 @@ def cmd_build(args) -> None:
         clean=getattr(args, "clean", False),
         file_paths=getattr(args, "files", None),
     )
-    _log(
-        f"✔ Parsed {len(workspace.documents)} document(s), "
-        f"{len(workspace.graph.nodes)} node(s)."
-    )
+    _log(f"✔ Parsed {len(workspace.documents)} document(s), {len(workspace.graph.nodes)} node(s).")
     _log("Extracting terminology & keywords via TF-IDF...")
     terms_count = document.build_terms(workspace)
     _log(f"✔ Extracted and indexed {terms_count} terms via TF-IDF.")
@@ -48,10 +45,7 @@ def cmd_format_doc(args) -> None:
     formatted_count, examined_count = DocumentFacade(config).format(
         file_paths=getattr(args, "files", None)
     )
-    _log(
-        f"✔ Document formatting complete. "
-        f"Normalized {formatted_count}/{examined_count} file(s)."
-    )
+    _log(f"✔ Document formatting complete. Normalized {formatted_count}/{examined_count} file(s).")
     sys.exit(0)
 
 

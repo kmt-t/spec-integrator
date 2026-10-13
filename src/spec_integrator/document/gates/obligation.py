@@ -1,34 +1,34 @@
 from __future__ import annotations
 
-from spec_integrator.anti_sabotage.base import AntiSabotageContext
-from spec_integrator.anti_sabotage.checks.oblig_assessment_independence import (
+from spec_integrator.checks.obligation.assessment_independence import (
     AssessmentIndependenceCheck,
 )
-from spec_integrator.anti_sabotage.checks.oblig_assessment_missing import (
+from spec_integrator.checks.obligation.assessment_missing import (
     AssessmentMissingCheck,
 )
-from spec_integrator.anti_sabotage.checks.oblig_doc_judge_coverage import (
+from spec_integrator.checks.obligation.doc_judge_coverage import (
     DocumentJudgeCoverageCheck,
 )
-from spec_integrator.anti_sabotage.checks.oblig_judge_coverage import JudgeCoverageCheck
-from spec_integrator.anti_sabotage.checks.oblig_verification_skipped import (
+from spec_integrator.checks.obligation.judge_coverage import JudgeCoverageCheck
+from spec_integrator.checks.obligation.verification_skipped import (
     VerificationTagSkippedCheck,
 )
-from spec_integrator.anti_sabotage.runner import AntiSabotageRunner
 from spec_integrator.config import Config
 from spec_integrator.db import DocAuditDB
+from spec_integrator.gates.base import GateContext
+from spec_integrator.gates.runner import GateRunner
 from spec_integrator.graph import Graph
 from spec_integrator.models import ObligationSummary, ParsedDocument, VerificationIssue
 
-__all__ = ["ObligationSummary", "ObligationVerifier"]
+__all__ = ["ObligationGate", "ObligationSummary"]
 
 
-class ObligationVerifier:
-    """Obligation Gate: プラグイン化された Anti-Sabotage 義務検証チェック群を実行する。"""
+class ObligationGate:
+    """Obligation Gate: プラグイン化された Automated Gate 義務検証チェック群を実行する。"""
 
     def __init__(self, config: Config):
         self.config = config
-        self.runner = AntiSabotageRunner(
+        self.runner = GateRunner(
             checks=[
                 AssessmentMissingCheck(),
                 AssessmentIndependenceCheck(),
@@ -48,7 +48,7 @@ class ObligationVerifier:
         if not self.config.obligation.enabled:
             return [], summary
 
-        ctx = AntiSabotageContext(
+        ctx = GateContext(
             documents=documents,
             graph=graph,
             docs_root=self.config.config_dir / self.config.project.docs_root,

@@ -18,9 +18,9 @@
   7. **Obligation:** Finds verification work required by risk assessment that has not been completed.
   8. **Consistency:** Finds stale values and edits that were not propagated to dependent documents using the consistency baseline.
 
-### Detect Skipped Verification (Anti-Sabotage)
+### Detect Skipped Verification (Automated Gates)
 
-Quality gates report both failed checks and required checks that were never performed. The anti-sabotage checks cover facts that can be determined mechanically, including file presence, hash matches, tags, and model structure. They do not claim to decide semantic LLM audit outcomes.
+Quality gates report both failed checks and required checks that were never performed. The automated gate checks cover facts that can be determined mechanically, including file presence, hash matches, tags, and model structure. They do not claim to decide semantic LLM audit outcomes.
 
 | Gate | Check | Rule code | Mechanical criterion |
 | :--- | :--- | :--- | :--- |
@@ -59,7 +59,7 @@ Quality gates report both failed checks and required checks that were never perf
 
 Missing, unanchored, stale, or skipped LLM work is reported as a warning. A recorded `FAIL` remains an error. Structural violations, such as a missing `{VERIFY_LLM}` tag for a high-risk keyword, remain errors regardless of whether an LLM audit ran.
 
-`EVID-UNBACKED-CLAIM` and `EVID-UNSOURCED-MEASUREMENT` were removed because they had no implementation. Semantic checks for claims such as “verified” are part of the `llm-single-review` and `llm-keyword-review` prompts; they are not mechanical anti-sabotage checks.
+`EVID-UNBACKED-CLAIM` and `EVID-UNSOURCED-MEASUREMENT` were removed because they had no implementation. Semantic checks for claims such as “verified” are part of the `llm-single-review` and `llm-keyword-review` prompts; they are not mechanical automated gate checks.
 
 See the [formal model contract](docs/formal_model_contract.md) for requirements that formal models must satisfy.
 

@@ -6,12 +6,12 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from spec_integrator.anti_sabotage.base import AntiSabotageContext
-from spec_integrator.anti_sabotage.checks import LevenshteinTypoCheck
+from spec_integrator.checks import LevenshteinTypoCheck
 from spec_integrator.config import Config
 from spec_integrator.db import DocAuditDB
 from spec_integrator.document import DocumentFacade
 from spec_integrator.document.commands import cmd_build, cmd_check_doc, cmd_format_doc
+from spec_integrator.gates.base import GateContext
 from spec_integrator.judge import (
     RiskAssessor,
     UnifiedReviewEngine,
@@ -446,7 +446,7 @@ def cmd_llm_judge(args):
     Persists results into `document_judge_results` (per-section self-consistency,
     checked by DocumentJudgeCoverageCheck) and `judge_results` (cross-document keyword
     link-pair review, checked by JudgeCoverageCheck), anchored to the current document hashes so
-    the Obligation Verifier can detect staleness. This is the command that discharges
+    the Obligation gate can detect staleness. This is the command that discharges
     the OBLIG-JUDGE-* / OBLIG-DOC-JUDGE-* obligations.
     """
     config = Config.load(args.config)
@@ -696,7 +696,7 @@ def cmd_llm_word(args):
     print("=" * 80)
 
     # 1. Levenshtein static typos (Format Gate)
-    ctx = AntiSabotageContext(
+    ctx = GateContext(
         documents=documents,
         graph=_graph,
         docs_root=_docs_root,
@@ -808,7 +808,7 @@ def _add_format_src_subparser(subparsers) -> None:
 
 def _add_check_src_subparser(subparsers) -> None:
     p = subparsers.add_parser(
-        "check-src", help="Verify source code (anti-sabotage, language rules, test execution)"
+        "check-src", help="Verify source code (automated gate, language rules, test execution)"
     )
     _add_config_arg(p)
     p.add_argument(

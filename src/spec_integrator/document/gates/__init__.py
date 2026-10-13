@@ -1,19 +1,19 @@
 """Document quality-gate implementations."""
 
-from spec_integrator.document.gates.consistency import ConsistencyVerifier
-from spec_integrator.document.gates.evidence import EvidenceVerifier
-from spec_integrator.document.gates.formal import FormalVerifier
-from spec_integrator.document.gates.obligation import ObligationVerifier
-from spec_integrator.document.gates.section_verifier import SectionTopicVerifier
-from spec_integrator.document.gates.static import StaticVerifier
-from spec_integrator.document.gates.wit import WITVerifier
+from spec_integrator.document.gates.consistency import ConsistencyGate
+from spec_integrator.document.gates.evidence import EvidenceGate
+from spec_integrator.document.gates.formal import FormalGate
+from spec_integrator.document.gates.obligation import ObligationGate
+from spec_integrator.document.gates.section_topic import SectionTopicGate
+from spec_integrator.document.gates.static import StaticGate
+from spec_integrator.document.gates.wit import WITGate
 
 __all__ = [
-    "ConsistencyVerifier",
-    "EvidenceVerifier",
-    "FormalVerifier",
-    "ObligationVerifier",
-    "SectionTopicVerifier",
-    "StaticVerifier",
-    "WITVerifier",
+    "ConsistencyGate",
+    "EvidenceGate",
+    "FormalGate",
+    "ObligationGate",
+    "SectionTopicGate",
+    "StaticGate",
+    "WITGate",
 ]
