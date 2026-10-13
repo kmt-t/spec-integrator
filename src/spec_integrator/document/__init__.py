@@ -1,24 +1,10 @@
-"""Public facade for document-oriented operations."""
+"""Public document service and result types."""
 
-from spec_integrator.document.facade import DocumentCheckResult, DocumentFacade
-from spec_integrator.document.gates import (
-    ConsistencyGate,
-    EvidenceGate,
-    FormalGate,
-    ObligationGate,
-    SectionTopicGate,
-    StaticGate,
-    WITGate,
-)
+from spec_integrator.document.service import DocumentCheckResult, DocumentService
+from spec_integrator.document.workspace import DocumentWorkspace
 
 __all__ = [
-    "ConsistencyGate",
     "DocumentCheckResult",
-    "DocumentFacade",
-    "EvidenceGate",
-    "FormalGate",
-    "ObligationGate",
-    "SectionTopicGate",
-    "StaticGate",
-    "WITGate",
+    "DocumentService",
+    "DocumentWorkspace",
 ]

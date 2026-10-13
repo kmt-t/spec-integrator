@@ -6,13 +6,13 @@ from pathlib import Path
 
 from spec_integrator.application.utils import _log, _rel_path
 from spec_integrator.config import Config
-from spec_integrator.document import DocumentFacade
+from spec_integrator.document import DocumentService
 
 
 def _load_and_parse_all(
     config: Config, clean: bool = False, file_paths: list[str | Path] | None = None
 ):
-    document = DocumentFacade(config)
+    document = DocumentService(config)
     workspace = document.load_workspace(
         clean=clean,
         file_paths=file_paths,

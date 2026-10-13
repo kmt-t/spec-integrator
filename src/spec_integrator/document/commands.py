@@ -7,14 +7,14 @@ from pathlib import Path
 
 from spec_integrator.application.utils import _log, log_banner
 from spec_integrator.config import Config
-from spec_integrator.document import DocumentFacade
+from spec_integrator.document import DocumentService
 
 
 def cmd_build(args) -> None:
     """Build the document database and terminology index."""
     config = Config.load(args.config)
     log_banner(f"Spec-Integrator: Building Document Database [{config.project.name}]")
-    document = DocumentFacade(config)
+    document = DocumentService(config)
     workspace = document.load_workspace(
         clean=getattr(args, "clean", False),
         file_paths=getattr(args, "files", None),
@@ -35,7 +35,7 @@ def cmd_format_doc(args) -> None:
     """Format Markdown documents."""
     config = Config.load(args.config)
     log_banner("Spec-Integrator: Document Formatter (Markdown)")
-    formatted_count, examined_count = DocumentFacade(config).format(
+    formatted_count, examined_count = DocumentService(config).format(
         file_paths=getattr(args, "files", None)
     )
     _log(f"✔ Document formatting complete. Normalized {formatted_count}/{examined_count} file(s).")
@@ -46,7 +46,7 @@ def cmd_check_doc(args) -> None:
     """Run all document quality gates, including prose readability."""
     config = Config.load(args.config)
     log_banner(f"Spec-Integrator: Document Verification Pipeline [{config.project.name}]")
-    document = DocumentFacade(config)
+    document = DocumentService(config)
     workspace = document.load_workspace(
         clean=args.clean,
         file_paths=getattr(args, "files", None),

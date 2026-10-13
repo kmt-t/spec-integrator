@@ -6,7 +6,7 @@ import sys
 
 from spec_integrator.application.utils import _log, log_banner
 from spec_integrator.config import Config
-from spec_integrator.source import SourceFacade
+from spec_integrator.source import SourceService
 
 
 def cmd_format_src(args) -> None:
@@ -14,7 +14,7 @@ def cmd_format_src(args) -> None:
     config = Config.load(args.config)
     log_banner("Spec-Integrator: Source Formatter")
 
-    total_formatted = SourceFacade(config).format(
+    total_formatted = SourceService(config).format(
         group=getattr(args, "group", None),
         file_paths=getattr(args, "files", None),
     )
@@ -29,7 +29,7 @@ def cmd_check_src(args) -> None:
 
     has_errors = False
     total_issues = 0
-    results = SourceFacade(config).check(
+    results = SourceService(config).check(
         group=getattr(args, "group", None),
         file_paths=getattr(args, "files", None),
     )

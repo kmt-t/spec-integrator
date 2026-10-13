@@ -1,4 +1,4 @@
-"""Document-side application pipeline."""
+"""Document application service."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,8 +38,8 @@ class DocumentCheckResult:
         return [issue for issue in self.issues if issue.severity == "ERROR"]
 
 
-class DocumentPipeline:
-    """Coordinates document parsing, quality gates, persistence, and reporting."""
+class DocumentService:
+    """Loads document workspaces and runs checks, persistence, and reporting."""
 
     def __init__(self, config: Config):
         self.config = config

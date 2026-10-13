@@ -1,7 +1,6 @@
-"""Public facade for source-oriented operations."""
+"""Public source service and result types."""
 
-from spec_integrator.source.facade import SourceFacade
-from spec_integrator.source.gate import SourceGate
 from spec_integrator.source.models import SourceIssue, SourceVerificationResult
+from spec_integrator.source.service import SourceService
 
-__all__ = ["SourceFacade", "SourceGate", "SourceIssue", "SourceVerificationResult"]
+__all__ = ["SourceIssue", "SourceService", "SourceVerificationResult"]
