@@ -9,6 +9,7 @@ from spec_integrator.config import (
 )
 from spec_integrator.source import SourceIssue
 from spec_integrator.source.analyzer import SourceAnalyzer
+from spec_integrator.source.python_rules import PythonRuleAnalyzer
 
 
 def _check_python(tmp_path: Path, source: str, rules: list[str]) -> list[SourceIssue]:
@@ -391,7 +392,7 @@ def inspect(value: int) -> bool:
 
 
 def test_python_pysim_container_exclusion_is_path_configured(tmp_path: Path) -> None:
-    analyzer = SourceAnalyzer(Config())
+    analyzer = PythonRuleAnalyzer(Config())
     issues = analyzer._check_python_rules(
         tmp_path / "system_containers.py",
         "values: list[int] = [1, 2]\n",
