@@ -9,7 +9,6 @@ from spec_integrator.config import (
 )
 from spec_integrator.source import SourceIssue
 from spec_integrator.source.analyzer import SourceAnalyzer
-from spec_integrator.source.python_rules import PythonRuleAnalyzer
 
 
 def _check_python(tmp_path: Path, source: str, rules: list[str]) -> list[SourceIssue]:
@@ -41,7 +40,7 @@ assert stack.truncate(0) is None
 """,
         ["forbid_assert_side_effects"],
     )
-    assert [(issue.rule, issue.line) for issue in issues] == [
+    assert sorted((issue.rule, issue.line) for issue in issues) == [
         ("PY-ASSERT-SIDE-EFFECT", line) for line in (1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14)
     ]
 
@@ -244,61 +243,6 @@ def test_python_static_checks_report_ast_syntax_errors(tmp_path: Path) -> None:
     assert issues[0].rule == "PY-SYNTAX-ERROR"
 
 
-def test_python_pysim_rejects_builtin_list_dict_and_set(tmp_path: Path) -> None:
-    issues = _check_python(
-        tmp_path,
-        """
-values: list[int] = [1, 2]
-mapping = dict()
-flags = {1, 2}
-items = list(values)
-""",
-        ["forbid_builtin_containers"],
-    )
-
-    assert [(issue.rule, issue.line) for issue in issues] == [
-        ("PY-FORBIDDEN-BUILTIN-LIST", 2),
-        ("PY-FORBIDDEN-BUILTIN-LIST", 2),
-        ("PY-FORBIDDEN-BUILTIN-DICT", 3),
-        ("PY-FORBIDDEN-BUILTIN-SET", 4),
-        ("PY-FORBIDDEN-BUILTIN-LIST", 5),
-    ]
-
-
-def test_python_pysim_rejects_tuple_rebuild_and_concat(tmp_path: Path) -> None:
-    issues = _check_python(
-        tmp_path,
-        """
-values: tuple[int, ...] = (1,)
-other: tuple[int, ...] = (2,)
-merged = values + other
-rebuilt = tuple(values)
-generated = tuple(value for value in values)
-expanded = (*values, *other)
-""",
-        ["forbid_builtin_containers"],
-    )
-
-    assert [(issue.rule, issue.line) for issue in issues] == [
-        ("PY-FORBIDDEN-TUPLE-CONCAT", 4),
-        ("PY-FORBIDDEN-TUPLE-REBUILD", 5),
-        ("PY-FORBIDDEN-TUPLE-REBUILD", 6),
-        ("PY-FORBIDDEN-TUPLE-REBUILD", 7),
-    ]
-    assert "Reason:" in issues[1].message
-    assert "Resource requirement:" in issues[1].message
-
-
-def test_python_pysim_allows_callable_parameter_type_syntax(tmp_path: Path) -> None:
-    issues = _check_python(
-        tmp_path,
-        "from collections.abc import Callable\nhandler: Callable[[int, int], int]\n",
-        ["forbid_builtin_containers"],
-    )
-
-    assert issues == []
-
-
 def test_python_pysim_rejects_object_and_non_none_union(tmp_path: Path) -> None:
     issues = _check_python(
         tmp_path,
@@ -309,6 +253,33 @@ def test_python_pysim_rejects_object_and_non_none_union(tmp_path: Path) -> None:
     assert [(issue.rule, issue.line) for issue in issues] == [
         ("PY-FORBIDDEN-OBJECT-TYPE", 1),
         ("PY-FORBIDDEN-NON-NONE-UNION", 2),
+    ]
+
+
+def test_python_pysim_rejects_none_default_fill(tmp_path: Path) -> None:
+    issues = _check_python(
+        tmp_path,
+        """def choose(value: int | None) -> int:
+    return value if value is not None else 7
+
+def choose_inverse(value: int | None) -> int:
+    return 7 if value is None else value
+
+def normalize(value: int | None = None) -> int:
+    if value is None:
+        value = 7
+    return value
+
+def preserve_absence(value: int | None) -> int | None:
+    return value if value is not None else None
+""",
+        ["forbid_none_default_fill"],
+    )
+
+    assert sorted((issue.rule, issue.line) for issue in issues) == [
+        ("PY-FORBIDDEN-NONE-DEFAULT-FILL", 2),
+        ("PY-FORBIDDEN-NONE-DEFAULT-FILL", 5),
+        ("PY-FORBIDDEN-NONE-DEFAULT-FILL", 8),
     ]
 
 
@@ -373,33 +344,68 @@ def sends(value: int) -> int:
     ]
 
 
-def test_python_pysim_rejects_rtti_and_in_operator(tmp_path: Path) -> None:
+def test_python_pysim_rejects_test_backdoors(tmp_path: Path) -> None:
     issues = _check_python(
         tmp_path,
-        """def lookup(value: int, values: tuple[int, ...]) -> bool:
-    return value in values
-
-def inspect(value: int) -> bool:
-    return isinstance(value, int)
-""",
-        ["forbid_rtti", "forbid_in_operator"],
+        "import pytest\n\ndef test_internal_hook() -> None: ...\n\ndef _test_setup() -> None: ...\n",
+        ["forbid_test_backdoor"],
     )
 
     assert [(issue.rule, issue.line) for issue in issues] == [
-        ("PY-FORBIDDEN-RTTI", 5),
-        ("PY-FORBIDDEN-IN-OPERATOR", 2),
+        ("PY-TEST-CODE-IN-PRODUCT", 1),
+        ("PY-TEST-CODE-IN-PRODUCT", 3),
+        ("PY-TEST-CODE-IN-PRODUCT", 5),
     ]
 
 
-def test_python_pysim_container_exclusion_is_path_configured(tmp_path: Path) -> None:
-    analyzer = PythonRuleAnalyzer(Config())
-    issues = analyzer._check_python_rules(
-        tmp_path / "system_containers.py",
-        "values: list[int] = [1, 2]\n",
-        "experiments/pysim/tier1_core/system_containers.py",
-        ["forbid_builtin_containers"],
+def test_python_pysim_rejects_required_nullable_arguments(tmp_path: Path) -> None:
+    issues = _check_python(
+        tmp_path,
+        """def compile_trace(blocks: tuple[int, ...] | None) -> int: ...
+
+def execute(value: int | None) -> int:
+    assert value is not None
+    return value
+""",
+        ["forbid_required_nullable_arguments"],
+    )
+
+    assert [(issue.rule, issue.line) for issue in issues] == [
+        ("PY-REQUIRED-ARGUMENT-NULLABLE", 1),
+        ("PY-REQUIRED-ARGUMENT-NULLABLE", 4),
+    ]
+
+
+def test_python_pysim_rejects_rtti(tmp_path: Path) -> None:
+    issues = _check_python(
+        tmp_path,
+        """def inspect(value: int) -> bool:
+    return isinstance(value, int)
+""",
+        ["forbid_rtti"],
+    )
+
+    assert [(issue.rule, issue.line) for issue in issues] == [
+        ("PY-FORBIDDEN-RTTI", 2),
+    ]
+
+
+def test_python_pysim_none_default_fill_exclusion_is_path_configured(
+    tmp_path: Path,
+) -> None:
+    source_file = tmp_path / "qa" / "test_helper.py"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text(
+        "def select(value: int | None) -> int:\n"
+        "    return value if value is not None else 3\n",
+        encoding="utf-8",
+    )
+    analyzer = SourceAnalyzer(Config())
+    issues = analyzer._check_gate_rules(
+        source_file,
+        ["forbid_none_default_fill"],
         "python_pysim",
-        ["experiments/pysim/tier1_core/system_containers.py"],
+        none_default_fill_exclude_paths=["**/qa/**"],
     )
 
     assert issues == []
@@ -433,6 +439,6 @@ def test_static_checks_distinguish_callable_annotations_and_type_subscripts(tmp_
     issues = _check_python(
         tmp_path,
         "from collections.abc import Callable\ncallback: Callable[[int, str], None]\nkind: type[int] = int\n",
-        ["forbid_builtin_containers", "forbid_rtti"],
+        ["forbid_rtti"],
     )
     assert issues == []
