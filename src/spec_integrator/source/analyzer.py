@@ -58,15 +58,14 @@ class SourceAnalyzer:
                             f,
                             check_rule.rules,
                             group_name,
-                            check_rule.builtin_container_exclude_paths,
-                            check_rule.rtti_exclude_paths,
-                            check_rule.in_operator_exclude_paths,
-                            check_rule.raise_exclude_paths,
-                            check_rule.test_backdoor_exclude_paths,
-                            check_rule.forbidden_product_symbols,
-                            check_rule.non_none_union_exclude_paths,
-                            check_rule.string_member_exclude_paths,
+                            rtti_exclude_paths=check_rule.rtti_exclude_paths,
+                            raise_exclude_paths=check_rule.raise_exclude_paths,
+                            test_backdoor_exclude_paths=check_rule.test_backdoor_exclude_paths,
+                            forbidden_product_symbols=check_rule.forbidden_product_symbols,
+                            non_none_union_exclude_paths=check_rule.non_none_union_exclude_paths,
+                            string_member_exclude_paths=check_rule.string_member_exclude_paths,
                             object_type_exclude_paths=check_rule.object_type_exclude_paths,
+                            none_default_fill_exclude_paths=check_rule.none_default_fill_exclude_paths,
                         )
                     )
             elif cid == "cpp_rules":
@@ -106,15 +105,14 @@ class SourceAnalyzer:
         file_path: Path,
         rules: list[str],
         group_name: str,
-        builtin_container_exclude_paths: list[str] | None = None,
         rtti_exclude_paths: list[str] | None = None,
-        in_operator_exclude_paths: list[str] | None = None,
         raise_exclude_paths: list[str] | None = None,
         test_backdoor_exclude_paths: list[str] | None = None,
         forbidden_product_symbols: list[str] | None = None,
         non_none_union_exclude_paths: list[str] | None = None,
         string_member_exclude_paths: list[str] | None = None,
         object_type_exclude_paths: list[str] | None = None,
+        none_default_fill_exclude_paths: list[str] | None = None,
     ) -> list[SourceIssue]:
         issues: list[SourceIssue] = []
         try:
@@ -139,20 +137,19 @@ class SourceAnalyzer:
         if file_path.suffix.lower() == ".py":
             issues.extend(
                 self.python_rules._check_python_rules(
-                    file_path,
-                    content,
-                    rel_path,
-                    rules,
-                    group_name,
-                    builtin_container_exclude_paths or [],
-                    rtti_exclude_paths or [],
-                    in_operator_exclude_paths or [],
-                    raise_exclude_paths or [],
-                    test_backdoor_exclude_paths or [],
-                    forbidden_product_symbols or [],
-                    non_none_union_exclude_paths or [],
-                    string_member_exclude_paths or [],
+                    file_path=file_path,
+                    content=content,
+                    rel_path=rel_path,
+                    rules=rules,
+                    group_name=group_name,
+                    rtti_exclude_paths=rtti_exclude_paths or [],
+                    raise_exclude_paths=raise_exclude_paths or [],
+                    test_backdoor_exclude_paths=test_backdoor_exclude_paths or [],
+                    forbidden_product_symbols=forbidden_product_symbols or [],
+                    non_none_union_exclude_paths=non_none_union_exclude_paths or [],
+                    string_member_exclude_paths=string_member_exclude_paths or [],
                     object_type_exclude_paths=object_type_exclude_paths,
+                    none_default_fill_exclude_paths=none_default_fill_exclude_paths,
                 )
             )
         else:

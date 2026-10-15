@@ -127,6 +127,24 @@ spec-integrator format-src --group all
 spec-integrator check-src --group all
 ```
 
+The `python_pysim` group applies Ruff and the AST rules configured in the project-root `spec-integrator.yaml`. Its rule inventory is:
+
+| Rule | Check |
+| :--- | :--- |
+| `forbid_typing_any` | Reject `typing.Any` and its aliases. |
+| `forbid_object_type` | Reject `object` in annotations. |
+| `forbid_non_none_union` | Allow only nullable `T | None` / `Optional[T]` unions. |
+| `forbid_none_default_fill` | Reject nullable-value fallback expressions and replacing a `None` argument default at function entry. QA and benchmark paths are excluded in configuration. |
+| `forbid_raise` | Reject explicit `raise` outside configured exception paths. |
+| `forbid_rtti` | Reject runtime type and reflection inspection outside configured paths. |
+| `forbid_test_backdoor` | Reject test-only hooks and configured test symbols in product code. |
+| `forbid_required_nullable_arguments` | Reject required arguments declared nullable. |
+| `forbid_string_members` | Reject runtime `str` members outside configured paths. |
+| `dummy_pass` | Reject empty function bodies. |
+| `todo_comment` | Report unresolved work markers. |
+
+Separate checks in this group validate `assert` side effects, configured Tier import direction, and the PySIM unit-test suite. Built-in `dict`, `set`, and `list`, the `in` operator, and tuple reconstruction are not prohibited by this group's rules. The YAML configuration is the source of truth for enabled rules and exclusions.
+
 ### 6. Visualize the DocGraph (`graph`)
 
 ```bash

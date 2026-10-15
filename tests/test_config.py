@@ -52,6 +52,33 @@ def test_project_config_defaults_to_clef_flash():
     assert cfg.llm_judge.backends["clef-flash"].context_window_tokens == 65536
 
 
+def test_pysim_source_gate_config_matches_revised_rule_set() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    config = Config.load(project_root / "spec-integrator.yaml")
+    group = config.source_verification.groups["python_pysim"]
+    gate_checks = [check for check in group.checks if check.id == "gate_checks"]
+
+    assert len(gate_checks) == 1
+    gate = gate_checks[0]
+    assert gate.rules == [
+        "forbid_typing_any",
+        "forbid_object_type",
+        "forbid_non_none_union",
+        "forbid_none_default_fill",
+        "forbid_raise",
+        "forbid_rtti",
+        "forbid_test_backdoor",
+        "forbid_required_nullable_arguments",
+        "forbid_string_members",
+        "dummy_pass",
+        "todo_comment",
+    ]
+    assert gate.none_default_fill_exclude_paths == [
+        "experiments/pysim/qa/**",
+        "experiments/pysim/benchmarks/**",
+    ]
+
+
 def test_config_loads_prose_readability_thresholds(tmp_path: Path) -> None:
     cfg_file = tmp_path / "spec-integrator.yaml"
     cfg_file.write_text(

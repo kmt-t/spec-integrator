@@ -30,15 +30,14 @@ class PythonRuleAnalyzer:
         rel_path: str,
         rules: list[str],
         group_name: str,
-        builtin_container_exclude_paths: list[str] | None = None,
         rtti_exclude_paths: list[str] | None = None,
-        in_operator_exclude_paths: list[str] | None = None,
         raise_exclude_paths: list[str] | None = None,
         test_backdoor_exclude_paths: list[str] | None = None,
         forbidden_product_symbols: list[str] | None = None,
         non_none_union_exclude_paths: list[str] | None = None,
         string_member_exclude_paths: list[str] | None = None,
         object_type_exclude_paths: list[str] | None = None,
+        none_default_fill_exclude_paths: list[str] | None = None,
     ) -> list[SourceIssue]:
         """Checks Python source from one parsed AST, with comments read by tokenize."""
         try:
@@ -78,6 +77,14 @@ class PythonRuleAnalyzer:
             )
             if not excluded:
                 issues.extend(self._check_python_non_none_unions(tree, rel_path, group_name))
+        if "forbid_none_default_fill" in rules:
+            normalized_path = rel_path.replace("\\", "/").lstrip("./")
+            excluded = any(
+                fnmatch.fnmatch(normalized_path, pattern.replace("\\", "/").lstrip("./"))
+                for pattern in (none_default_fill_exclude_paths or [])
+            )
+            if not excluded:
+                issues.extend(self._check_python_none_default_fill(tree, rel_path, group_name))
         if "forbid_string_members" in rules:
             normalized_path = rel_path.replace("\\", "/").lstrip("./")
             excluded = any(
@@ -102,14 +109,6 @@ class PythonRuleAnalyzer:
             )
             if not excluded:
                 issues.extend(self._check_python_rtti(tree, rel_path, group_name))
-        if "forbid_in_operator" in rules:
-            normalized_path = rel_path.replace("\\", "/").lstrip("./")
-            excluded = any(
-                fnmatch.fnmatch(normalized_path, pattern.replace("\\", "/").lstrip("./"))
-                for pattern in (in_operator_exclude_paths or [])
-            )
-            if not excluded:
-                issues.extend(self._check_python_in_operator(tree, rel_path, group_name))
         if "forbid_test_backdoor" in rules:
             normalized_path = rel_path.replace("\\", "/").lstrip("./")
             excluded = any(
@@ -126,16 +125,6 @@ class PythonRuleAnalyzer:
             issues.extend(
                 self._check_python_required_nullable_arguments(tree, rel_path, group_name)
             )
-        if "forbid_builtin_containers" in rules:
-            normalized_excludes = {
-                path.replace("\\", "/").lstrip("./")
-                for path in (builtin_container_exclude_paths or [])
-            }
-            normalized_path = rel_path.replace("\\", "/").lstrip("./")
-            if not any(
-                fnmatch.fnmatch(normalized_path, pattern) for pattern in normalized_excludes
-            ):
-                issues.extend(self._check_python_builtin_containers(tree, rel_path, group_name))
         if not rules or "dummy_pass" in rules or "empty_function" in rules:
             issues.extend(self._check_python_empty_functions(tree, rel_path, group_name))
         if "mutation_guards_required" in rules and not self._has_false_guard_call(tree):
@@ -316,23 +305,6 @@ class PythonRuleAnalyzer:
         )
         return issues
 
-    def _check_python_in_operator(
-        self, tree: ast.Module, rel_path: str, group_name: str
-    ) -> list[SourceIssue]:
-        return [
-            SourceIssue(
-                file_path=rel_path,
-                line=getattr(node, "lineno", 1),
-                rule="PY-FORBIDDEN-IN-OPERATOR",
-                severity="ERROR",
-                message="The 'in' operator is forbidden in pysim product code; use a bounded view lookup or indexed access.",
-                group=group_name,
-            )
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Compare)
-            and any(isinstance(operator, (ast.In, ast.NotIn)) for operator in node.ops)
-        ]
-
     def _check_python_test_backdoor(
         self,
         tree: ast.Module,
@@ -392,6 +364,141 @@ class PythonRuleAnalyzer:
                             group=group_name,
                         )
                     )
+        return issues
+
+    @staticmethod
+    def _none_comparison(node: ast.AST) -> tuple[str, bool] | None:
+        """Return the compared name and whether the condition is true for None."""
+        if not isinstance(node, ast.Compare) or len(node.ops) != 1 or len(node.comparators) != 1:
+            return None
+
+        left = node.left
+        right = node.comparators[0]
+        if isinstance(left, ast.Name) and PythonRuleAnalyzer._is_none_type(right):
+            variable = left
+        elif isinstance(right, ast.Name) and PythonRuleAnalyzer._is_none_type(left):
+            variable = right
+        else:
+            return None
+
+        operator = node.ops[0]
+        if isinstance(operator, ast.Is):
+            return variable.id, True
+        if isinstance(operator, ast.IsNot):
+            return variable.id, False
+        return None
+
+    @staticmethod
+    def _is_direct_assignment_to(statement: ast.stmt, name: str) -> bool:
+        if isinstance(statement, ast.Assign):
+            return any(
+                isinstance(target, ast.Name) and target.id == name for target in statement.targets
+            )
+        return isinstance(statement, ast.AnnAssign) and (
+            isinstance(statement.target, ast.Name) and statement.target.id == name
+        )
+
+    def _check_python_none_default_fill(
+        self, tree: ast.Module, rel_path: str, group_name: str
+    ) -> list[SourceIssue]:
+        """Reject selecting a default in place of an optional value."""
+        issues: list[SourceIssue] = []
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.IfExp):
+                comparison = self._none_comparison(node.test)
+                if comparison is None:
+                    continue
+                name, condition_is_none = comparison
+                present_value = node.orelse if condition_is_none else node.body
+                default_value = node.body if condition_is_none else node.orelse
+                if (
+                    isinstance(present_value, ast.Name)
+                    and present_value.id == name
+                    and not (isinstance(default_value, ast.Name) and default_value.id == name)
+                    and not self._is_none_type(default_value)
+                ):
+                    issues.append(
+                        SourceIssue(
+                            file_path=rel_path,
+                            line=getattr(node, "lineno", 1),
+                            rule="PY-FORBIDDEN-NONE-DEFAULT-FILL",
+                            severity="ERROR",
+                            message="None must not be replaced with a default; resolve required values at the caller.",
+                            group=group_name,
+                        )
+                    )
+                continue
+
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+
+            arguments = node.args.posonlyargs + node.args.args
+            default_none_names: set[str] = set()
+            positional_defaults = node.args.defaults
+            if positional_defaults:
+                positional_with_defaults = arguments[-len(positional_defaults) :]
+                default_none_names.update(
+                    argument.arg
+                    for argument, default in zip(
+                        positional_with_defaults, positional_defaults, strict=True
+                    )
+                    if self._is_none_type(default)
+                )
+            default_none_names.update(
+                argument.arg
+                for argument, default in zip(
+                    node.args.kwonlyargs, node.args.kw_defaults, strict=True
+                )
+                if default is not None and self._is_none_type(default)
+            )
+            if not default_none_names or not node.body:
+                continue
+
+            first_statement = node.body[0]
+            if (
+                isinstance(first_statement, ast.Expr)
+                and isinstance(first_statement.value, ast.Constant)
+                and isinstance(first_statement.value.value, str)
+            ):
+                if len(node.body) < 2:
+                    continue
+                first_statement = node.body[1]
+            if not isinstance(first_statement, ast.If):
+                continue
+
+            comparison = self._none_comparison(first_statement.test)
+            if comparison is None:
+                continue
+            name, condition_is_none = comparison
+            if name not in default_none_names:
+                continue
+            none_branch = first_statement.body if condition_is_none else first_statement.orelse
+            if any(
+                self._is_direct_assignment_to(statement, name)
+                and not (
+                    isinstance(statement, ast.Assign)
+                    and len(statement.targets) == 1
+                    and isinstance(statement.value, ast.Name)
+                    and statement.value.id == name
+                )
+                and not (isinstance(statement, ast.Assign) and self._is_none_type(statement.value))
+                and not (
+                    isinstance(statement, ast.AnnAssign) and self._is_none_type(statement.value)
+                )
+                for statement in none_branch
+            ):
+                issues.append(
+                    SourceIssue(
+                        file_path=rel_path,
+                        line=getattr(first_statement, "lineno", 1),
+                        rule="PY-FORBIDDEN-NONE-DEFAULT-FILL",
+                        severity="ERROR",
+                        message="An argument defaulted to None must not be replaced at function entry.",
+                        group=group_name,
+                    )
+                )
+
         return issues
 
     def _check_python_required_nullable_arguments(
@@ -648,141 +755,6 @@ class PythonRuleAnalyzer:
 
         visit(annotation)
         return nodes
-
-    def _check_python_builtin_containers(
-        self, tree: ast.Module, rel_path: str, group_name: str
-    ) -> list[SourceIssue]:
-        """Reject raw containers and tuple rebuilding in pysim source.
-
-        The checker is intentionally syntax-based: a custom fixed-capacity
-        container may use its own implementation details, but product code
-        must express ownership and bounds through that container API rather
-        than exposing Python's built-in container vocabulary. Tuple literals
-        remain valid for immutable data; converting an iterable to a tuple or
-        concatenating tuple-shaped expressions is rejected because it can
-        hide a mutable temporary sequence.
-        """
-        # ``Callable[[Arg1, Arg2], Result]`` uses an AST List as typing
-        # syntax, but it does not construct or expose a runtime container.
-        callable_parameter_lists = {
-            id(node.slice.elts[0])
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Subscript)
-            and (
-                (isinstance(node.value, ast.Name) and node.value.id == "Callable")
-                or (isinstance(node.value, ast.Attribute) and node.value.attr == "Callable")
-            )
-            and isinstance(node.slice, ast.Tuple)
-            and node.slice.elts
-            and isinstance(node.slice.elts[0], ast.List)
-        }
-
-        tuple_names: set[str] = set()
-
-        def is_tuple_annotation(node: ast.AST) -> bool:
-            if isinstance(node, ast.Name):
-                return node.id == "tuple"
-            if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
-                return node.value.id == "tuple"
-            return False
-
-        def is_tuple_expression(node: ast.AST) -> bool:
-            if isinstance(node, ast.Tuple):
-                return True
-            if isinstance(node, ast.Name):
-                return node.id in tuple_names
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                return node.func.id == "tuple"
-            return False
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.arg) and node.annotation is not None:
-                if is_tuple_annotation(node.annotation):
-                    tuple_names.add(node.arg)
-            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-                if is_tuple_annotation(node.annotation):
-                    tuple_names.add(node.target.id)
-
-        changed = True
-        while changed:
-            changed = False
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.AST):
-                    continue
-                if not is_tuple_expression(node.value):
-                    continue
-                for target in node.targets:
-                    if isinstance(target, ast.Name) and target.id not in tuple_names:
-                        tuple_names.add(target.id)
-                        changed = True
-
-        issues: list[SourceIssue] = []
-        for node in ast.walk(tree):
-            rule = ""
-            message = ""
-            if isinstance(node, ast.List) and id(node) in callable_parameter_lists:
-                continue
-            if isinstance(node, (ast.List, ast.ListComp)):
-                rule = "PY-FORBIDDEN-BUILTIN-LIST"
-                message = "Built-in list syntax is forbidden in pysim; use a fixed-capacity system container."
-            elif isinstance(node, (ast.Dict, ast.DictComp)):
-                rule = "PY-FORBIDDEN-BUILTIN-DICT"
-                message = (
-                    "Built-in dict syntax is forbidden in pysim; use a FlatMap storage or view."
-                )
-            elif isinstance(node, (ast.Set, ast.SetComp)):
-                rule = "PY-FORBIDDEN-BUILTIN-SET"
-                message = (
-                    "Built-in set syntax is forbidden in pysim; use a FlatSet storage or view."
-                )
-            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                if (
-                    node.func.id == "tuple"
-                    and node.args
-                    and not isinstance(node.args[0], ast.Tuple)
-                ):
-                    rule = "PY-FORBIDDEN-TUPLE-REBUILD"
-                    message = "Reason: tuple(iterable) materializes the entire iterable and duplicates peak memory. Resource requirement: create no intermediate sequence; consume incrementally, retaining data only in caller-owned bounded storage when required."
-                elif node.func.id == "list":
-                    rule = "PY-FORBIDDEN-BUILTIN-LIST"
-                    message = "Calling list() is forbidden in pysim; use a fixed-capacity system container."
-                elif node.func.id == "dict":
-                    rule = "PY-FORBIDDEN-BUILTIN-DICT"
-                    message = "Calling dict() is forbidden in pysim; use a FlatMap storage or view."
-                elif node.func.id == "set":
-                    rule = "PY-FORBIDDEN-BUILTIN-SET"
-                    message = "Calling set() is forbidden in pysim; use a FlatSet storage or view."
-            elif isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
-                if node.value.id == "list":
-                    rule = "PY-FORBIDDEN-BUILTIN-LIST"
-                    message = "list[...] annotations are forbidden in pysim; use a concrete system container type."
-                elif node.value.id == "dict":
-                    rule = "PY-FORBIDDEN-BUILTIN-DICT"
-                    message = "dict[...] annotations are forbidden in pysim; use a concrete system container type."
-                elif node.value.id == "set":
-                    rule = "PY-FORBIDDEN-BUILTIN-SET"
-                    message = "set[...] annotations are forbidden in pysim; use a concrete system container type."
-            elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-                if is_tuple_expression(node.left) or is_tuple_expression(node.right):
-                    rule = "PY-FORBIDDEN-TUPLE-CONCAT"
-                    message = "Reason: tuple concatenation allocates and copies a new sequence, increasing peak memory. Resource requirement: create no intermediate sequence; retain data only in caller-owned bounded storage when indexed retention is required."
-            elif isinstance(node, ast.Tuple) and any(
-                isinstance(element, ast.Starred) for element in node.elts
-            ):
-                rule = "PY-FORBIDDEN-TUPLE-REBUILD"
-                message = "Reason: starred tuple construction materializes and copies the source. Resource requirement: create no intermediate sequence; consume incrementally, retaining data only in caller-owned bounded storage when required."
-            if rule:
-                issues.append(
-                    SourceIssue(
-                        file_path=rel_path,
-                        line=getattr(node, "lineno", 1),
-                        rule=rule,
-                        severity="ERROR",
-                        message=message,
-                        group=group_name,
-                    )
-                )
-        return issues
 
     def _check_python_work_markers(
         self, content: str, rel_path: str, group_name: str
