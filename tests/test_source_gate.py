@@ -396,8 +396,7 @@ def test_python_pysim_none_default_fill_exclusion_is_path_configured(
     source_file = tmp_path / "qa" / "test_helper.py"
     source_file.parent.mkdir(parents=True)
     source_file.write_text(
-        "def select(value: int | None) -> int:\n"
-        "    return value if value is not None else 3\n",
+        "def select(value: int | None) -> int:\n    return value if value is not None else 3\n",
         encoding="utf-8",
     )
     analyzer = SourceAnalyzer(Config())

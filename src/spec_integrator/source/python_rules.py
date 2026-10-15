@@ -391,7 +391,9 @@ class PythonRuleAnalyzer:
     @staticmethod
     def _is_direct_assignment_to(statement: ast.stmt, name: str) -> bool:
         if isinstance(statement, ast.Assign):
-            return any(isinstance(target, ast.Name) and target.id == name for target in statement.targets)
+            return any(
+                isinstance(target, ast.Name) and target.id == name for target in statement.targets
+            )
         return isinstance(statement, ast.AnnAssign) and (
             isinstance(statement.target, ast.Name) and statement.target.id == name
         )
@@ -438,12 +440,16 @@ class PythonRuleAnalyzer:
                 positional_with_defaults = arguments[-len(positional_defaults) :]
                 default_none_names.update(
                     argument.arg
-                    for argument, default in zip(positional_with_defaults, positional_defaults)
+                    for argument, default in zip(
+                        positional_with_defaults, positional_defaults, strict=True
+                    )
                     if self._is_none_type(default)
                 )
             default_none_names.update(
                 argument.arg
-                for argument, default in zip(node.args.kwonlyargs, node.args.kw_defaults)
+                for argument, default in zip(
+                    node.args.kwonlyargs, node.args.kw_defaults, strict=True
+                )
                 if default is not None and self._is_none_type(default)
             )
             if not default_none_names or not node.body:
@@ -476,13 +482,9 @@ class PythonRuleAnalyzer:
                     and isinstance(statement.value, ast.Name)
                     and statement.value.id == name
                 )
+                and not (isinstance(statement, ast.Assign) and self._is_none_type(statement.value))
                 and not (
-                    isinstance(statement, ast.Assign)
-                    and self._is_none_type(statement.value)
-                )
-                and not (
-                    isinstance(statement, ast.AnnAssign)
-                    and self._is_none_type(statement.value)
+                    isinstance(statement, ast.AnnAssign) and self._is_none_type(statement.value)
                 )
                 for statement in none_branch
             ):
