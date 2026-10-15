@@ -398,42 +398,11 @@ class PythonRuleAnalyzer:
             isinstance(statement.target, ast.Name) and statement.target.id == name
         )
 
-    def _none_defaulted_argument_names(
-        self, node: ast.FunctionDef | ast.AsyncFunctionDef
-    ) -> set[str]:
-        """Return arguments whose declared default is explicitly None."""
-        arguments = node.args.posonlyargs + node.args.args
-        default_none_names: set[str] = set()
-        positional_defaults = node.args.defaults
-        if positional_defaults:
-            positional_with_defaults = arguments[-len(positional_defaults) :]
-            default_none_names.update(
-                argument.arg
-                for argument, default in zip(
-                    positional_with_defaults, positional_defaults, strict=True
-                )
-                if self._is_none_type(default)
-            )
-        default_none_names.update(
-            argument.arg
-            for argument, default in zip(node.args.kwonlyargs, node.args.kw_defaults, strict=True)
-            if default is not None and self._is_none_type(default)
-        )
-        return default_none_names
-
     def _check_python_none_default_fill(
         self, tree: ast.Module, rel_path: str, group_name: str
     ) -> list[SourceIssue]:
         """Reject selecting a default in place of an optional value."""
         issues: list[SourceIssue] = []
-        parents = {
-            child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)
-        }
-        default_none_names_by_function = {
-            node: self._none_defaulted_argument_names(node)
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
 
         for node in ast.walk(tree):
             if isinstance(node, ast.IfExp):
@@ -441,13 +410,6 @@ class PythonRuleAnalyzer:
                 if comparison is None:
                     continue
                 name, condition_is_none = comparison
-                scope = parents.get(node)
-                while scope is not None and not isinstance(
-                    scope, (ast.FunctionDef, ast.AsyncFunctionDef)
-                ):
-                    scope = parents.get(scope)
-                if scope is not None and name in default_none_names_by_function.get(scope, set()):
-                    continue
                 present_value = node.orelse if condition_is_none else node.body
                 default_value = node.body if condition_is_none else node.orelse
                 if (
@@ -471,7 +433,25 @@ class PythonRuleAnalyzer:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
 
-            default_none_names = self._none_defaulted_argument_names(node)
+            arguments = node.args.posonlyargs + node.args.args
+            default_none_names: set[str] = set()
+            positional_defaults = node.args.defaults
+            if positional_defaults:
+                positional_with_defaults = arguments[-len(positional_defaults) :]
+                default_none_names.update(
+                    argument.arg
+                    for argument, default in zip(
+                        positional_with_defaults, positional_defaults, strict=True
+                    )
+                    if self._is_none_type(default)
+                )
+            default_none_names.update(
+                argument.arg
+                for argument, default in zip(
+                    node.args.kwonlyargs, node.args.kw_defaults, strict=True
+                )
+                if default is not None and self._is_none_type(default)
+            )
             if not default_none_names or not node.body:
                 continue
 
