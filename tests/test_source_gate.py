@@ -272,9 +272,6 @@ def normalize(value: int | None = None) -> int:
 
 def preserve_absence(value: int | None) -> int | None:
     return value if value is not None else None
-
-def optional_budget(value: int | None = None) -> int:
-    return value if value is not None else 7
 """,
         ["forbid_none_default_fill"],
     )
