@@ -134,7 +134,7 @@ The `python_pysim` group applies Ruff and the AST rules configured in the projec
 | `forbid_typing_any` | Reject `typing.Any` and its aliases. |
 | `forbid_object_type` | Reject `object` in annotations. |
 | `forbid_non_none_union` | Allow only nullable `T | None` / `Optional[T]` unions. |
-| `forbid_none_default_fill` | Reject nullable-value fallback expressions and replacing a `None` argument default at function entry. QA and benchmark paths are excluded in configuration. |
+| `forbid_none_default_fill` | Reject fallback for required nullable values and replacing a `None` argument default at function entry. A `None`-defaulted optional argument may select its declared default. QA and benchmark paths are excluded in configuration. |
 | `forbid_raise` | Reject explicit `raise` outside configured exception paths. |
 | `forbid_rtti` | Reject runtime type and reflection inspection outside configured paths. |
 | `forbid_test_backdoor` | Reject test-only hooks and configured test symbols in product code. |
