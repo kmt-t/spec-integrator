@@ -167,15 +167,13 @@ spec-integrator risk --config spec-integrator.yaml
 # Use Jev only when explicitly requested
 spec-integrator risk --backend jev
 ```
-The default backend is local Ollama with Clef Flash (`clef-flash`). `--backend jev` uses Jev (`typesafe/jev-1.13`) through OpenRouter.
+The project default backend and model are defined in `spec-integrator.yaml` and documented in the [configuration specification](docs/specification.md). `--backend jev` uses Jev (`typesafe/jev-1.13`) through OpenRouter.
 
-Clef Flash requires Ollama 0.35.1 or later. Pull it with `ollama pull clef-flash`. Set `context_window_tokens` to 65,536. System One request bodies are limited to 64 KiB.
-
-To change the model context length, create an Ollama model with `PARAMETER num_ctx` in a Modelfile, then set `model` and `context_window_tokens` to match it.
+System One request bodies are limited to 64 KiB. To change the local model context length, create an Ollama model with `PARAMETER num_ctx` in a Modelfile, then set `model` and `context_window_tokens` to match it.
 
 Risk assessment samples up to four definition and four reference sections. Each section is limited to the smaller of `500 characters × (context_window_tokens / 8,192)` and `llm_judge.section_char_budget`. The default maximum is 4,000 characters per section. Content may be shortened further to fit the request; omitted ranges are recorded in the assessment summary.
 
-Embeddings use local Ollama with `qwen3-embedding`. Set `OPENROUTER_API_KEY` only when using Jev. Configure Ollama endpoints with `llm_judge.backends.clef-flash.endpoint` and `embeddings.endpoint`. Run an LLM audit only when explicitly requested by the user.
+Embeddings use the `ollama` Python package (`ollama>=0.4.0`) with `ollama.Client(host=endpoint).embed(model=model, input=batch)`. The client batches inputs, retries failed requests three times, and verifies that each response contains one vector per input. The default embedding model remains `qwen3-embedding`; configure its endpoint with `embeddings.endpoint`. Set `OPENROUTER_API_KEY` only when using Jev. Run an LLM audit only when explicitly requested by the user.
 
 ### 8. Check terminology consistency (`llm-word`)
 

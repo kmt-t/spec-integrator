@@ -119,9 +119,9 @@ llm_judge:
       model: "typesafe/jev-1.13"
     clef-flash:
       endpoint: "http://localhost:11434/v1/systemone"
-      model: "clef-flash"
+      model: "nimble-v3:9b-q4_K_M"
       requires_api_key: false
-      context_window_tokens: 65536
+      context_window_tokens: 32768
 
 embeddings:
   endpoint: "http://localhost:11434"
@@ -132,7 +132,9 @@ terminology:
 
 Jev と Clef Flash はSystem One形式のチェックシートを処理する。既定のバックエンドはローカルのClef Flashであり、Jevは `--backend jev` で選択する。JevはAPIの確信度を返す。Clef Flashは選択確率の集中度を返す。この値は正答確率を表さない。両モデルとも説明文や引用箇所を生成しない。LLM監査の実行はバックエンドに関係なく、ユーザーから明示的な指示があった場合に限る。
 
-既定のローカルモデルは `clef-flash` であり、設定の `context_window_tokens` は65,536 tokenである。System Oneのリクエスト本文は64 KiBまでである。`llm_judge.section_char_budget` は各セクションの文字数を制限し、コンテキスト長は変更しない。
+System Oneのリクエスト本文は64 KiBまでである。`llm_judge.section_char_budget` は各セクションの文字数を制限し、コンテキスト長は変更しない。
+
+Ollama埋め込みのAPI呼び出し、バッチ、および再試行の契約は[ツールリファレンス](../README.md#7-assess-risk-and-derive-verification-obligations-risk)に記載する。
 
 モデルのコンテキスト長を変更する場合は、OllamaのModelfileで `PARAMETER num_ctx` を指定したモデルを作る。バックエンド設定の `model` と `context_window_tokens` を新しいモデルに合わせる。
 

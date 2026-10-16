@@ -1,5 +1,7 @@
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import pytest
 from spec_integrator.config import Config, LLMBackendConfig, LLMCheckRule
 from spec_integrator.judge.checksheet import Checksheet, submit_checksheet
 from spec_integrator.judge.llm_backend import call_ollama_embeddings
@@ -81,24 +83,68 @@ def test_clef_flash_uses_local_system_one_without_api_key():
 def test_embeddings_use_ollama_batches():
     config = Config()
     config.embeddings.endpoint = "http://localhost:11434/"
-    first = Mock(status_code=200)
-    first.json.return_value = {"embeddings": [[1.0, 0.0], [0.0, 1.0]]}
-    second = Mock(status_code=200)
-    second.json.return_value = {"embeddings": [[0.5, 0.5]]}
+    client = Mock()
+    client.__enter__ = Mock(return_value=client)
+    client.__exit__ = Mock(return_value=False)
+    client.embed.side_effect = [
+        SimpleNamespace(embeddings=[[1.0, 0.0], [0.0, 1.0]]),
+        SimpleNamespace(embeddings=[[0.5, 0.5]]),
+    ]
 
     with patch(
-        "spec_integrator.judge.llm_backend.requests.post", side_effect=[first, second]
-    ) as post:
+        "spec_integrator.judge.llm_backend.ollama.Client", return_value=client
+    ) as client_type:
         vectors = call_ollama_embeddings(config, ["a", "b", "c"], "qwen3-embedding", 2)
 
     assert vectors == [[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]]
-    assert post.call_count == 2
-    assert post.call_args_list[0].args == ("http://localhost:11434/api/embed",)
-    assert post.call_args_list[0].kwargs["json"] == {
+    client_type.assert_called_once_with(host="http://localhost:11434/", timeout=60)
+    assert client.embed.call_count == 2
+    assert client.embed.call_args_list[0].kwargs == {
         "model": "qwen3-embedding",
         "input": ["a", "b"],
     }
-    assert post.call_args_list[1].kwargs["json"]["input"] == ["c"]
+    assert client.embed.call_args_list[1].kwargs == {
+        "model": "qwen3-embedding",
+        "input": ["c"],
+    }
+
+
+def test_embeddings_connection_failure_retries_and_preserves_runtime_error():
+    config = Config()
+    client = Mock()
+    client.__enter__ = Mock(return_value=client)
+    client.__exit__ = Mock(return_value=False)
+    client.embed.side_effect = ConnectionError("connection refused")
+
+    with (
+        patch("spec_integrator.judge.llm_backend.ollama.Client", return_value=client),
+        patch("spec_integrator.judge.llm_backend.time.sleep") as sleep,
+        pytest.raises(
+            RuntimeError, match="Failed to fetch Ollama embeddings after 3 attempts"
+        ) as error,
+    ):
+        call_ollama_embeddings(config, ["a"], "qwen3-embedding")
+
+    assert client.embed.call_count == 3
+    assert sleep.call_count == 2
+    assert "connection refused" in str(error.value)
+
+
+def test_embeddings_reject_response_with_wrong_vector_count():
+    config = Config()
+    client = Mock()
+    client.__enter__ = Mock(return_value=client)
+    client.__exit__ = Mock(return_value=False)
+    client.embed.return_value = SimpleNamespace(embeddings=[[1.0, 0.0]])
+
+    with (
+        patch("spec_integrator.judge.llm_backend.ollama.Client", return_value=client),
+        patch("spec_integrator.judge.llm_backend.time.sleep"),
+        pytest.raises(RuntimeError, match="Failed to fetch Ollama embeddings after 3 attempts"),
+    ):
+        call_ollama_embeddings(config, ["a", "b"], "qwen3-embedding")
+
+    assert client.embed.call_count == 3
 
 
 def test_review_maps_checksheet_decision_to_failure():
