@@ -183,7 +183,7 @@ Jev と Clef Flash はSystem One形式のチェックシートを処理する。
 | **Obligation Gate** | リスク評価（`risk`）によって課された `{VERIFY_LLM}` 検証義務の履行状況検証 | 高リスクキーワードへの検証タグ欠落、または記録済み LLM 判定の FAIL。LLM 評価の未実施・未固定・陳腐化・対象漏れは警告 |
 | **Consistency Gate** | 連動修正の未伝播、シンボル値の不一致、旧値の残存検証 | 同一シンボルの不一致や禁止パターンの残存 |
 
-この表は `check-doc` の文書ゲートを示す。ソースコード検査 `check-src` の規則一覧は [README](../README.md) に置き、個別プロジェクトの有効範囲と設定値はルートの `spec-integrator.yaml` を正本とする。
+この表は `check-doc` の文書ゲートを示す。ソースコード検査 `check-src` の規則一覧（`complexity` を含む）は [README](../README.md) に置き、個別プロジェクトの有効範囲と設定値はルートの `spec-integrator.yaml` を正本とする。
 
 ---
 
