@@ -198,7 +198,7 @@ class LLMJudgeConfig:
 class EmbeddingConfig:
     """Ollama endpoint shared by terminology and section embeddings."""
 
-    endpoint: str = "http://10.180.25.1:11434"
+    endpoint: str = "http://localhost:11434"
 
 
 @dataclass

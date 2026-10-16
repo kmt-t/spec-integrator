@@ -78,7 +78,7 @@ def test_nimble_risk_context_fits_request_limit_and_reports_sampling(
 
     config = Config()
     config.llm_judge.backends["nimble"] = LLMBackendConfig(
-        endpoint="http://10.180.25.1:11434/v1/systemone",
+        endpoint="http://localhost:11434/v1/systemone",
         model="nimble-v3:9b-q4_K_M",
         requires_api_key=False,
         context_window_tokens=context_window_tokens,

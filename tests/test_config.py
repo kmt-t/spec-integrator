@@ -47,7 +47,7 @@ def test_project_config_defaults_to_nimble_v3():
 
     assert cfg.llm_judge.default_backend == "nimble"
     assert list(cfg.llm_judge.backends) == ["jev", "nimble"]
-    assert cfg.llm_judge.backends["nimble"].endpoint == ("http://10.180.25.1:11434/v1/systemone")
+    assert cfg.llm_judge.backends["nimble"].endpoint == ("http://localhost:11434/v1/systemone")
     assert cfg.llm_judge.backends["nimble"].model == "nimble-v3:9b-q4_K_M"
     assert not cfg.llm_judge.backends["nimble"].requires_api_key
     assert cfg.llm_judge.backends["nimble"].context_window_tokens == 32768

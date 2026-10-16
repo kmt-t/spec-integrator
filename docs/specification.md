@@ -118,13 +118,13 @@ llm_judge:
       endpoint: "https://openrouter.ai/api/alpha/decisions"
       model: "typesafe/jev-1.13"
     nimble:
-      endpoint: "http://10.180.25.1:11434/v1/systemone"
+      endpoint: "http://localhost:11434/v1/systemone"
       model: "nimble-v3:9b-q4_K_M"
       requires_api_key: false
       context_window_tokens: 32768
 
 embeddings:
-  endpoint: "http://10.180.25.1:11434"
+  endpoint: "http://localhost:11434"
 
 terminology:
   embedding_model: "qwen3-embedding"

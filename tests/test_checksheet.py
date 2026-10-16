@@ -47,7 +47,7 @@ def test_checksheet_uses_system_one_decisions_api(monkeypatch):
 def test_nimble_uses_host_system_one_without_api_key():
     config = Config()
     config.llm_judge.backends["nimble"] = LLMBackendConfig(
-        endpoint="http://10.180.25.1:11434/v1/systemone",
+        endpoint="http://localhost:11434/v1/systemone",
         model="nimble-v3:9b-q4_K_M",
         requires_api_key=False,
     )
@@ -71,7 +71,7 @@ def test_nimble_uses_host_system_one_without_api_key():
         result = submit_checksheet(config, sheet, backend="nimble")
 
     assert result == response.json.return_value
-    assert post.call_args.args == ("http://10.180.25.1:11434/v1/systemone",)
+    assert post.call_args.args == ("http://localhost:11434/v1/systemone",)
     assert post.call_args.kwargs["json"] == {
         "model": "nimble-v3:9b-q4_K_M",
         "state": sheet.state,
@@ -82,7 +82,7 @@ def test_nimble_uses_host_system_one_without_api_key():
 
 def test_embeddings_use_ollama_batches():
     config = Config()
-    config.embeddings.endpoint = "http://10.180.25.1:11434/"
+    config.embeddings.endpoint = "http://localhost:11434/"
     client = Mock()
     client.__enter__ = Mock(return_value=client)
     client.__exit__ = Mock(return_value=False)
@@ -97,7 +97,7 @@ def test_embeddings_use_ollama_batches():
         vectors = call_ollama_embeddings(config, ["a", "b", "c"], "qwen3-embedding", 2)
 
     assert vectors == [[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]]
-    client_type.assert_called_once_with(host="http://10.180.25.1:11434/", timeout=60)
+    client_type.assert_called_once_with(host="http://localhost:11434/", timeout=60)
     assert client.embed.call_count == 2
     assert client.embed.call_args_list[0].kwargs == {
         "model": "qwen3-embedding",
@@ -241,7 +241,7 @@ def test_review_low_confidence_confirmation_is_warning_not_failure():
 def test_nimble_review_labels_backend_score():
     config = Config()
     config.llm_judge.backends["nimble"] = LLMBackendConfig(
-        endpoint="http://10.180.25.1:11434/v1/systemone",
+        endpoint="http://localhost:11434/v1/systemone",
         model="nimble-v3:9b-q4_K_M",
         requires_api_key=False,
     )
@@ -289,7 +289,7 @@ def test_nimble_review_labels_backend_score():
 def test_nimble_review_evidence_budget_fits_configured_context_window():
     config = Config()
     config.llm_judge.backends["nimble"] = LLMBackendConfig(
-        endpoint="http://10.180.25.1:11434/v1/systemone",
+        endpoint="http://localhost:11434/v1/systemone",
         model="nimble-v3:9b-q4_K_M",
         requires_api_key=False,
         context_window_tokens=8192,
@@ -314,7 +314,7 @@ def test_nimble_review_evidence_budget_fits_configured_context_window():
 def test_nimble_review_splits_checks_into_context_bounded_requests():
     config = Config()
     config.llm_judge.backends["nimble"] = LLMBackendConfig(
-        endpoint="http://10.180.25.1:11434/v1/systemone",
+        endpoint="http://localhost:11434/v1/systemone",
         model="nimble-v3:9b-q4_K_M",
         requires_api_key=False,
         context_window_tokens=8192,

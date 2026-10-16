@@ -169,7 +169,7 @@ spec-integrator risk --backend jev
 ```
 The project default backend and model are defined in `spec-integrator.yaml` and documented in the [configuration specification](docs/specification.md). `--backend jev` uses Jev (`typesafe/jev-1.13`) through OpenRouter.
 
-System One request bodies are limited to 64 KiB. This project runs inside LXC while Ollama runs on the host, so its configured endpoint uses the LXD host bridge address. Ollama must listen on that bridge address for the container to connect; a loopback-only listener is reachable from the host itself but not from LXC. To change the model context length, create an Ollama model with `PARAMETER num_ctx` in a Modelfile, then set `model` and `context_window_tokens` to match it.
+System One request bodies are limited to 64 KiB. The endpoint must be reachable from the environment running this command; `localhost` refers to that environment. Confirm the Ollama listen address and container network before configuring the endpoint. To change the model context length, create an Ollama model with `PARAMETER num_ctx` in a Modelfile, then set `model` and `context_window_tokens` to match it.
 
 Risk assessment samples up to four definition and four reference sections. Each section is limited to the smaller of `500 characters × (context_window_tokens / 8,192)` and `llm_judge.section_char_budget`. The default maximum is 4,000 characters per section. Content may be shortened further to fit the request; omitted ranges are recorded in the assessment summary.
 
@@ -280,13 +280,13 @@ llm_judge:
       endpoint: "https://openrouter.ai/api/alpha/decisions"
       model: "typesafe/jev-1.13"
     nimble:
-      endpoint: "http://10.180.25.1:11434/v1/systemone"
+      endpoint: "http://localhost:11434/v1/systemone"
       model: "nimble-v3:9b-q4_K_M"
       requires_api_key: false
       context_window_tokens: 32768
 
 embeddings:
-  endpoint: "http://10.180.25.1:11434"
+  endpoint: "http://localhost:11434"
 
 terminology:
   embedding_model: "qwen3-embedding"
