@@ -11,11 +11,11 @@ from spec_integrator.models import (
     RiskAssessmentReport,
 )
 
-CLEF_FLASH_RISK_REQUEST_BUDGET_BYTES = 56 * 1024
-CLEF_FLASH_DEFAULT_CONTEXT_TOKENS = 65536
-CLEF_FLASH_CONTEXT_BUDGET_BASELINE_TOKENS = 8192
-CLEF_FLASH_RISK_SECTION_CHAR_BUDGET = 500
-CLEF_FLASH_CONTEXT_SECTIONS_PER_KIND = 4
+NIMBLE_RISK_REQUEST_BUDGET_BYTES = 56 * 1024
+NIMBLE_DEFAULT_CONTEXT_TOKENS = 32768
+NIMBLE_CONTEXT_BUDGET_BASELINE_TOKENS = 8192
+NIMBLE_RISK_SECTION_CHAR_BUDGET = 500
+NIMBLE_CONTEXT_SECTIONS_PER_KIND = 4
 
 
 class RiskAssessor(BaseJudge):
@@ -103,8 +103,8 @@ class RiskAssessor(BaseJudge):
                 backend_label = BACKEND_LABELS[backend]
                 questions = self._risk_questions()
                 context_note = ""
-                if backend == "clef-flash":
-                    state, context_note = self._fit_clef_flash_risk_context(
+                if backend == "nimble":
+                    state, context_note = self._fit_nimble_risk_context(
                         keyword=keyword,
                         model=model,
                         reference_count=len(reference_ids),
@@ -171,7 +171,7 @@ class RiskAssessor(BaseJudge):
     @staticmethod
     def _sample_section_ids(section_ids: list[str]) -> list[str]:
         """Selects an evenly spaced sample while retaining document coverage."""
-        limit = CLEF_FLASH_CONTEXT_SECTIONS_PER_KIND
+        limit = NIMBLE_CONTEXT_SECTIONS_PER_KIND
         if len(section_ids) <= limit:
             return section_ids
         indexes = {round(index * (len(section_ids) - 1) / (limit - 1)) for index in range(limit)}
@@ -214,7 +214,7 @@ class RiskAssessor(BaseJudge):
             },
         }
 
-    def _fit_clef_flash_risk_context(
+    def _fit_nimble_risk_context(
         self,
         keyword: str,
         model: str | None,
@@ -225,9 +225,11 @@ class RiskAssessor(BaseJudge):
         questions: dict[str, dict],
     ) -> tuple[dict, str]:
         """Fits a sampled, configured-length risk context under Ollama's 64 KiB limit."""
-        backend_config = self.config.llm_judge.backends.get("clef-flash")
+        backend_config = self.config.llm_judge.backends.get("nimble")
         selected_model = model or (
-            backend_config.model if backend_config and backend_config.model else "clef-flash"
+            backend_config.model
+            if backend_config and backend_config.model
+            else "nimble-v3:9b-q4_K_M"
         )
         definition_sections = self._sample_section_ids(definition_ids)
         referencing_sections = self._sample_section_ids(reference_ids)
@@ -235,14 +237,14 @@ class RiskAssessor(BaseJudge):
         context_window_tokens = (
             backend_config.context_window_tokens
             if backend_config and backend_config.context_window_tokens is not None
-            else CLEF_FLASH_DEFAULT_CONTEXT_TOKENS
+            else NIMBLE_DEFAULT_CONTEXT_TOKENS
         )
         if context_window_tokens < 1:
-            raise ValueError("Clef Flash context_window_tokens must be positive")
+            raise ValueError("Nimble context_window_tokens must be positive")
         context_section_budget = (
-            CLEF_FLASH_RISK_SECTION_CHAR_BUDGET
+            NIMBLE_RISK_SECTION_CHAR_BUDGET
             * context_window_tokens
-            // CLEF_FLASH_CONTEXT_BUDGET_BASELINE_TOKENS
+            // NIMBLE_CONTEXT_BUDGET_BASELINE_TOKENS
         )
         section_char_limit = (
             min(context_section_budget, configured_budget)
@@ -268,7 +270,7 @@ class RiskAssessor(BaseJudge):
             context_note = ""
             if omitted_sections or section_truncated:
                 context_note = (
-                    f"Context was limited to fit Clef Flash's {context_window_tokens:,}-token context "
+                    f"Context was limited to fit Nimble's {context_window_tokens:,}-token context "
                     "and Ollama's "
                     "64 KiB request body: included "
                     f"{len(definition_sections)} of {len(definition_ids)} definition sections and "
@@ -285,12 +287,12 @@ class RiskAssessor(BaseJudge):
                 state["context_limit_note"] = context_note
             payload = {"model": selected_model, "state": state, "questions": questions}
             body_size = len(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
-            if body_size <= CLEF_FLASH_RISK_REQUEST_BUDGET_BYTES:
+            if body_size <= NIMBLE_RISK_REQUEST_BUDGET_BYTES:
                 return state, context_note
             section_char_limit = max(1, section_char_limit - 100)
 
         raise ValueError(
-            "Risk-assessment checksheet cannot be reduced below Clef Flash's request limit."
+            "Risk-assessment checksheet cannot be reduced below Nimble's request limit."
         )
 
 

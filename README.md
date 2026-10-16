@@ -76,7 +76,7 @@ Dependencies are derived from existing `{Keyword}` traceability; no separate co-
 
 - **Risk assessment and verification obligations (`risk`):** Scores design risk for requirement and design keywords. Keywords above the configured threshold require `{VERIFY_LLM}`. Results are stored in SQLite.
 - **Terminology consistency (`llm-word`):** Combines TF-IDF terms, embedding similarity, and contextual judgments to find terminology drift and likely typos.
-- **System One checklist audits (`llm-single-review`, `llm-keyword-review`):** Review document sections or keyword definition/reference pairs with typed questions and evidence. Jev returns confidence; Clef Flash returns probability concentration. Neither produces explanatory text or citations.
+- **System One checklist audits (`llm-single-review`, `llm-keyword-review`):** Review document sections or keyword definition/reference pairs with typed questions and evidence. Jev returns API confidence; Nimble returns a backend-specific score. The score is not calibrated as a probability that a verdict is correct. Neither backend produces explanatory text or citations.
 - **SQLite audit cache (`DocAuditDB`):** Stores document structure, hash-based incremental checks, risk results, classifications, and backend-specific scores.
 - **CI and GitHub Actions:** Produces a single Markdown report with rule revisions, summary tables, findings, traceability, risk assessments, and recorded LLM results.
 
@@ -169,7 +169,7 @@ spec-integrator risk --backend jev
 ```
 The project default backend and model are defined in `spec-integrator.yaml` and documented in the [configuration specification](docs/specification.md). `--backend jev` uses Jev (`typesafe/jev-1.13`) through OpenRouter.
 
-System One request bodies are limited to 64 KiB. To change the local model context length, create an Ollama model with `PARAMETER num_ctx` in a Modelfile, then set `model` and `context_window_tokens` to match it.
+System One request bodies are limited to 64 KiB. This project runs inside LXC while Ollama runs on the host, so its configured endpoint uses the LXD host bridge address. Ollama must listen on that bridge address for the container to connect; a loopback-only listener is reachable from the host itself but not from LXC. To change the model context length, create an Ollama model with `PARAMETER num_ctx` in a Modelfile, then set `model` and `context_window_tokens` to match it.
 
 Risk assessment samples up to four definition and four reference sections. Each section is limited to the smaller of `500 characters × (context_window_tokens / 8,192)` and `llm_judge.section_char_budget`. The default maximum is 4,000 characters per section. Content may be shortened further to fit the request; omitted ranges are recorded in the assessment summary.
 
@@ -191,17 +191,17 @@ spec-integrator llm-word
 # Audit one document or section
 spec-integrator llm-single-review --file docs/components/tier1_core/os_scheduler.md
 
-# Use local Clef Flash for one document
-spec-integrator llm-single-review --file docs/components/tier1_core/os_scheduler.md --backend clef-flash
+# Use local Nimble for one document
+spec-integrator llm-single-review --file docs/components/tier1_core/os_scheduler.md --backend nimble
 
 # Audit a high-risk keyword's definition/reference pair
 spec-integrator llm-keyword-review --keyword SCHED_DISPATCH_TIMEOUT
 
 # Search stored findings without an API call
 spec-integrator llm-findings --min-confidence 0.70
-spec-integrator llm-findings --backend clef-flash --min-confidence 0.70
+spec-integrator llm-findings --backend nimble --min-confidence 0.70
 ```
-Document-review checklists classify each criterion and store backend-specific scores. Jev returns API confidence. Clef Flash returns probability concentration, which is not the probability that a verdict is correct. By default, `llm-findings` searches the current backend; use `--backend` to query another backend. Findings are classified as clear violations, possible violations, known unresolved issues, insufficient context, recommendations, or no issue. Clear violations produce `FAIL` or `WARN` according to configured severity. Possible violations and insufficient context produce `WARN`; unresolved issues and recommendations produce `INFO`.
+Document-review checklists classify each criterion and store backend-specific scores. Jev returns API confidence; Nimble returns a backend score that is not calibrated as a probability that a verdict is correct. By default, `llm-findings` searches the current backend; use `--backend` to query another backend. Findings are classified as clear violations, possible violations, known unresolved issues, insufficient context, recommendations, or no issue. Clear violations produce `FAIL` or `WARN` according to configured severity. Possible violations and insufficient context produce `WARN`; unresolved issues and recommendations produce `INFO`.
 
 Keyword audits send each definition section and each traceability reference section as a separate `DEFINITION` or `REFERENCE` item to the selected backend. Re-read the cited sections when evaluating `WARN` or `INFO` findings.
 
@@ -272,21 +272,21 @@ wit_verification:
 
 llm_judge:
   tag: "{VERIFY_LLM}"
-  default_backend: "clef-flash"
+  default_backend: "nimble"
   error_score_threshold: 0.70
   backends:
     jev:
       api_key_env: "OPENROUTER_API_KEY"
       endpoint: "https://openrouter.ai/api/alpha/decisions"
       model: "typesafe/jev-1.13"
-    clef-flash:
-      endpoint: "http://localhost:11434/v1/systemone"
-      model: "clef-flash"
+    nimble:
+      endpoint: "http://10.180.25.1:11434/v1/systemone"
+      model: "nimble-v3:9b-q4_K_M"
       requires_api_key: false
-      context_window_tokens: 65536
+      context_window_tokens: 32768
 
 embeddings:
-  endpoint: "http://localhost:11434"
+  endpoint: "http://10.180.25.1:11434"
 
 terminology:
   embedding_model: "qwen3-embedding"

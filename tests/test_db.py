@@ -67,11 +67,11 @@ def test_judge_evaluations_can_be_filtered_by_backend():
         ],
         covered_files=["doc.md"],
     )
-    clef_flash_result = JudgeResult(
+    nimble_result = JudgeResult(
         item_id="doc.md#section",
         item_label="doc.md#section",
         status="WARN",
-        summary="Clef Flash test judgment",
+        summary="Nimble test judgment",
         evaluations=[
             JudgeEvaluation(
                 check_id="clarity",
@@ -84,12 +84,12 @@ def test_judge_evaluations_can_be_filtered_by_backend():
         covered_files=["doc.md"],
     )
     db.save_judge_evaluations("llm-single-review", [jev_result], backend="jev")
-    db.save_judge_evaluations("llm-single-review", [clef_flash_result], backend="clef-flash")
+    db.save_judge_evaluations("llm-single-review", [nimble_result], backend="nimble")
 
-    rows = db.get_judge_evaluations(backend="clef-flash")
+    rows = db.get_judge_evaluations(backend="nimble")
 
     assert len(rows) == 1
-    assert rows[0]["backend"] == "clef-flash"
+    assert rows[0]["backend"] == "nimble"
     assert rows[0]["confidence"] == 0.81
     db.close()
 
@@ -119,14 +119,14 @@ def test_term_variance_lookups_are_scoped_to_backend():
         is_variance=True,
         confidence=0.9,
         preferred_term="dispatcher",
-        reason="Clef Flash result",
-        backend="clef-flash",
+        reason="Nimble result",
+        backend="nimble",
     )
 
     assert db.is_similarity_judged("scheduler", "dispatcher", backend="jev")
-    assert db.is_similarity_judged("scheduler", "dispatcher", backend="clef-flash")
-    assert [row["backend"] for row in db.get_high_confidence_variances(backend="clef-flash")] == [
-        "clef-flash"
+    assert db.is_similarity_judged("scheduler", "dispatcher", backend="nimble")
+    assert [row["backend"] for row in db.get_high_confidence_variances(backend="nimble")] == [
+        "nimble"
     ]
     assert [row["backend"] for row in db.get_high_confidence_variances(backend="jev")] == ["jev"]
     db.close()
@@ -230,7 +230,7 @@ def test_legacy_term_variance_rows_migrate_without_losing_backend_history(tmp_pa
 
     db = DocAuditDB(db_path)
     assert db.is_similarity_judged("scheduler", "dispatcher", backend="jev")
-    assert not db.is_similarity_judged("scheduler", "dispatcher", backend="clef-flash")
+    assert not db.is_similarity_judged("scheduler", "dispatcher", backend="nimble")
     db.insert_term_variance_judgment(
         term_a="scheduler",
         term_b="dispatcher",
@@ -241,13 +241,13 @@ def test_legacy_term_variance_rows_migrate_without_losing_backend_history(tmp_pa
         is_variance=False,
         confidence=0.6,
         preferred_term="scheduler",
-        reason="Clef Flash row",
-        backend="clef-flash",
+        reason="Nimble row",
+        backend="nimble",
     )
     assert db.is_similarity_judged("scheduler", "dispatcher", backend="jev")
-    assert db.is_similarity_judged("scheduler", "dispatcher", backend="clef-flash")
+    assert db.is_similarity_judged("scheduler", "dispatcher", backend="nimble")
     assert {row["backend"] for row in db.get_all_term_variance_judgments()} == {
         "jev",
-        "clef-flash",
+        "nimble",
     }
     db.close()

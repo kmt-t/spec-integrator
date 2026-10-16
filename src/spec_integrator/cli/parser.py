@@ -13,7 +13,7 @@ from spec_integrator.application.commands.llm.word import cmd_llm_word
 from spec_integrator.document.commands import cmd_build, cmd_check_doc, cmd_format_doc
 from spec_integrator.source.commands import cmd_check_src, cmd_format_src
 
-CHECKSHEET_BACKENDS = ("jev", "clef-flash", "mock")
+CHECKSHEET_BACKENDS = ("jev", "nimble", "mock")
 
 
 def _add_config_arg(parser: argparse.ArgumentParser) -> None:

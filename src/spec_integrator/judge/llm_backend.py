@@ -10,11 +10,11 @@ from spec_integrator.config import Config
 
 RETRIES = 3
 RETRY_SLEEP_SECONDS = 2
-SYSTEM_ONE_BACKENDS = ("jev", "clef-flash")
-BACKEND_LABELS = {"jev": "Jev", "clef-flash": "Clef Flash"}
+SYSTEM_ONE_BACKENDS = ("jev", "nimble")
+BACKEND_LABELS = {"jev": "Jev", "nimble": "Nimble"}
 BACKEND_DEFAULT_MODELS = {
     "jev": "typesafe/jev-1.13",
-    "clef-flash": "nimble-v3:9b-q4_K_M",
+    "nimble": "nimble-v3:9b-q4_K_M",
 }
 
 

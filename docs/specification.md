@@ -111,26 +111,26 @@ formal_verification:
 # LLM as a Judge の設定
 llm_judge:
   tag: "{VERIFY_LLM}"
-  default_backend: "clef-flash"            # ローカル Ollama の型付き判定モデル
+  default_backend: "nimble"            # ローカル Ollama の型付き判定モデル
   backends:
     jev:
       api_key_env: "OPENROUTER_API_KEY"
       endpoint: "https://openrouter.ai/api/alpha/decisions"
       model: "typesafe/jev-1.13"
-    clef-flash:
-      endpoint: "http://localhost:11434/v1/systemone"
+    nimble:
+      endpoint: "http://10.180.25.1:11434/v1/systemone"
       model: "nimble-v3:9b-q4_K_M"
       requires_api_key: false
       context_window_tokens: 32768
 
 embeddings:
-  endpoint: "http://localhost:11434"
+  endpoint: "http://10.180.25.1:11434"
 
 terminology:
   embedding_model: "qwen3-embedding"
 ```
 
-Jev と Clef Flash はSystem One形式のチェックシートを処理する。既定のバックエンドはローカルのClef Flashであり、Jevは `--backend jev` で選択する。JevはAPIの確信度を返す。Clef Flashは選択確率の集中度を返す。この値は正答確率を表さない。両モデルとも説明文や引用箇所を生成しない。LLM監査の実行はバックエンドに関係なく、ユーザーから明示的な指示があった場合に限る。
+Jev と Nimble はSystem One形式のチェックシートを処理する。既定のバックエンドはNimbleであり、Jevは `--backend jev` で選択する。JevはAPIの確信度を返す。Nimbleの結果はバックエンド固有のスコアとして扱い、正答確率とはみなさない。両バックエンドとも説明文や引用箇所を生成しない。LLM監査の実行はバックエンドに関係なく、ユーザーから明示的な指示があった場合に限る。
 
 System Oneのリクエスト本文は64 KiBまでである。`llm_judge.section_char_budget` は各セクションの文字数を制限し、コンテキスト長は変更しない。
 
@@ -318,7 +318,7 @@ CREATE INDEX idx_judge_evaluations_confidence
     ON judge_evaluations (confidence DESC);
 ```
 
-型付き判定バックエンドの結果をチェック単位で記録する。バックエンド固有のスコアは0.0〜1.0の実数で保存する。`llm-findings --min-confidence 0.70` は既定バックエンドだけを検索する。`--backend clef-flash` を指定するとClef Flashの結果を検索する。
+型付き判定バックエンドの結果をチェック単位で記録する。バックエンド固有のスコアは0.0〜1.0の実数で保存する。`llm-findings --min-confidence 0.70` は既定バックエンドだけを検索する。`--backend nimble` を指定するとNimbleの結果を検索する。
 
 ---
 
@@ -379,7 +379,7 @@ spec-integrator risk [OPTIONS]
 ```
 - **オプション**:
   - `-c, --config PATH`: 設定ファイルパス
-  - `--backend [jev|clef-flash|mock]`: チェックシートの判定バックエンド。JevとClef Flashは説明文や引用箇所を生成しない
+  - `--backend [jev|nimble|mock]`: チェックシートの判定バックエンド。JevとNimbleは説明文や引用箇所を生成しない
   - `--model TEXT`: モデル名の明示的オーバーライド
   - `-r, --report PATH`: リスクレポート出力先
 
@@ -426,7 +426,7 @@ DBに保存されたLLM判定をバックエンド固有スコアと分類で検
 spec-integrator llm-findings --min-confidence 0.70
 spec-integrator llm-findings --min-confidence 0.70 --run-type llm-keyword-review
 spec-integrator llm-findings --min-confidence 0.70 --all-outcomes --limit 0
-spec-integrator llm-findings --backend clef-flash --min-confidence 0.70
+spec-integrator llm-findings --backend nimble --min-confidence 0.70
 ```
 - **オプション**:
   - `--min-confidence FLOAT`: 最小バックエンド固有スコア（0.0〜1.0、既定値: 0.70）

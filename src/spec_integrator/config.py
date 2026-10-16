@@ -183,7 +183,7 @@ class LLMCheckRule:
 @dataclass
 class LLMJudgeConfig:
     tag: str = "{VERIFY_LLM}"
-    default_backend: str = "clef-flash"
+    default_backend: str = "nimble"
     backends: dict[str, LLMBackendConfig] = field(default_factory=dict)
     section_char_budget: int = 8000
     error_score_threshold: float = 0.70
@@ -198,7 +198,7 @@ class LLMJudgeConfig:
 class EmbeddingConfig:
     """Ollama endpoint shared by terminology and section embeddings."""
 
-    endpoint: str = "http://localhost:11434"
+    endpoint: str = "http://10.180.25.1:11434"
 
 
 @dataclass

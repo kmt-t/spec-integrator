@@ -73,7 +73,7 @@ def cmd_llm_word(args):
     )
     conf_thresh = int(config.terminology.confidence_threshold * 100)
     backend_label = BACKEND_LABELS.get(used_backend, used_backend)
-    metric_label = "probability concentration" if used_backend == "clef-flash" else "confidence"
+    metric_label = "backend score" if used_backend == "nimble" else "confidence"
     print(
         f"\n### 2. LLM Contextual Term Variances ({backend_label} {metric_label} >= "
         f"{conf_thresh}%: {len(variances)} detected)"
