@@ -145,6 +145,8 @@ The `python_pysim` group applies Ruff and the AST rules configured in the projec
 
 Separate checks in this group validate `assert` side effects, configured Tier import direction, and the PySIM unit-test suite. Built-in `dict`, `set`, and `list`, the `in` operator, and tuple reconstruction are not prohibited by this group's rules. The YAML configuration is the source of truth for enabled rules and exclusions.
 
+The configured `complexity` check also runs for the `cpp` and `python_pysim` source groups. It uses lizard's Python API to reject functions above the configured cyclomatic-complexity threshold, ratchet listed baseline functions against increases, and warn when an allowlisted function reaches the threshold. Source scopes, exclusions, and baselines are configured in the project-root `spec-integrator.yaml`.
+
 ### 6. Visualize the DocGraph (`graph`)
 
 ```bash

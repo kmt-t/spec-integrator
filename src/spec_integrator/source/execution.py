@@ -1,10 +1,13 @@
 """External tool and test execution for source verification."""
 
+import fnmatch
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import lizard
 
 from spec_integrator.config import Config
 from spec_integrator.source.models import SourceIssue
@@ -48,6 +51,7 @@ class SourceExecution:
     """Runs external source tools and translates failures into source issues."""
 
     def __init__(self, config: Config):
+        self.config = config
         self.root_dir = config.config_dir
 
     def _relative_path(self, file_path: Path) -> str:
@@ -80,6 +84,125 @@ class SourceExecution:
                         rule="PY-RUFF-LINT",
                         severity="ERROR",
                         message=line,
+                        group=group_name,
+                    )
+                )
+        return issues
+
+    def run_complexity(self, files: list[Path], group_name: str) -> list[SourceIssue]:
+        """Checks configured function CCN and ratchets existing exceptions with lizard."""
+        complexity = self.config.source_verification.complexity
+        target = complexity.targets.get(group_name)
+        threshold = complexity.threshold
+        if threshold is None:
+            return [
+                SourceIssue(
+                    file_path="spec-integrator.yaml",
+                    line=1,
+                    rule="SRC-COMPLEXITY-CONFIG",
+                    severity="ERROR",
+                    message="No complexity threshold is configured.",
+                    group=group_name,
+                )
+            ]
+        if target is None:
+            return [
+                SourceIssue(
+                    file_path="spec-integrator.yaml",
+                    line=1,
+                    rule="SRC-COMPLEXITY-CONFIG",
+                    severity="ERROR",
+                    message=f"No complexity target is configured for source group '{group_name}'.",
+                    group=group_name,
+                )
+            ]
+
+        allowances = {
+            (entry.file.replace("\\", "/"), entry.function, entry.line): entry
+            for entry in complexity.allowlist
+            if entry.group == group_name
+        }
+        seen_allowances: set[tuple[str, str, int]] = set()
+        issues: list[SourceIssue] = []
+        for file_path in files:
+            relative_path = self._relative_path(file_path)
+            if file_path.suffix.lower() not in target.extensions:
+                continue
+            if not any(
+                fnmatch.fnmatchcase(relative_path, pattern.replace("\\", "/"))
+                for pattern in target.include_paths
+            ):
+                continue
+            if any(
+                fnmatch.fnmatchcase(relative_path, pattern.replace("\\", "/"))
+                for pattern in target.exclude_paths
+            ):
+                continue
+
+            analyzed_file = lizard.analyze_file(str(file_path))
+            for function in analyzed_file.function_list:
+                key = (relative_path, function.name, function.start_line)
+                allowance = allowances.get(key)
+                ccn = function.cyclomatic_complexity
+                if allowance is not None:
+                    seen_allowances.add(key)
+                    if ccn > allowance.ccn:
+                        issues.append(
+                            SourceIssue(
+                                file_path=relative_path,
+                                line=function.start_line,
+                                rule="SRC-COMPLEXITY-RATCHET",
+                                severity="ERROR",
+                                message=(
+                                    f"Function '{function.name}' has CCN {ccn}, above its "
+                                    f"allowlisted baseline {allowance.ccn} (limit "
+                                    f"{threshold}; {function.length} lines)."
+                                ),
+                                group=group_name,
+                            )
+                        )
+                    elif ccn <= threshold:
+                        issues.append(
+                            SourceIssue(
+                                file_path=relative_path,
+                                line=function.start_line,
+                                rule="SRC-COMPLEXITY-ALLOWLIST-STALE",
+                                severity="WARNING",
+                                message=(
+                                    f"Function '{function.name}' is now at CCN {ccn} "
+                                    f"(limit {threshold}; {function.length} lines); "
+                                    "remove it from the complexity allowlist."
+                                ),
+                                group=group_name,
+                            )
+                        )
+                elif ccn > threshold:
+                    issues.append(
+                        SourceIssue(
+                            file_path=relative_path,
+                            line=function.start_line,
+                            rule="SRC-COMPLEXITY",
+                            severity="ERROR",
+                            message=(
+                                f"Function '{function.name}' has CCN {ccn}; limit "
+                                f"{threshold} ({function.length} lines, reference only)."
+                            ),
+                            group=group_name,
+                        )
+                    )
+
+        for key, allowance in allowances.items():
+            if key not in seen_allowances:
+                issues.append(
+                    SourceIssue(
+                        file_path=allowance.file.replace("\\", "/"),
+                        line=1,
+                        rule="SRC-COMPLEXITY-ALLOWLIST-STALE",
+                        severity="WARNING",
+                        message=(
+                            f"Allowlisted function '{allowance.function}' with baseline CCN "
+                            f"{allowance.ccn} was not found; remove it from the complexity allowlist."
+                        ),
                         group=group_name,
                     )
                 )

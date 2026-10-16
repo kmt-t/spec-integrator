@@ -355,11 +355,86 @@ class SourceGroupConfig:
 
 
 @dataclass
+class ComplexityTargetConfig:
+    """File scope for one configured source group's complexity check."""
+
+    include_paths: list[str] = field(default_factory=list)
+    exclude_paths: list[str] = field(default_factory=list)
+    extensions: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        for name, values in (
+            ("include_paths", self.include_paths),
+            ("exclude_paths", self.exclude_paths),
+            ("extensions", self.extensions),
+        ):
+            if not isinstance(values, list) or not all(
+                isinstance(value, str) and value for value in values
+            ):
+                raise ValueError(f"source_verification.complexity target {name} must be strings")
+        if not self.include_paths:
+            raise ValueError("source_verification.complexity targets require include_paths")
+        if not self.extensions:
+            raise ValueError("source_verification.complexity targets require extensions")
+
+
+@dataclass
+class ComplexityAllowlistEntry:
+    """Baseline and follow-up request for one existing over-limit function."""
+
+    group: str = ""
+    file: str = ""
+    function: str = ""
+    line: int = 0
+    ccn: int = 0
+    plan_req: str = ""
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("group", self.group),
+            ("file", self.file),
+            ("function", self.function),
+            ("plan_req", self.plan_req),
+        ):
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"complexity allowlist {name} must be a non-empty string")
+        if type(self.line) is not int or self.line < 1:
+            raise ValueError("complexity allowlist line must be a positive integer")
+        if type(self.ccn) is not int or self.ccn < 1:
+            raise ValueError("complexity allowlist ccn must be a positive integer")
+        if Path(self.file).is_absolute() or ".." in Path(self.file).parts:
+            raise ValueError("complexity allowlist file must be project-relative")
+        if not re.fullmatch(r"REQ-[0-9]{3}", self.plan_req):
+            raise ValueError("complexity allowlist plan_req must use REQ-NNN format")
+
+
+@dataclass
+class ComplexityConfig:
+    """Threshold, source scopes, and single-source ratchet entries for lizard."""
+
+    threshold: int | None = None
+    targets: dict[str, ComplexityTargetConfig] = field(default_factory=dict)
+    allowlist: list[ComplexityAllowlistEntry] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.threshold is not None and (type(self.threshold) is not int or self.threshold < 1):
+            raise ValueError("source_verification.complexity.threshold must be a positive integer")
+        identities = [
+            (entry.group, entry.file, entry.function, entry.line) for entry in self.allowlist
+        ]
+        if len(identities) != len(set(identities)):
+            raise ValueError(
+                "complexity allowlist entries must have unique group/file/function/line"
+            )
+
+
+@dataclass
 class SourceVerificationConfig:
     """Configuration for source code formatting and verification."""
 
     enabled: bool = True
     groups: dict[str, SourceGroupConfig] = field(default_factory=dict)
+    complexity: ComplexityConfig = field(default_factory=ComplexityConfig)
 
 
 @dataclass
@@ -522,9 +597,36 @@ class Config:
                 g_val_copy = dict(g_val)
                 g_val_copy["checks"] = parsed_checks
                 parsed_groups[g_name] = _load_dataclass_from_dict(SourceGroupConfig, g_val_copy)
+        complexity_raw = source_verif_raw.get("complexity") or {}
+        if not isinstance(complexity_raw, dict):
+            raise ValueError("source_verification.complexity must be a mapping")
+        targets_raw = complexity_raw.get("targets", {})
+        if not isinstance(targets_raw, dict):
+            raise ValueError("source_verification.complexity.targets must be a mapping")
+        parsed_complexity_targets = {
+            group_name: _load_dataclass_from_dict(ComplexityTargetConfig, target_data)
+            for group_name, target_data in targets_raw.items()
+            if isinstance(target_data, dict)
+        }
+        if len(parsed_complexity_targets) != len(targets_raw):
+            raise ValueError("source_verification.complexity targets must be mappings")
+        allowlist_raw = complexity_raw.get("allowlist", [])
+        if not isinstance(allowlist_raw, list) or not all(
+            isinstance(entry, dict) for entry in allowlist_raw
+        ):
+            raise ValueError("source_verification.complexity.allowlist must be a list of mappings")
+        parsed_complexity_allowlist = [
+            _load_dataclass_from_dict(ComplexityAllowlistEntry, entry) for entry in allowlist_raw
+        ]
+        complexity_config = ComplexityConfig(
+            threshold=complexity_raw.get("threshold"),
+            targets=parsed_complexity_targets,
+            allowlist=parsed_complexity_allowlist,
+        )
         source_verification = SourceVerificationConfig(
             enabled=source_verif_raw.get("enabled", True),
             groups=parsed_groups,
+            complexity=complexity_config,
         )
 
         # 7. Pysim product import dependency configuration
