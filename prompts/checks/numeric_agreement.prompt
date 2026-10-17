@@ -1,1 +1,0 @@
-Recalculate totals, allocations, budgets, and offsets that are explicit in the supplied section or pair. Compare the same named quantity only where both values are supplied. Classify a discrepancy only when the operands and conflicting result are visible; do not assume missing components of a budget are zero.

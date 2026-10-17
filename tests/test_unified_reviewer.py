@@ -14,10 +14,10 @@ def test_config_checks_loaded_from_project_yaml():
     assert yaml_path.exists()
     config = Config.load(yaml_path)
     rules = config.llm_judge.checks
-    assert len(rules) >= 9
+    # The context-infeasible criterion is excluded from the configured set.
+    assert len(rules) == 11
     ids = {r.id for r in rules}
     assert "vertical_consistency" in ids
-    assert "numeric_agreement" in ids
     assert "clarity_completeness" in ids
     assert "natural_language_standards" in ids
     assert "reference_by_keyword_or_filename" in ids
