@@ -570,7 +570,11 @@ class UnifiedReviewEngine(BaseJudge):
                         and confidence < self.config.llm_judge.error_score_threshold
                     ):
                         severity = "WARNING"
-                elif outcome in ("documented_open_issue", "improvement_suggestion"):
+                elif outcome in (
+                    "documented_open_issue",
+                    "improvement_suggestion",
+                    "insufficient_context",
+                ):
                     severity = "INFO"
                 elif outcome == "no_issue":
                     severity = None
