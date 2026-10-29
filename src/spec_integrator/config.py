@@ -129,6 +129,22 @@ class ConsistencyConfig:
 
 
 @dataclass
+class IdentifierConfig:
+    """Repository identifier syntax and source scan configuration."""
+
+    enabled: bool = False
+    patterns: dict[str, str] = field(default_factory=dict)
+    candidate_pattern: str = ""
+    range_notation: str = ".."
+    scan_globs: list[str] = field(default_factory=list)
+    test_definition_globs: list[str] = field(default_factory=list)
+    benchmark_definition_globs: list[str] = field(default_factory=list)
+    formal_definition_globs: list[str] = field(default_factory=list)
+    gotcha_definition_globs: list[str] = field(default_factory=list)
+    adr_definition_globs: list[str] = field(default_factory=list)
+
+
+@dataclass
 class ObligationConfig:
     """Obligation Gate: verification demanded by the risk assessment must not be skipped."""
 
@@ -475,6 +491,7 @@ class Config:
     evidence: EvidenceConfig = field(default_factory=EvidenceConfig)
     obligation: ObligationConfig = field(default_factory=ObligationConfig)
     consistency: ConsistencyConfig = field(default_factory=ConsistencyConfig)
+    identifiers: IdentifierConfig = field(default_factory=IdentifierConfig)
     terminology: TerminologyConfig = field(default_factory=TerminologyConfig)
     semantic_topic: SemanticTopicConfig = field(default_factory=SemanticTopicConfig)
     prose_readability: ProseReadabilityConfig = field(default_factory=ProseReadabilityConfig)
@@ -674,6 +691,7 @@ class Config:
             evidence=_load_dataclass_from_dict(EvidenceConfig, data.get("evidence")),
             obligation=_load_dataclass_from_dict(ObligationConfig, data.get("obligation")),
             consistency=consistency,
+            identifiers=_load_dataclass_from_dict(IdentifierConfig, data.get("identifiers")),
             terminology=_load_dataclass_from_dict(TerminologyConfig, data.get("terminology")),
             semantic_topic=_load_dataclass_from_dict(
                 SemanticTopicConfig, data.get("semantic_topic")
@@ -760,6 +778,7 @@ __all__ = [
     "EmbeddingConfig",
     "EvidenceConfig",
     "FormalVerificationConfig",
+    "IdentifierConfig",
     "KeywordRule",
     "LLMBackendConfig",
     "LLMCheckRule",

@@ -21,6 +21,23 @@ class DatabaseQueries:
         cursor.execute("SELECT * FROM sections ORDER BY file_path, line_start")
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_identifiers(self) -> list[dict[str, object]]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM identifiers ORDER BY family, identifier, file_path, line")
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_identifier_references(self) -> list[dict[str, object]]:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM identifier_references ORDER BY family, identifier, file_path, line"
+        )
+        result: list[dict[str, object]] = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            item["expanded_ids"] = json.loads(str(item.get("expanded_ids") or "[]"))
+            result.append(item)
+        return result
+
     def get_keyword_references(self, keyword: str) -> list[dict]:
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM keyword_references WHERE keyword = ?", (keyword,))

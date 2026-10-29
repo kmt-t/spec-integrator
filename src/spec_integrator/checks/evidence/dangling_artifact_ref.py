@@ -27,7 +27,7 @@ class DanglingArtifactRefCheck(GateCheck):
     def check(self, ctx: GateContext) -> list[VerificationIssue]:
         issues: list[VerificationIssue] = []
         exts = "|".join(re.escape(e) for e in ctx.config.evidence.artifact_extensions)
-        ref_re = re.compile(rf"(?<![\w/*<])((?:\.\./)*[\w][\w./-]*\.(?:{exts}))\b")
+        ref_re = re.compile(rf"(?<![\w/*<])((?:\.\./)*(?:\.[\w-]+|[\w])[\w./-]*\.(?:{exts}))\b")
         ignore = set(ctx.config.evidence.ignore_artifact_refs)
         repo_root = ctx.config.config_dir
 

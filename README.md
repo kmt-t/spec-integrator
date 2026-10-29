@@ -8,7 +8,7 @@
 
 - **Configuration-driven:** `spec-integrator.yaml` declares project-specific document tiers (Tier 0–3) and keyword sources.
 - **Topological document graph (DocGraph):** Models files, heading sections, and requirement keywords as a directed graph and extracts traceability views and local subgraphs (`G_r`).
-- **Eight strict quality gates (`check-doc`):**
+- **Nine strict quality gates (`check-doc`):**
   1. **Format:** Checks Markdown links and heading anchors, root-relative file link style, static typos, and Mermaid syntax and rendering with the embedded QuickJS-based `mermaidx` engine.
   2. **Traceability:** Finds undefined keyword references and unreferenced requirements.
   3. **Hierarchy:** Prevents dependencies that flow from a higher tier back into a lower tier.
@@ -16,7 +16,8 @@
   5. **WIT:** Checks syntax and consistency of WIT definitions tagged with `{VERIFY_WIT}`.
   6. **Evidence:** Checks claims such as “verified,” “proved,” and “measured” against declared artifacts.
   7. **Obligation:** Finds verification work required by risk assessment that has not been completed.
-  8. **Consistency:** Finds stale values and edits that were not propagated to dependent documents using the consistency baseline.
+  8. **Consistency:** Finds duplicate keyword definitions, symbol value drift, and configured stale values.
+  9. **Identifier:** Rebuilds definitions and references from all configured source files, then checks identifier syntax, uniqueness, reference resolution, and unused definitions.
 
 ### Detect Skipped Verification (Automated Gates)
 
@@ -54,25 +55,30 @@ Quality gates report both failed checks and required checks that were never perf
 | Obligation | Failed document audit | `OBLIG-DOC-JUDGE-FAILED` | The document's stored audit has no failing verdict. |
 | Consistency | Duplicate keyword definition | `CONSIST-DUPLICATE-DEFINITION` | Each keyword has a single definition row. |
 | Consistency | Symbol value drift | `CONSIST-SYMBOL-DRIFT` | Repeated symbols have the same normalized value. |
-| Consistency | Stale dependent document | `CONSIST-COCHANGE-STALE` | Changes to definitions are propagated to references. |
 | Consistency | Stale configured value | `CONSIST-STALE-VALUE` | Configured obsolete values are absent from documents. |
+| Identifier | Invalid identifier syntax | `ID-INVALID-FORMAT` | Every identifier token matches its configured family syntax. |
+| Identifier | Invalid range notation | `ID-INVALID-RANGE` | Range endpoints belong to the same ordered series. |
+| Identifier | Duplicate definition | `ID-DUPLICATE-DEFINITION` | Each target identifier has one definition. |
+| Identifier | Unresolved reference | `ID-UNRESOLVED-REFERENCE` | Every valid reference and range endpoint has a definition. |
+| Identifier | Unreferenced definition | `ID-UNREFERENCED-DEFINITION` | TEST, GOTCHA, and BENCHMARK definitions have at least one reference. This is a warning. |
+| Identifier | Serial gaps | `ID-SERIAL-GAPS` | Missing serials are counted in an informational report and do not fail the gate. |
 
 Missing, unanchored, stale, or skipped LLM work is reported as a warning. A recorded `FAIL` remains an error. Structural violations, such as a missing `{VERIFY_LLM}` tag for a high-risk keyword, remain errors regardless of whether an LLM audit ran.
 
-`EVID-UNBACKED-CLAIM` and `EVID-UNSOURCED-MEASUREMENT` were removed because they had no implementation. Semantic checks for claims such as “verified” are part of the `llm-single-review` and `llm-keyword-review` prompts; they are not mechanical automated gate checks.
+Semantic checks for claims such as “verified” are part of the `llm-single-review` and `llm-keyword-review` prompts; they are not mechanical automated gate checks.
 
 See the [formal model contract](docs/formal_model_contract.md) for requirements that formal models must satisfy.
 
-### Detect Stale Propagation
+### Build the Identifier Index
 
-`check-doc` compares documents with the consistency baseline in the cache database and reports edits that were not propagated.
+Every `build` and `check-doc` call scans all configured identifier source files and atomically replaces the derived identifier tables in SQLite. A `--files` selection limits document checks but does not limit identifier indexing. The database is not a hand-maintained source of truth.
 
 ```bash
-spec-integrator check-doc   # Run checks and list stale dependent documents
-spec-integrator build       # After resolving findings, refresh the document database and index
+spec-integrator next-id TEST-INT   # Scan source files and print the next serial
+spec-integrator check-doc         # Rebuild the identifier index and run all document gates
 ```
 
-Dependencies are derived from existing `{Keyword}` traceability; no separate co-change declarations are needed.
+The command accepts a series prefix such as `TEST-INT`, `GOTCHA-JITR`, `BENCHMARK-JIT`, `FORMAL-COOS`, or `ADR-INTERP`. It scans source files rather than reading the SQLite index. A prefix with no current identifier fails an assertion. Serial gaps are allowed, and historical identifier reuse is prevented by the operating rule rather than by the scanner.
 
 - **Risk assessment and verification obligations (`risk`):** Scores design risk for requirement and design keywords. Keywords above the configured threshold require `{VERIFY_LLM}`. Results are stored in SQLite.
 - **Terminology consistency (`llm-word`):** Combines TF-IDF terms, embedding similarity, and contextual judgments to find terminology drift and likely typos.

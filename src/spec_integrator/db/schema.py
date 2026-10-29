@@ -66,6 +66,46 @@ class DatabaseSchema:
                     is_valid INTEGER DEFAULT 1
                 )
             """)
+            # Derived identifier definitions and references. These tables are fully
+            # replaced from source files on every workspace load.
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS identifiers (
+                    row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    family TEXT NOT NULL,
+                    identifier TEXT NOT NULL,
+                    normalized_id TEXT NOT NULL,
+                    definition_kind TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    section_id TEXT,
+                    line INTEGER NOT NULL,
+                    column_number INTEGER NOT NULL,
+                    source_hash TEXT NOT NULL
+                )
+            """)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS identifier_references (
+                    row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    family TEXT NOT NULL,
+                    identifier TEXT NOT NULL,
+                    raw_text TEXT NOT NULL,
+                    reference_kind TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    section_id TEXT,
+                    line INTEGER NOT NULL,
+                    column_number INTEGER NOT NULL,
+                    range_end TEXT,
+                    range_notation TEXT,
+                    expanded_ids TEXT NOT NULL DEFAULT '[]'
+                )
+            """)
+            self.conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_identifiers_lookup
+                ON identifiers (family, normalized_id)
+            """)
+            self.conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_identifier_references_lookup
+                ON identifier_references (family, identifier)
+            """)
             # 6. formal_models
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS formal_models (

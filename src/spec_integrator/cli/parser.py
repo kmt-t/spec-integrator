@@ -10,7 +10,12 @@ from spec_integrator.application.commands.llm.judge import cmd_llm_judge
 from spec_integrator.application.commands.llm.keyword_review import cmd_llm_keyword_review
 from spec_integrator.application.commands.llm.single_review import cmd_llm_single_review
 from spec_integrator.application.commands.llm.word import cmd_llm_word
-from spec_integrator.document.commands import cmd_build, cmd_check_doc, cmd_format_doc
+from spec_integrator.document.commands import (
+    cmd_build,
+    cmd_check_doc,
+    cmd_format_doc,
+    cmd_next_id,
+)
 from spec_integrator.source.commands import cmd_check_src, cmd_format_src
 
 CHECKSHEET_BACKENDS = ("jev", "nimble", "mock")
@@ -46,10 +51,18 @@ def _add_format_doc_subparser(subparsers) -> None:
     p.set_defaults(func=cmd_format_doc)
 
 
-def _add_check_doc_subparser(subparsers) -> None:
+def _add_next_id_subparser(subparsers) -> None:
     p = subparsers.add_parser(
-        "check-doc", help="Run static document verification & 8 quality gates"
+        "next-id",
+        help="Scan repository identifiers and print max serial + 1",
     )
+    _add_config_arg(p)
+    p.add_argument("prefix", help="Identifier series prefix, for example TEST-INT")
+    p.set_defaults(func=cmd_next_id)
+
+
+def _add_check_doc_subparser(subparsers) -> None:
+    p = subparsers.add_parser("check-doc", help="Run static document verification & quality gates")
     _add_config_arg(p)
     p.add_argument(
         "-r", "--report", default="reports/doc_report.md", help="Markdown report output path"
@@ -363,6 +376,7 @@ def build_parser() -> argparse.ArgumentParser:
         _add_init_subparser,
         _add_build_subparser,
         _add_format_doc_subparser,
+        _add_next_id_subparser,
         _add_check_doc_subparser,
         _add_format_src_subparser,
         _add_check_src_subparser,
