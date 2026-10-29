@@ -51,6 +51,34 @@ class ParsedSection:
 
 
 @dataclass
+class IdentifierDefinition:
+    family: str
+    identifier: str
+    normalized_id: str
+    definition_kind: str
+    file_path: str
+    section_id: str | None
+    line: int
+    column_number: int
+    source_hash: str
+
+
+@dataclass
+class IdentifierReference:
+    family: str
+    identifier: str
+    raw_text: str
+    reference_kind: str
+    file_path: str
+    section_id: str | None
+    line: int
+    column_number: int
+    range_end: str | None = None
+    range_notation: str | None = None
+    expanded_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
 class ParsedDocument:
     file_path: str  # relative path POSIX style
     full_path: Path

@@ -64,17 +64,17 @@ formal_verification:
 
 llm_judge:
   tag: "{VERIFY_LLM}"
-  default_backend: "clef-flash"
+  default_backend: "nimble"
   backends:
     jev:
       api_key_env: "OPENROUTER_API_KEY"
       endpoint: "https://openrouter.ai/api/alpha/decisions"
       model: "typesafe/jev-1.13"
-    clef-flash:
+    nimble:
       endpoint: "http://localhost:11434/v1/systemone"
-      model: "clef-flash"
+      model: "nimble-v3:9b-q4_K_M"
       requires_api_key: false
-      context_window_tokens: 65536
+      context_window_tokens: 32768
 
 embeddings:
   endpoint: "http://localhost:11434"

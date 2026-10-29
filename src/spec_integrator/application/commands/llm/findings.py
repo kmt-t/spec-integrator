@@ -31,7 +31,7 @@ def cmd_llm_findings(args):
     db.close()
 
     backend_label = BACKEND_LABELS.get(backend, backend)
-    confidence_metric = "probability concentration" if backend == "clef-flash" else "confidence"
+    confidence_metric = "backend score" if backend == "nimble" else "confidence"
     score_percent = f"{args.min_confidence:.0%}"
     print(
         f"LLM review evaluations for {backend_label} with {confidence_metric} >= "
@@ -45,11 +45,6 @@ def cmd_llm_findings(args):
     print(
         "Typed decision backends do not store rationale or citations; review each listed section manually."
     )
-    if backend == "clef-flash":
-        print(
-            "Clef Flash probability concentration describes how concentrated its choice probabilities "
-            "are; it is not the probability that the selected answer is correct."
-        )
     headers = [
         confidence_metric,
         "outcome",

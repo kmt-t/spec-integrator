@@ -5,6 +5,7 @@ from pathlib import Path
 
 from spec_integrator.config import Config
 from spec_integrator.db import DocAuditDB
+from spec_integrator.document.identifier_index import scan_identifiers
 from spec_integrator.graph import DocGraphBuilder, Graph
 from spec_integrator.models import ParsedDocument
 from spec_integrator.parser import MarkdownParser
@@ -91,6 +92,13 @@ def load_workspace(
                 link.target_anchor,
                 1,
             )
+
+    if config.identifiers.enabled:
+        identifier_scan = scan_identifiers(config)
+        db.replace_identifier_index(
+            identifier_scan.definitions,
+            identifier_scan.references,
+        )
 
     db.commit()
     graph = DocGraphBuilder(config).build(documents, docs_root)

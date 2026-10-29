@@ -45,6 +45,21 @@ See `os_scheduler.md` for details.
     assert [i for i in issues if i.rule_code == "EVID-DANGLING-ARTIFACT-REF"] == []
 
 
+def test_root_relative_dot_directory_link_is_accepted(tmp_path):
+    cfg, doc, docs_dir = _parse(
+        tmp_path,
+        "architecture/document_structure.md",
+        "See [documentation-standards.md](.agents/rules/documentation-standards.md).\n",
+    )
+    rules_dir = tmp_path / ".agents" / "rules"
+    rules_dir.mkdir(parents=True)
+    (rules_dir / "documentation-standards.md").write_text("# Rules\n", encoding="utf-8")
+
+    issues = EvidenceGate(cfg).verify([doc], docs_dir)
+
+    assert [i for i in issues if i.rule_code == "EVID-DANGLING-ARTIFACT-REF"] == []
+
+
 def test_code_blocks_are_not_scanned_for_artifact_refs(tmp_path):
     cfg, doc, docs_dir = _parse(
         tmp_path,

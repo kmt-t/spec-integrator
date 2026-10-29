@@ -111,17 +111,17 @@ formal_verification:
 # LLM as a Judge の設定
 llm_judge:
   tag: "{VERIFY_LLM}"
-  default_backend: "clef-flash"            # ローカル Ollama の型付き判定モデル
+  default_backend: "nimble"            # ローカル Ollama の型付き判定モデル
   backends:
     jev:
       api_key_env: "OPENROUTER_API_KEY"
       endpoint: "https://openrouter.ai/api/alpha/decisions"
       model: "typesafe/jev-1.13"
-    clef-flash:
+    nimble:
       endpoint: "http://localhost:11434/v1/systemone"
-      model: "clef-flash"
+      model: "nimble-v3:9b-q4_K_M"
       requires_api_key: false
-      context_window_tokens: 65536
+      context_window_tokens: 32768
 
 embeddings:
   endpoint: "http://localhost:11434"
@@ -130,9 +130,11 @@ terminology:
   embedding_model: "qwen3-embedding"
 ```
 
-Jev と Clef Flash はSystem One形式のチェックシートを処理する。既定のバックエンドはローカルのClef Flashであり、Jevは `--backend jev` で選択する。JevはAPIの確信度を返す。Clef Flashは選択確率の集中度を返す。この値は正答確率を表さない。両モデルとも説明文や引用箇所を生成しない。LLM監査の実行はバックエンドに関係なく、ユーザーから明示的な指示があった場合に限る。
+Jev と Nimble はSystem One形式のチェックシートを処理する。既定のバックエンドはNimbleであり、Jevは `--backend jev` で選択する。JevはAPIの確信度を返す。Nimbleの結果はバックエンド固有のスコアとして扱い、正答確率とはみなさない。両バックエンドとも説明文や引用箇所を生成しない。LLM監査の実行はバックエンドに関係なく、ユーザーから明示的な指示があった場合に限る。
 
-既定のローカルモデルは `clef-flash` であり、設定の `context_window_tokens` は65,536 tokenである。System Oneのリクエスト本文は64 KiBまでである。`llm_judge.section_char_budget` は各セクションの文字数を制限し、コンテキスト長は変更しない。
+System Oneのリクエスト本文は64 KiBまでである。`llm_judge.section_char_budget` は各セクションの文字数を制限し、コンテキスト長は変更しない。
+
+Ollama埋め込みのAPI呼び出し、バッチ、および再試行の契約は[ツールリファレンス](../README.md#7-assess-risk-and-derive-verification-obligations-risk)に記載する。
 
 モデルのコンテキスト長を変更する場合は、OllamaのModelfileで `PARAMETER num_ctx` を指定したモデルを作る。バックエンド設定の `model` と `context_window_tokens` を新しいモデルに合わせる。
 
@@ -182,6 +184,8 @@ Jev と Clef Flash はSystem One形式のチェックシートを処理する。
 | **Evidence Gate** | 主張と成果物（証跡ファイル、ベンチマーク）の裏付け検証 | 宣言された形式モデルやベンチマークコードが存在しない |
 | **Obligation Gate** | リスク評価（`risk`）によって課された `{VERIFY_LLM}` 検証義務の履行状況検証 | 高リスクキーワードへの検証タグ欠落、または記録済み LLM 判定の FAIL。LLM 評価の未実施・未固定・陳腐化・対象漏れは警告 |
 | **Consistency Gate** | 連動修正の未伝播、シンボル値の不一致、旧値の残存検証 | 同一シンボルの不一致や禁止パターンの残存 |
+
+この表は `check-doc` の文書ゲートを示す。ソースコード検査 `check-src` の規則一覧（`complexity` を含む）は [README](../README.md) に置き、個別プロジェクトの有効範囲と設定値はルートの `spec-integrator.yaml` を正本とする。
 
 ---
 
@@ -314,7 +318,7 @@ CREATE INDEX idx_judge_evaluations_confidence
     ON judge_evaluations (confidence DESC);
 ```
 
-型付き判定バックエンドの結果をチェック単位で記録する。バックエンド固有のスコアは0.0〜1.0の実数で保存する。`llm-findings --min-confidence 0.70` は既定バックエンドだけを検索する。`--backend clef-flash` を指定するとClef Flashの結果を検索する。
+型付き判定バックエンドの結果をチェック単位で記録する。バックエンド固有のスコアは0.0〜1.0の実数で保存する。`llm-findings --min-confidence 0.70` は既定バックエンドだけを検索する。`--backend nimble` を指定するとNimbleの結果を検索する。
 
 ---
 
@@ -375,7 +379,7 @@ spec-integrator risk [OPTIONS]
 ```
 - **オプション**:
   - `-c, --config PATH`: 設定ファイルパス
-  - `--backend [jev|clef-flash|mock]`: チェックシートの判定バックエンド。JevとClef Flashは説明文や引用箇所を生成しない
+  - `--backend [jev|nimble|mock]`: チェックシートの判定バックエンド。JevとNimbleは説明文や引用箇所を生成しない
   - `--model TEXT`: モデル名の明示的オーバーライド
   - `-r, --report PATH`: リスクレポート出力先
 
@@ -422,7 +426,7 @@ DBに保存されたLLM判定をバックエンド固有スコアと分類で検
 spec-integrator llm-findings --min-confidence 0.70
 spec-integrator llm-findings --min-confidence 0.70 --run-type llm-keyword-review
 spec-integrator llm-findings --min-confidence 0.70 --all-outcomes --limit 0
-spec-integrator llm-findings --backend clef-flash --min-confidence 0.70
+spec-integrator llm-findings --backend nimble --min-confidence 0.70
 ```
 - **オプション**:
   - `--min-confidence FLOAT`: 最小バックエンド固有スコア（0.0〜1.0、既定値: 0.70）

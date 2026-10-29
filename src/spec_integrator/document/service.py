@@ -8,6 +8,7 @@ from spec_integrator.document.gates import (
     ConsistencyGate,
     EvidenceGate,
     FormalGate,
+    IdentifierGate,
     ObligationGate,
     SectionTopicGate,
     StaticGate,
@@ -100,6 +101,8 @@ class DocumentService:
             workspace.documents, workspace.docs_root, db=workspace.db
         )
         issues.extend(consistency_issues)
+        if self.config.identifiers.enabled:
+            issues.extend(IdentifierGate(self.config).verify(workspace.db))
 
         if getattr(self.config.terminology, "enabled", True):
             issues.extend(

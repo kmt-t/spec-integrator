@@ -41,15 +41,16 @@ keywords:
     assert cfg.get_tier_for_path("docs/other/spec.md") is None
 
 
-def test_project_config_defaults_to_clef_flash():
+def test_project_config_defaults_to_nimble_v3():
     project_root = Path(__file__).resolve().parents[3]
     cfg = Config.load(project_root / "spec-integrator.yaml")
 
-    assert cfg.llm_judge.default_backend == "clef-flash"
-    assert cfg.llm_judge.backends["clef-flash"].endpoint == ("http://localhost:11434/v1/systemone")
-    assert cfg.llm_judge.backends["clef-flash"].model == "clef-flash"
-    assert not cfg.llm_judge.backends["clef-flash"].requires_api_key
-    assert cfg.llm_judge.backends["clef-flash"].context_window_tokens == 65536
+    assert cfg.llm_judge.default_backend == "nimble"
+    assert list(cfg.llm_judge.backends) == ["jev", "nimble"]
+    assert cfg.llm_judge.backends["nimble"].endpoint == ("http://localhost:11434/v1/systemone")
+    assert cfg.llm_judge.backends["nimble"].model == "nimble-v3:9b-q4_K_M"
+    assert not cfg.llm_judge.backends["nimble"].requires_api_key
+    assert cfg.llm_judge.backends["nimble"].context_window_tokens == 32768
 
 
 def test_pysim_source_gate_config_matches_revised_rule_set() -> None:

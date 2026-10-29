@@ -1,5 +1,7 @@
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import pytest
 from spec_integrator.config import Config, LLMBackendConfig, LLMCheckRule
 from spec_integrator.judge.checksheet import Checksheet, submit_checksheet
 from spec_integrator.judge.llm_backend import call_ollama_embeddings
@@ -42,11 +44,11 @@ def test_checksheet_uses_system_one_decisions_api(monkeypatch):
     assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer test-key"
 
 
-def test_clef_flash_uses_local_system_one_without_api_key():
+def test_nimble_uses_host_system_one_without_api_key():
     config = Config()
-    config.llm_judge.backends["clef-flash"] = LLMBackendConfig(
+    config.llm_judge.backends["nimble"] = LLMBackendConfig(
         endpoint="http://localhost:11434/v1/systemone",
-        model="clef-flash",
+        model="nimble-v3:9b-q4_K_M",
         requires_api_key=False,
     )
     sheet = Checksheet(
@@ -66,12 +68,12 @@ def test_clef_flash_uses_local_system_one_without_api_key():
     }
 
     with patch("spec_integrator.judge.llm_backend.requests.post", return_value=response) as post:
-        result = submit_checksheet(config, sheet, backend="clef-flash")
+        result = submit_checksheet(config, sheet, backend="nimble")
 
     assert result == response.json.return_value
     assert post.call_args.args == ("http://localhost:11434/v1/systemone",)
     assert post.call_args.kwargs["json"] == {
-        "model": "clef-flash",
+        "model": "nimble-v3:9b-q4_K_M",
         "state": sheet.state,
         "questions": sheet.questions,
     }
@@ -81,24 +83,68 @@ def test_clef_flash_uses_local_system_one_without_api_key():
 def test_embeddings_use_ollama_batches():
     config = Config()
     config.embeddings.endpoint = "http://localhost:11434/"
-    first = Mock(status_code=200)
-    first.json.return_value = {"embeddings": [[1.0, 0.0], [0.0, 1.0]]}
-    second = Mock(status_code=200)
-    second.json.return_value = {"embeddings": [[0.5, 0.5]]}
+    client = Mock()
+    client.__enter__ = Mock(return_value=client)
+    client.__exit__ = Mock(return_value=False)
+    client.embed.side_effect = [
+        SimpleNamespace(embeddings=[[1.0, 0.0], [0.0, 1.0]]),
+        SimpleNamespace(embeddings=[[0.5, 0.5]]),
+    ]
 
     with patch(
-        "spec_integrator.judge.llm_backend.requests.post", side_effect=[first, second]
-    ) as post:
+        "spec_integrator.judge.llm_backend.ollama.Client", return_value=client
+    ) as client_type:
         vectors = call_ollama_embeddings(config, ["a", "b", "c"], "qwen3-embedding", 2)
 
     assert vectors == [[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]]
-    assert post.call_count == 2
-    assert post.call_args_list[0].args == ("http://localhost:11434/api/embed",)
-    assert post.call_args_list[0].kwargs["json"] == {
+    client_type.assert_called_once_with(host="http://localhost:11434/", timeout=60)
+    assert client.embed.call_count == 2
+    assert client.embed.call_args_list[0].kwargs == {
         "model": "qwen3-embedding",
         "input": ["a", "b"],
     }
-    assert post.call_args_list[1].kwargs["json"]["input"] == ["c"]
+    assert client.embed.call_args_list[1].kwargs == {
+        "model": "qwen3-embedding",
+        "input": ["c"],
+    }
+
+
+def test_embeddings_connection_failure_retries_and_preserves_runtime_error():
+    config = Config()
+    client = Mock()
+    client.__enter__ = Mock(return_value=client)
+    client.__exit__ = Mock(return_value=False)
+    client.embed.side_effect = ConnectionError("connection refused")
+
+    with (
+        patch("spec_integrator.judge.llm_backend.ollama.Client", return_value=client),
+        patch("spec_integrator.judge.llm_backend.time.sleep") as sleep,
+        pytest.raises(
+            RuntimeError, match="Failed to fetch Ollama embeddings after 3 attempts"
+        ) as error,
+    ):
+        call_ollama_embeddings(config, ["a"], "qwen3-embedding")
+
+    assert client.embed.call_count == 3
+    assert sleep.call_count == 2
+    assert "connection refused" in str(error.value)
+
+
+def test_embeddings_reject_response_with_wrong_vector_count():
+    config = Config()
+    client = Mock()
+    client.__enter__ = Mock(return_value=client)
+    client.__exit__ = Mock(return_value=False)
+    client.embed.return_value = SimpleNamespace(embeddings=[[1.0, 0.0]])
+
+    with (
+        patch("spec_integrator.judge.llm_backend.ollama.Client", return_value=client),
+        patch("spec_integrator.judge.llm_backend.time.sleep"),
+        pytest.raises(RuntimeError, match="Failed to fetch Ollama embeddings after 3 attempts"),
+    ):
+        call_ollama_embeddings(config, ["a", "b"], "qwen3-embedding")
+
+    assert client.embed.call_count == 3
 
 
 def test_review_maps_checksheet_decision_to_failure():
@@ -192,11 +238,11 @@ def test_review_low_confidence_confirmation_is_warning_not_failure():
     assert result.evaluations[0].severity == "WARNING"
 
 
-def test_clef_flash_review_labels_its_native_confidence_metric():
+def test_nimble_review_labels_backend_score():
     config = Config()
-    config.llm_judge.backends["clef-flash"] = LLMBackendConfig(
+    config.llm_judge.backends["nimble"] = LLMBackendConfig(
         endpoint="http://localhost:11434/v1/systemone",
-        model="clef-flash",
+        model="nimble-v3:9b-q4_K_M",
         requires_api_key=False,
     )
     config.llm_judge.checks = [
@@ -231,45 +277,45 @@ def test_clef_flash_review_labels_its_native_confidence_metric():
     }
 
     with patch("spec_integrator.judge.checksheet.call_system_one", return_value=answer) as call:
-        result = UnifiedReviewEngine(config).review_single_document(doc, backend="clef-flash")
+        result = UnifiedReviewEngine(config).review_single_document(doc, backend="nimble")
 
     assert result.status == "WARN"
-    assert "Clef Flash classified" in result.issues[0]["description"]
-    assert "probability concentration 82%" in result.issues[0]["description"]
+    assert "Nimble classified" in result.issues[0]["description"]
+    assert "backend score 82%" in result.issues[0]["description"]
     assert "Jev" not in result.issues[0]["description"]
-    assert call.call_args.args[4] == "clef-flash"
+    assert call.call_args.args[4] == "nimble"
 
 
-def test_clef_flash_review_evidence_budget_fits_configured_context_window():
+def test_nimble_review_evidence_budget_fits_configured_context_window():
     config = Config()
-    config.llm_judge.backends["clef-flash"] = LLMBackendConfig(
+    config.llm_judge.backends["nimble"] = LLMBackendConfig(
         endpoint="http://localhost:11434/v1/systemone",
-        model="clef-flash",
+        model="nimble-v3:9b-q4_K_M",
         requires_api_key=False,
         context_window_tokens=8192,
     )
     reviewer = UnifiedReviewEngine(config)
 
-    assert reviewer._section_content_budget("clef-flash", 1) == 3000
-    assert reviewer._section_content_budget("clef-flash", 2) == 1500
+    assert reviewer._section_content_budget("nimble", 1) == 3000
+    assert reviewer._section_content_budget("nimble", 2) == 1500
     assert reviewer._section_content_budget("jev", 1) is None
-    assert reviewer._checks_per_request("clef-flash", 5) == 2
+    assert reviewer._checks_per_request("nimble", 5) == 2
     assert reviewer._checks_per_request("jev", 5) == 5
     limited = reviewer._budgeted("evidence " * 1000, 3000)
     assert len(limited) > 3000
     assert "[TRUNCATED:" in limited
 
     config.llm_judge.section_char_budget = 0
-    config.llm_judge.backends["clef-flash"].context_window_tokens = 16384
-    assert reviewer._section_content_budget("clef-flash", 1) == 6000
-    assert reviewer._checks_per_request("clef-flash", 5) == 5
+    config.llm_judge.backends["nimble"].context_window_tokens = 16384
+    assert reviewer._section_content_budget("nimble", 1) == 6000
+    assert reviewer._checks_per_request("nimble", 5) == 5
 
 
-def test_clef_flash_review_splits_checks_into_context_bounded_requests():
+def test_nimble_review_splits_checks_into_context_bounded_requests():
     config = Config()
-    config.llm_judge.backends["clef-flash"] = LLMBackendConfig(
+    config.llm_judge.backends["nimble"] = LLMBackendConfig(
         endpoint="http://localhost:11434/v1/systemone",
-        model="clef-flash",
+        model="nimble-v3:9b-q4_K_M",
         requires_api_key=False,
         context_window_tokens=8192,
     )
@@ -304,7 +350,7 @@ def test_clef_flash_review_splits_checks_into_context_bounded_requests():
     ]
 
     with patch.object(reviewer, "_submit_checksheet", side_effect=responses) as submit:
-        result = reviewer.review_single_document(document, backend="clef-flash")
+        result = reviewer.review_single_document(document, backend="nimble")
 
     assert result.status == "PASS"
     assert len(result.evaluations) == 5

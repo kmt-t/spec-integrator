@@ -32,10 +32,10 @@ REVIEW_OUTCOMES = {
     "improvement_suggestion": "The criterion is met, but a non-blocking improvement is possible.",
     "no_issue": "The supplied evidence supports no issue for this criterion.",
 }
-CLEF_FLASH_DEFAULT_CONTEXT_TOKENS = 65536
-CLEF_FLASH_CONTEXT_BUDGET_BASELINE_TOKENS = 8192
-CLEF_FLASH_REVIEW_CONTEXT_CHAR_BUDGET = 3000
-CLEF_FLASH_CHECKS_PER_REQUEST = 2
+NIMBLE_DEFAULT_CONTEXT_TOKENS = 32768
+NIMBLE_CONTEXT_BUDGET_BASELINE_TOKENS = 8192
+NIMBLE_REVIEW_CONTEXT_CHAR_BUDGET = 3000
+NIMBLE_CHECKS_PER_REQUEST = 2
 
 
 class UnifiedReviewEngine(BaseJudge):
@@ -381,21 +381,21 @@ class UnifiedReviewEngine(BaseJudge):
         return "\n".join(lines)
 
     def _section_content_budget(self, backend: str, section_count: int) -> int | None:
-        """Bound Clef Flash evidence to its configured context window."""
-        if backend != "clef-flash":
+        """Bound Nimble evidence to its configured context window."""
+        if backend != "nimble":
             return None
         assert section_count > 0
-        backend_config = self.config.llm_judge.backends.get("clef-flash")
+        backend_config = self.config.llm_judge.backends.get("nimble")
         context_window_tokens = (
             backend_config.context_window_tokens
             if backend_config and backend_config.context_window_tokens is not None
-            else CLEF_FLASH_DEFAULT_CONTEXT_TOKENS
+            else NIMBLE_DEFAULT_CONTEXT_TOKENS
         )
         assert context_window_tokens > 0
         total_budget = (
-            CLEF_FLASH_REVIEW_CONTEXT_CHAR_BUDGET
+            NIMBLE_REVIEW_CONTEXT_CHAR_BUDGET
             * context_window_tokens
-            // CLEF_FLASH_CONTEXT_BUDGET_BASELINE_TOKENS
+            // NIMBLE_CONTEXT_BUDGET_BASELINE_TOKENS
         )
         configured_budget = self.config.llm_judge.section_char_budget
         if configured_budget > 0:
@@ -445,7 +445,7 @@ class UnifiedReviewEngine(BaseJudge):
         model: str | None,
         checks: list[LLMCheckRule],
     ) -> JudgeResult:
-        """Split Clef Flash reviews so each request stays within its prompt window."""
+        """Split Nimble reviews so each request stays within its prompt window."""
         check_batch_size = self._checks_per_request(backend, len(checks))
         assert check_batch_size > 0
 
@@ -495,19 +495,19 @@ class UnifiedReviewEngine(BaseJudge):
         )
 
     def _checks_per_request(self, backend: str, check_count: int) -> int:
-        """Use one full request when Clef Flash has a larger configured context."""
+        """Use one full request when Nimble has a larger configured context."""
         assert check_count > 0
-        if backend != "clef-flash":
+        if backend != "nimble":
             return check_count
-        backend_config = self.config.llm_judge.backends.get("clef-flash")
+        backend_config = self.config.llm_judge.backends.get("nimble")
         context_window_tokens = (
             backend_config.context_window_tokens
             if backend_config and backend_config.context_window_tokens is not None
-            else CLEF_FLASH_DEFAULT_CONTEXT_TOKENS
+            else NIMBLE_DEFAULT_CONTEXT_TOKENS
         )
-        if context_window_tokens >= CLEF_FLASH_CONTEXT_BUDGET_BASELINE_TOKENS * 2:
+        if context_window_tokens >= NIMBLE_CONTEXT_BUDGET_BASELINE_TOKENS * 2:
             return check_count
-        return min(CLEF_FLASH_CHECKS_PER_REQUEST, check_count)
+        return min(NIMBLE_CHECKS_PER_REQUEST, check_count)
 
     def _run_system_one_review(
         self,
@@ -521,7 +521,7 @@ class UnifiedReviewEngine(BaseJudge):
     ) -> JudgeResult:
         """Classifies each typed decision review criterion into a review outcome."""
         backend_label = BACKEND_LABELS[backend]
-        metric_label = "probability concentration" if backend == "clef-flash" else "confidence"
+        metric_label = "backend score" if backend == "nimble" else "confidence"
         if not checks:
             return JudgeResult(
                 item_id=item_id,
@@ -570,7 +570,11 @@ class UnifiedReviewEngine(BaseJudge):
                         and confidence < self.config.llm_judge.error_score_threshold
                     ):
                         severity = "WARNING"
-                elif outcome in ("documented_open_issue", "improvement_suggestion"):
+                elif outcome in (
+                    "documented_open_issue",
+                    "improvement_suggestion",
+                    "insufficient_context",
+                ):
                     severity = "INFO"
                 elif outcome == "no_issue":
                     severity = None

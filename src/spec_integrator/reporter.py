@@ -78,6 +78,7 @@ class Reporter:
             "Evidence",
             "Obligation",
             "Consistency",
+            "Identifier",
             "SemanticTopic",
         ]
         lines.append("### Quality Gate Status\n")

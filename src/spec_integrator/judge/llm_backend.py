@@ -3,15 +3,19 @@ from __future__ import annotations
 import os
 import time
 
+import ollama
 import requests
 
 from spec_integrator.config import Config
 
 RETRIES = 3
 RETRY_SLEEP_SECONDS = 2
-SYSTEM_ONE_BACKENDS = ("jev", "clef-flash")
-BACKEND_LABELS = {"jev": "Jev", "clef-flash": "Clef Flash"}
-BACKEND_DEFAULT_MODELS = {"jev": "typesafe/jev-1.13", "clef-flash": "clef-flash"}
+SYSTEM_ONE_BACKENDS = ("jev", "nimble")
+BACKEND_LABELS = {"jev": "Jev", "nimble": "Nimble"}
+BACKEND_DEFAULT_MODELS = {
+    "jev": "typesafe/jev-1.13",
+    "nimble": "nimble-v3:9b-q4_K_M",
+}
 
 
 class LLMBackendError(RuntimeError):
@@ -27,42 +31,33 @@ def call_ollama_embeddings(
     """Generates embedding vectors through a local Ollama server."""
     if not texts:
         return []
-    base_url = config.embeddings.endpoint
-    endpoint = f"{base_url.rstrip('/')}/api/embed"
+    endpoint = config.embeddings.endpoint
 
     all_embeddings: list[list[float]] = []
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i : i + batch_size]
-        last_err: Exception | None = None
-        embeddings: list[list[float]] | None = None
-        for attempt in range(RETRIES):
-            try:
-                resp = requests.post(
-                    endpoint,
-                    json={"model": model, "input": batch},
-                    timeout=60,
+    with ollama.Client(host=endpoint, timeout=60) as client:
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            last_err: Exception | None = None
+            embeddings: list[list[float]] | None = None
+            for attempt in range(RETRIES):
+                try:
+                    response = client.embed(model=model, input=batch)
+                    candidate = getattr(response, "embeddings", None)
+                    if not isinstance(candidate, list) or len(candidate) != len(batch):
+                        raise ValueError(
+                            "Ollama Embeddings API response has an invalid 'embeddings' list"
+                        )
+                    embeddings = candidate
+                    break
+                except Exception as e:
+                    last_err = e
+                    if attempt < RETRIES - 1:
+                        time.sleep(RETRY_SLEEP_SECONDS)
+            if embeddings is None:
+                raise RuntimeError(
+                    f"Failed to fetch Ollama embeddings after {RETRIES} attempts: {last_err}"
                 )
-                if resp.status_code != 200:
-                    raise RuntimeError(
-                        f"Ollama Embeddings API returned status {resp.status_code}: {resp.text}"
-                    )
-                data = resp.json()
-                candidate = data.get("embeddings")
-                if not isinstance(candidate, list) or len(candidate) != len(batch):
-                    raise ValueError(
-                        "Ollama Embeddings API response has an invalid 'embeddings' list"
-                    )
-                embeddings = candidate
-                break
-            except Exception as e:
-                last_err = e
-                if attempt < RETRIES - 1:
-                    time.sleep(RETRY_SLEEP_SECONDS)
-        if embeddings is None:
-            raise RuntimeError(
-                f"Failed to fetch Ollama embeddings after {RETRIES} attempts: {last_err}"
-            )
-        all_embeddings.extend(embeddings)
+            all_embeddings.extend(embeddings)
 
     return all_embeddings
 

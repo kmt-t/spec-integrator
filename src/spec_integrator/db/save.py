@@ -5,6 +5,8 @@ import json
 import sqlite3
 
 from spec_integrator.models import (
+    IdentifierDefinition,
+    IdentifierReference,
     JudgeResult,
     KeywordRiskAssessment,
     VerificationIssue,
@@ -114,6 +116,62 @@ class DatabaseWrites:
                 VALUES (?, ?, ?, ?, ?)
             """,
                 (source_file, source_line, target_path, target_anchor, is_valid),
+            )
+
+    def replace_identifier_index(
+        self,
+        definitions: list[IdentifierDefinition],
+        references: list[IdentifierReference],
+    ) -> None:
+        """Atomically replace the derived identifier index from a full scan."""
+        with self.conn:
+            self.conn.execute("DELETE FROM identifier_references")
+            self.conn.execute("DELETE FROM identifiers")
+            self.conn.executemany(
+                """
+                INSERT INTO identifiers
+                (family, identifier, normalized_id, definition_kind, file_path,
+                 section_id, line, column_number, source_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        item.family,
+                        item.identifier,
+                        item.normalized_id,
+                        item.definition_kind,
+                        item.file_path,
+                        item.section_id,
+                        item.line,
+                        item.column_number,
+                        item.source_hash,
+                    )
+                    for item in definitions
+                ],
+            )
+            self.conn.executemany(
+                """
+                INSERT INTO identifier_references
+                (family, identifier, raw_text, reference_kind, file_path, section_id,
+                 line, column_number, range_end, range_notation, expanded_ids)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        item.family,
+                        item.identifier,
+                        item.raw_text,
+                        item.reference_kind,
+                        item.file_path,
+                        item.section_id,
+                        item.line,
+                        item.column_number,
+                        item.range_end,
+                        item.range_notation,
+                        json.dumps(item.expanded_ids),
+                    )
+                    for item in references
+                ],
             )
 
     def set_cache(

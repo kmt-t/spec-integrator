@@ -256,9 +256,11 @@ def test_cli_list_checks(tmp_path, monkeypatch):
 
 def test_cli_subparsers_args():
     import spec_integrator.cli as cli
+    from spec_integrator.cli.parser import CHECKSHEET_BACKENDS
 
     parser = cli.build_parser()
     assert not hasattr(cli, "_SUBPARSER_BUILDERS")
+    assert CHECKSHEET_BACKENDS == ("jev", "nimble", "mock")
 
     # Test that each subcommand parses without error
     args_build = parser.parse_args(["build", "--clean", "doc1.md", "doc2.md"])
@@ -290,12 +292,12 @@ def test_cli_subparsers_args():
     assert args_risk.exhaustive is True
 
     args_word = parser.parse_args(
-        ["llm-word", "--quick", "--threshold", "0.85", "--backend", "clef-flash"]
+        ["llm-word", "--quick", "--threshold", "0.85", "--backend", "nimble"]
     )
     assert args_word.subcommand == "llm-word"
     assert args_word.quick is True
     assert args_word.threshold == 0.85
-    assert args_word.backend == "clef-flash"
+    assert args_word.backend == "nimble"
 
     args_single = parser.parse_args(["llm-single-review", "--all", "--dry-run"])
     assert args_single.subcommand == "llm-single-review"
@@ -323,7 +325,7 @@ def test_llm_word_report_uses_backend_override_for_stored_variances(monkeypatch,
     db = DocAuditDB(":memory:")
     for backend, term_a, term_b in (
         ("jev", "scheduler", "dispatcher"),
-        ("clef-flash", "memory manager", "allocator"),
+        ("nimble", "memory manager", "allocator"),
     ):
         db.insert_term_variance_judgment(
             term_a=term_a,
@@ -354,7 +356,7 @@ def test_llm_word_report_uses_backend_override_for_stored_variances(monkeypatch,
     monkeypatch.setattr(word_command.LevenshteinTypoCheck, "check", lambda *_args: [])
     args = SimpleNamespace(
         config="spec-integrator.yaml",
-        backend="clef-flash",
+        backend="nimble",
         quick=True,
         embedding_model="qwen3-embedding",
         threshold=0.8,
@@ -367,6 +369,6 @@ def test_llm_word_report_uses_backend_override_for_stored_variances(monkeypatch,
 
     assert exc_info.value.code == 0
     output = capsys.readouterr().out
-    assert "Clef Flash probability concentration" in output
+    assert "Nimble backend score" in output
     assert "memory manager" in output
     assert "scheduler" not in output

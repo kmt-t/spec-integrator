@@ -8,6 +8,7 @@ from pathlib import Path
 from spec_integrator.application.utils import _log, log_banner
 from spec_integrator.config import Config
 from spec_integrator.document import DocumentService
+from spec_integrator.document.identifier_index import next_identifier
 
 
 def cmd_build(args) -> None:
@@ -42,6 +43,14 @@ def cmd_format_doc(args) -> None:
     sys.exit(0)
 
 
+def cmd_next_id(args) -> None:
+    """Print the next identifier for a series after scanning source files."""
+    config = Config.load(args.config)
+    assert config.identifiers.enabled
+    print(next_identifier(config, args.prefix))
+    sys.exit(0)
+
+
 def cmd_check_doc(args) -> None:
     """Run all document quality gates, including prose readability."""
     config = Config.load(args.config)
@@ -56,8 +65,12 @@ def cmd_check_doc(args) -> None:
 
     errors = result.errors
     warnings = [issue for issue in result.issues if issue.severity == "WARNING"]
+    infos = [issue for issue in result.issues if issue.severity == "INFO"]
     print("-" * 80)
-    print(f" Verification Summary: {len(errors)} Error(s), {len(warnings)} Warning(s)")
+    print(
+        f" Verification Summary: {len(errors)} Error(s), {len(warnings)} Warning(s), "
+        f"{len(infos)} Info(s)"
+    )
     print("-" * 80)
     if warnings:
         print("⚠️ QUALITY GATE WARNINGS:")
@@ -66,6 +79,10 @@ def cmd_check_doc(args) -> None:
                 f"  [{warning.gate}] {warning.file_path}:{warning.line} - "
                 f"{warning.message} ({warning.rule_code})"
             )
+    if infos:
+        print("ℹ️ QUALITY GATE REPORTS:")
+        for info in infos:
+            print(f"  [{info.gate}] {info.message} ({info.rule_code})")
     if errors:
         print("❌ QUALITY GATES FAILED:")
         for error in errors:
@@ -81,4 +98,4 @@ def cmd_check_doc(args) -> None:
     sys.exit(0)
 
 
-__all__ = ["cmd_build", "cmd_check_doc", "cmd_format_doc"]
+__all__ = ["cmd_build", "cmd_check_doc", "cmd_format_doc", "cmd_next_id"]

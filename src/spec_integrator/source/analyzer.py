@@ -77,6 +77,8 @@ class SourceAnalyzer:
                 py_files = [f for f in files if f.suffix.lower() == ".py"]
                 if py_files:
                     result.issues.extend(self._run_ruff(py_files, group_name))
+            elif cid == "complexity":
+                result.issues.extend(self.execution.run_complexity(files, group_name))
             elif cid in ("execute", "execute_formal"):
                 for f in files:
                     if f.suffix.lower() == ".py":
